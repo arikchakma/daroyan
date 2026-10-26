@@ -1,0 +1,33 @@
+api:
+  url: https://daroyan.com
+  token: dy_agent_...
+
+server:
+  name: worker-2
+  labels: [production, worker]
+
+processes:
+  - name: Inboxing Worker
+    systemd: inboxing-worker
+    restart:
+      attempts: 3
+      within: 10m
+  - name: Redis Cache
+    docker: redis-cache
+  - name: Celery
+    process: "*celery worker*"
+    user: app
+
+ports:
+  - name: Redis
+    host: redis-1
+    port: 6379
+  - port: 443
+
+host:
+  disks: []
+  networks: []
+
+agent:
+  commands: true
+  log_level: info

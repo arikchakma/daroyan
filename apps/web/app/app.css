@@ -1,0 +1,498 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans:
+    'Inter', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji',
+    'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-brand: #f13f34;
+  --color-brand-gradient-from: #f86b5c;
+  --color-brand-gradient-to: #d1291f;
+
+  --color-text-primary: #101010;
+  --color-text-secondary: #4a4a4a;
+  --color-text-tertiary: #8a8a8a;
+  --color-text-on-dark: #ffffff;
+  --color-text-link: #2463eb;
+
+  --color-surface-default: #ffffff;
+  --color-surface-page: #fbfbfb;
+  --color-surface-panel: #f6f6f6;
+  --color-surface-canvas: #f3f3f3;
+  --color-surface-subtle: #f7f7f7;
+  --color-surface-row: #f7f7f7;
+  --color-surface-fill: #f1f1f1;
+  --color-surface-fill-strong: #ebebeb;
+  --color-surface-pill: #ebebeb;
+  --color-surface-code: #1a1a1a;
+
+  --color-border-ring: #00000012;
+  --color-border-default: #e3e3e3;
+  --color-border-subtle: #ebebeb;
+  --color-border-strong: #cccccc;
+  --color-border-row: #f2f2f2;
+  --color-border-elevated: #0000;
+  --color-border-panel: #0000;
+
+  --color-button-primary: #1a1a1a;
+
+  --color-sidebar-bg: #0b0b0b;
+  --color-sidebar-item-active: #2b2b2b;
+  --color-sidebar-search: #1f1f1f;
+  --color-sidebar-badge: #2e2e2e;
+  --color-sidebar-text: #dcdcdc;
+  --color-sidebar-text-muted: #b5b5b5;
+  --color-sidebar-label: #a6a6a6;
+  --color-sidebar-flyout: #131313;
+  --color-sidebar-divider: #ffffff17;
+
+  --color-toast-error: #9e2112;
+  --color-toast-success-icon: #4ade80;
+  --color-toast-info-icon: #60a5fa;
+  --color-toast-warning-icon: #fbbf24;
+
+  --color-tone-neutral-bg: #e3e3e3;
+  --color-tone-neutral-fg: #4a4a4a;
+  --color-tone-success-bg: #cdfee1;
+  --color-tone-success-fg: #0c5132;
+  --color-tone-success-solid: #29845a;
+  --color-tone-info-bg: #e0f0ff;
+  --color-tone-info-fg: #00527c;
+  --color-tone-info-surface: #d6f2ff;
+  --color-filter-label: #f2f2f2;
+  --color-filter-label-active: #dddddd;
+  --color-filter-value: #ffe7e4;
+  --color-filter-value-hover: #ffd6d1;
+  --color-filter-value-active: #ffc5be;
+  --color-filter-value-fg: #9e1c13;
+  --color-filter-value-fg-hover: #861710;
+  --color-tone-attention-bg: #ffeb78;
+  --color-tone-attention-fg: #4f4700;
+  --color-tone-warning-bg: #ffd6a4;
+  --color-tone-warning-fg: #5e4200;
+  --color-tone-critical-bg: #fedad9;
+  --color-tone-critical-fg: #8e1f0b;
+  --color-tone-critical-surface: #ffedeb;
+  --color-tone-magic-bg: #f0e6ff;
+  --color-tone-magic-fg: #5700d1;
+  --color-delta-good: #29845a;
+  --color-delta-bad: #b42318;
+
+  --color-chart-primary: #2ea3f2;
+  --color-chart-secondary: #9dd3f8;
+  --color-chart-grid: #ebebeb;
+
+  --color-highlight-note: #fff4b8;
+
+  --color-text-on-primary: #ffffff;
+  --color-icon-default: #303030;
+  --color-icon-secondary: #616161;
+  --color-button-primary-hover: #1a1a1a;
+  --color-editor-border: #e5e7ebb2;
+  --color-editor-description: #33333399;
+  --color-editor-icon: #6a7282;
+  --color-editor-icon-active: #111827;
+  --color-editor-label: #99a1af;
+  --color-editor-selected: #f3f4f6;
+  --color-editor-soft: #f4f5f6;
+  --color-editor-swatch-border: #e5e7eb;
+  --color-editor-title: #101828;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-tile: 14px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+
+  --text-hero: 36px;
+  --text-hero--line-height: 44px;
+  --text-hero--letter-spacing: -0.015em;
+  --text-greeting: 26px;
+  --text-greeting--line-height: 34px;
+  --text-greeting--letter-spacing: -0.02em;
+  --text-title-auth: 24px;
+  --text-title-auth--line-height: 30px;
+  --text-title-card: 15px;
+  --text-title-card--line-height: 20px;
+  --text-title-card--letter-spacing: -0.01em;
+  --text-small: 12px;
+  --text-small--line-height: 18px;
+  --text-tiny: 10px;
+  --text-tiny--line-height: 13px;
+  --text-tiny--letter-spacing: -0.01em;
+  --text-code: 12px;
+  --text-code--line-height: 16px;
+  --text-code-small: 11px;
+  --text-code-small--line-height: 16px;
+  --text-display: 40px;
+  --text-display--line-height: 44px;
+  --text-display--letter-spacing: -0.025em;
+  --text-title-page: 28px;
+  --text-title-page--line-height: 34px;
+  --text-title-page--letter-spacing: -0.02em;
+  --text-title-section: 16px;
+  --text-title-section--line-height: 20px;
+  --text-title-section--letter-spacing: -0.01em;
+  --text-body: 13px;
+  --text-body--line-height: 20px;
+  --text-body--letter-spacing: -0.01em;
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-stat: 20px;
+  --text-stat--line-height: 28px;
+  --text-stat--letter-spacing: -0.015em;
+  --text-axis: 11px;
+  --text-axis--line-height: 14px;
+
+  --shadow-card:
+    0 5px 5px -2.5px #00000008, 0 3px 3px -1.5px #00000005,
+    0 2px 2px -1px #00000005, 0 1px 1px -0.5px #00000008,
+    0 0.5px 0.5px 0 #0000000a;
+  --shadow-button-primary:
+    inset 0 1px 0 0 #ffffff29, 0 2px 1px -1px #0000001f,
+    0 9px 10px -8px #00000033;
+  --shadow-button-secondary:
+    0 2px 20px 0 #00000008, 0 5px 20px 0 #00000008, 0 8px 60px 0 #00000008;
+  --shadow-popover:
+    0 5px 5px -2.5px #0000000a, 0 3px 3px -1.5px #00000008,
+    0 12px 24px -6px #0000001f;
+  --shadow-segment: 0 1px 2px 0 #00000014, 0 0 0 1px #0000000a;
+  --shadow-dropdown:
+    0 2px 2px -1px #0000000f, 0 3px 4px -2px #0000000f,
+    0 6px 8px -3px #0000000f, 0 12px 16px -4px #0000000f, 0 0 0 1px #00000014;
+  --shadow-tooltip: 0 2px 6px 0 #00000029;
+  --shadow-toolbar: 0 8px 20px -6px #00000038;
+  --shadow-bubble: 0 4px 6px -1px #0000001a, 0 2px 4px -2px #0000001a;
+  --shadow-float:
+    0 8px 10px -5px #00000014, 0 5px 5px -2.5px #00000008,
+    0 3px 3px -1.5px #00000005, 0 1px 1px -0.5px #00000005;
+  --shadow-panel-float:
+    0 8px 24px -8px #00000047, 0 8px 16px -4px #0000000d,
+    0 3px 6px -2px #0000000d;
+  --shadow-row-gap: inset 0 1px 0 0 var(--color-surface-default);
+  --shadow-filter-bar:
+    0 0 2px 0 #0000003d, 0 2px 12px 0 #00000005, 0 4px 16px 0 #00000005,
+    0 4px 48px 0 #00000005;
+
+  --spacing-header: 55px;
+
+  --animate-shake: shake 0.4s ease-in-out;
+
+  @keyframes shake {
+    20%,
+    60% {
+      transform: translateX(-4px);
+    }
+    40%,
+    80% {
+      transform: translateX(4px);
+    }
+  }
+}
+
+html {
+  overscroll-behavior-y: none;
+}
+
+@layer base {
+  * {
+    @apply scrollbar-thumb-border-strong scrollbar-thin;
+  }
+}
+
+.dark {
+  color-scheme: dark;
+  --color-border-elevated: #ffffff14;
+  --color-text-primary: #ededed;
+  --color-border-ring: #ffffff14;
+  --color-text-secondary: #a3a3a3;
+  --color-text-link: #60a5fa;
+  --color-text-on-primary: #101010;
+  --color-text-tertiary: #6b6b6b;
+  --color-icon-default: #ededed;
+  --color-icon-secondary: #a3a3a3;
+  --color-surface-canvas: #0b0b0b;
+  --color-surface-code: #121212;
+  --color-surface-default: #141414;
+  --color-surface-fill: #1c1c1c;
+  --color-surface-fill-strong: #232323;
+  --color-surface-page: #0f0f0f;
+  --color-surface-panel: #0f0f0f;
+  --color-surface-pill: #232323;
+  --color-surface-row: #171717;
+  --color-surface-subtle: #171717;
+  --color-border-default: #232323;
+  --color-border-row: #1c1c1c;
+  --color-border-strong: #2b2b2b;
+  --color-border-subtle: #1c1c1c;
+  --color-button-primary: #ededed;
+  --color-button-primary-hover: #dcdcdc;
+  --color-tone-attention-bg: #2b2706;
+  --color-tone-attention-fg: #ffeb78;
+  --color-tone-critical-bg: #2e1010;
+  --color-tone-critical-fg: #f87171;
+  --color-tone-critical-surface: #2e1010;
+  --color-tone-info-bg: #0b2236;
+  --color-tone-info-fg: #60a5fa;
+  --color-tone-info-surface: #0b2236;
+  --color-tone-magic-bg: #1f1338;
+  --color-tone-magic-fg: #d2c2ff;
+  --color-tone-neutral-bg: #232323;
+  --color-tone-neutral-fg: #a3a3a3;
+  --color-tone-success-bg: #0f2a1d;
+  --color-tone-success-fg: #4ade80;
+  --color-tone-success-solid: #2fa36b;
+  --color-tone-warning-bg: #2e2209;
+  --color-tone-warning-fg: #fbbf24;
+  --color-delta-bad: #f87171;
+  --color-delta-good: #4ade80;
+  --color-filter-label: #1c1c1c;
+  --color-filter-label-active: #2b2b2b;
+  --color-filter-value: #2e1010;
+  --color-filter-value-active: #4a1a17;
+  --color-filter-value-fg: #f87171;
+  --color-filter-value-fg-hover: #fca5a5;
+  --color-filter-value-hover: #3a1414;
+  --color-chart-grid: #1c1c1c;
+  --color-chart-secondary: #1c4f73;
+  --color-highlight-note: #2b2706;
+  --color-sidebar-bg: #000000;
+  --color-editor-border: #ffffff14;
+  --color-editor-description: #ffffff99;
+  --color-editor-icon: #a3a3a3;
+  --color-editor-icon-active: #ededed;
+  --color-editor-label: #6b6b6b;
+  --color-editor-selected: #1c1c1c;
+  --color-editor-soft: #171717;
+  --color-editor-swatch-border: #232323;
+  --color-editor-title: #ededed;
+  --color-border-panel: #232323;
+}
+
+.light {
+  color-scheme: light;
+  --color-border-elevated: #0000;
+  --color-text-primary: #101010;
+  --color-border-ring: #00000012;
+  --color-text-secondary: #4a4a4a;
+  --color-text-link: #2463eb;
+  --color-text-on-primary: #ffffff;
+  --color-text-tertiary: #8a8a8a;
+  --color-icon-default: #303030;
+  --color-icon-secondary: #616161;
+  --color-surface-canvas: #f3f3f3;
+  --color-surface-code: #1a1a1a;
+  --color-surface-default: #ffffff;
+  --color-surface-fill: #f1f1f1;
+  --color-surface-fill-strong: #ebebeb;
+  --color-surface-page: #fbfbfb;
+  --color-surface-panel: #f6f6f6;
+  --color-surface-pill: #ebebeb;
+  --color-surface-row: #f7f7f7;
+  --color-surface-subtle: #f7f7f7;
+  --color-border-default: #e3e3e3;
+  --color-border-row: #f2f2f2;
+  --color-border-strong: #cccccc;
+  --color-border-subtle: #ebebeb;
+  --color-button-primary: #1a1a1a;
+  --color-button-primary-hover: #1a1a1a;
+  --color-tone-attention-bg: #ffeb78;
+  --color-tone-attention-fg: #4f4700;
+  --color-tone-critical-bg: #fedad9;
+  --color-tone-critical-fg: #8e1f0b;
+  --color-tone-critical-surface: #ffedeb;
+  --color-tone-info-bg: #e0f0ff;
+  --color-tone-info-fg: #00527c;
+  --color-tone-info-surface: #d6f2ff;
+  --color-tone-magic-bg: #f0e6ff;
+  --color-tone-magic-fg: #5700d1;
+  --color-tone-neutral-bg: #e3e3e3;
+  --color-tone-neutral-fg: #4a4a4a;
+  --color-tone-success-bg: #cdfee1;
+  --color-tone-success-fg: #0c5132;
+  --color-tone-success-solid: #29845a;
+  --color-tone-warning-bg: #ffd6a4;
+  --color-tone-warning-fg: #5e4200;
+  --color-delta-bad: #b42318;
+  --color-delta-good: #29845a;
+  --color-filter-label: #f2f2f2;
+  --color-filter-label-active: #dddddd;
+  --color-filter-value: #ffe7e4;
+  --color-filter-value-active: #ffc5be;
+  --color-filter-value-fg: #9e1c13;
+  --color-filter-value-fg-hover: #861710;
+  --color-filter-value-hover: #ffd6d1;
+  --color-chart-grid: #ebebeb;
+  --color-chart-secondary: #9dd3f8;
+  --color-highlight-note: #fff4b8;
+  --color-sidebar-bg: #0b0b0b;
+  --color-editor-border: #e5e7ebb2;
+  --color-editor-description: #33333399;
+  --color-editor-icon: #6a7282;
+  --color-editor-icon-active: #111827;
+  --color-editor-label: #99a1af;
+  --color-editor-selected: #f3f4f6;
+  --color-editor-soft: #f4f5f6;
+  --color-editor-swatch-border: #e5e7eb;
+  --color-editor-title: #101828;
+  --color-border-panel: #0000;
+}
+
+.code-tokens {
+  color: var(--color-text-primary);
+  --code-foreground: var(--color-text-primary);
+  --code-token-keyword: var(--color-tone-critical-fg);
+  --code-token-string: var(--color-text-secondary);
+  --code-token-string-expression: var(--color-text-secondary);
+  --code-token-constant: var(--color-text-link);
+  --code-token-function: var(--color-tone-magic-fg);
+  --code-token-parameter: var(--color-tone-warning-fg);
+  --code-token-comment: var(--color-text-tertiary);
+  --code-token-punctuation: var(--color-text-primary);
+  --code-token-link: var(--color-text-link);
+}
+
+.theme-switching,
+.theme-switching * {
+  transition: none !important;
+}
+
+@utility hide-number-controls {
+  &::-webkit-outer-spin-button,
+  &::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  /* Firefox */
+  &[type='number'] {
+    -moz-appearance: textfield;
+  }
+}
+
+@keyframes header-stuck {
+  to {
+    background-color: inherit;
+  }
+}
+
+@keyframes header-border-in {
+  to {
+    border-color: var(--color-border-subtle);
+  }
+}
+
+@utility header-stuck {
+  height: var(--spacing-header);
+  @apply bar-stuck;
+}
+
+@utility bar-stuck {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  border-bottom: 1px solid transparent;
+  background-color: inherit;
+
+  @supports (animation-timeline: scroll()) {
+    background-color: transparent;
+    animation:
+      header-stuck linear both,
+      header-border-in linear both;
+    animation-timeline: scroll(), scroll();
+    animation-range:
+      0 1px,
+      0 24px;
+  }
+}
+
+@keyframes header-title-in {
+  to {
+    opacity: 1;
+  }
+}
+
+@utility header-title {
+  @supports (animation-timeline: scroll()) {
+    opacity: 0;
+    animation: header-title-in linear both;
+    animation-timeline: scroll();
+    animation-range: 6px 18px;
+  }
+}
+
+@utility sticky-head {
+  position: sticky;
+  top: calc(var(--spacing-header) + --spacing(1));
+  z-index: 20;
+
+  & th {
+    box-shadow: 0 calc(--spacing(1) * -1) 0 var(--color-surface-default);
+  }
+}
+
+@property --scroll-fade-top {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --scroll-fade-bottom {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes scroll-fade-top-in {
+  to {
+    --scroll-fade-top: --spacing(12);
+  }
+}
+
+@keyframes scroll-fade-bottom-out {
+  from {
+    --scroll-fade-bottom: --spacing(12);
+  }
+  to {
+    --scroll-fade-bottom: 0px;
+  }
+}
+
+@utility scroll-fade-y {
+  mask-image: linear-gradient(
+    to bottom,
+    #0000,
+    #00000028 calc(var(--scroll-fade-top) * 0.25),
+    #00000080 calc(var(--scroll-fade-top) * 0.5),
+    #000000d7 calc(var(--scroll-fade-top) * 0.75),
+    #000 var(--scroll-fade-top),
+    #000 calc(100% - var(--scroll-fade-bottom)),
+    #000000d7 calc(100% - var(--scroll-fade-bottom) * 0.75),
+    #00000080 calc(100% - var(--scroll-fade-bottom) * 0.5),
+    #00000028 calc(100% - var(--scroll-fade-bottom) * 0.25),
+    #0000
+  );
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-top-in linear both,
+      scroll-fade-bottom-out linear both;
+    animation-timeline: scroll(self), scroll(self);
+    animation-range:
+      0 --spacing(12),
+      calc(100% - --spacing(12)) 100%;
+  }
+}
+
+.ts-chart-host {
+  --ts-chart-tooltip-background: var(--color-surface-default);
+  --ts-chart-tooltip-color: var(--color-text-primary);
+  --ts-chart-tooltip-border: 1px solid var(--color-border-default);
+  --ts-chart-tooltip-border-radius: var(--radius-lg);
+  --ts-chart-tooltip-shadow: var(--shadow-popover);
+  --ts-chart-tooltip-padding: 0;
+  --ts-chart-tooltip-font: inherit;
+}

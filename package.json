@@ -1,0 +1,18 @@
+{
+  "name": "@daroyan/root",
+  "private": true,
+  "scripts": {
+    "build": "cargo build --release -p daroyan-api -p daroyan-agent",
+    "check": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+    "db:duckdb": "cargo run -p daroyan-migration -- duckdb",
+    "db:entities": "sea-orm-cli generate entity -u \"sqlite://data/daroyan.db\" -o crates/daroyan-core/src/db/entities --entity-format dense --with-prelude none --ignore-tables seaql_migrations --date-time-crate chrono --banner-version off",
+    "db:migrate": "cargo run -p daroyan-migration -- up",
+    "db:status": "cargo run -p daroyan-migration -- status",
+    "dev:agent": "cargo run -p daroyan-agent -- start --config agent.dev.yml",
+    "dev:api": "PORT=8910 cargo run -p daroyan-api",
+    "dev:web": "pnpm --filter @daroyan/web dev",
+    "generate:client": "pnpm --filter @daroyan/client generate",
+    "typecheck:web": "pnpm --filter @daroyan/web typecheck"
+  },
+  "packageManager": "pnpm@10.32.1"
+}

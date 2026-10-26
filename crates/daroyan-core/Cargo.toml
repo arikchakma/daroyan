@@ -1,0 +1,42 @@
+[package]
+name = "daroyan-core"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+daroyan-protocol = { workspace = true, features = ["schema"] }
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+croner.workspace = true
+duckdb.workspace = true
+governor.workspace = true
+hex.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+ipnet.workspace = true
+opentelemetry-proto.workspace = true
+prost.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio-rustls.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+webpki-roots.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+
+[lints]
+workspace = true

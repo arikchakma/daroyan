@@ -1,0 +1,7458 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "utoipa-axum",
+    "description": "Utoipa's axum bindings for seamless integration for the two",
+    "contact": {
+      "name": "Juha Kukkonen",
+      "email": "juha7kukkonen@gmail.com"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.3.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agent/connect": {
+      "get": {
+        "operationId": "connect_agent",
+        "responses": {
+          "101": {}
+        }
+      }
+    },
+    "/v1/agent/enroll": {
+      "post": {
+        "operationId": "enroll_agent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/alert-mutes": {
+      "get": {
+        "operationId": "list_alert_mutes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlertMute"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_alert_mute",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAlertMuteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertMute"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/alert-mutes/{mute_id}": {
+      "delete": {
+        "operationId": "delete_alert_mute",
+        "parameters": [
+          {
+            "name": "mute_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/alert-rules": {
+      "get": {
+        "operationId": "list_alert_rules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlertRule"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_alert_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAlertRuleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRule"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/alert-rules/backtest": {
+      "post": {
+        "operationId": "backtest_alert_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BacktestAlertRuleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRuleBacktest"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/alert-rules/test": {
+      "post": {
+        "operationId": "test_alert_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestAlertRuleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/alert-rules/{rule_id}": {
+      "get": {
+        "operationId": "get_alert_rule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRule"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_alert_rule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      },
+      "patch": {
+        "operationId": "update_alert_rule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAlertRuleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRule"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/alert-rules/{rule_id}/deliveries": {
+      "get": {
+        "operationId": "list_alert_deliveries",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlertDelivery"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/alerts": {
+      "get": {
+        "operationId": "list_alerts",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "firing, resolved or all (default)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rule_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Alert"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/google": {
+      "post": {
+        "operationId": "start_sign_in",
+        "parameters": [
+          {
+            "name": "next",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedSignIn"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/google/callback": {
+      "get": {
+        "operationId": "finish_sign_in",
+        "responses": {
+          "302": {}
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "operationId": "sign_out",
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/auth/me": {
+      "get": {
+        "operationId": "get_me",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/backups": {
+      "get": {
+        "operationId": "get_backup_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupStatus"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_backup",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backup"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/crons": {
+      "get": {
+        "operationId": "list_crons",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Cron"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_cron",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Cron"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/crons/preview": {
+      "get": {
+        "operationId": "preview_cron_schedule",
+        "parameters": [
+          {
+            "name": "expression",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "time_zone",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronPreview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/crons/{cron_id}": {
+      "get": {
+        "operationId": "get_cron",
+        "parameters": [
+          {
+            "name": "cron_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Cron"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "update_cron",
+        "parameters": [
+          {
+            "name": "cron_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Cron"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_cron",
+        "parameters": [
+          {
+            "name": "cron_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/crons/{cron_id}/stats": {
+      "get": {
+        "operationId": "get_cron_stats",
+        "parameters": [
+          {
+            "name": "cron_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronStatsView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/incidents": {
+      "get": {
+        "operationId": "list_incidents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Incident"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_incident",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewIncidentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/incidents/{incident_id}": {
+      "get": {
+        "operationId": "get_incident",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "update_incident",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_incident",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/incidents/{incident_id}/postmortem": {
+      "put": {
+        "operationId": "save_postmortem",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostmortemBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "publish_postmortem",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/PublishPostmortemBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "unpublish_postmortem",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/incidents/{incident_id}/updates": {
+      "get": {
+        "operationId": "list_incident_updates",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IncidentUpdate"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_incident_update",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentUpdateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentUpdate"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/incidents/{incident_id}/updates/{update_id}": {
+      "put": {
+        "operationId": "edit_incident_update",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "update_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditUpdateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentUpdate"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ingest-tokens": {
+      "get": {
+        "operationId": "list_ingest_tokens",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IngestToken"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_ingest_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestTokenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedIngestToken"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ingest-tokens/{token_id}": {
+      "delete": {
+        "operationId": "delete_ingest_token",
+        "parameters": [
+          {
+            "name": "token_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/install-tokens": {
+      "post": {
+        "operationId": "create_install_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInstallTokenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallToken"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/install-tokens/{token_id}": {
+      "delete": {
+        "operationId": "delete_install_token",
+        "parameters": [
+          {
+            "name": "token_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/integrations": {
+      "get": {
+        "operationId": "list_integrations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Integration"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_integration",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIntegrationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/discord/callback": {
+      "get": {
+        "operationId": "finish_discord",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {}
+        }
+      }
+    },
+    "/v1/integrations/discord/connect": {
+      "post": {
+        "operationId": "connect_discord",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationConnect"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/providers": {
+      "get": {
+        "operationId": "list_providers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationProviders"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/slack/callback": {
+      "get": {
+        "operationId": "finish_slack",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {}
+        }
+      }
+    },
+    "/v1/integrations/slack/connect": {
+      "post": {
+        "operationId": "connect_slack",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationConnect"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/slack/installs/{install_id}": {
+      "get": {
+        "operationId": "list_slack_install_channels",
+        "parameters": [
+          {
+            "name": "install_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackInstall"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "finish_slack_install",
+        "parameters": [
+          {
+            "name": "install_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinishSlackBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/telegram/connect": {
+      "post": {
+        "operationId": "connect_telegram",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationConnect"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/telegram/connect/{state}": {
+      "get": {
+        "operationId": "read_telegram_connect",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramConnectStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/test": {
+      "post": {
+        "operationId": "test_integration_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestIntegrationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/integrations/{integration_id}": {
+      "delete": {
+        "operationId": "delete_integration",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      },
+      "patch": {
+        "operationId": "update_integration",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIntegrationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/{integration_id}/test": {
+      "post": {
+        "operationId": "test_integration",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/issues": {
+      "get": {
+        "operationId": "get_issues",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Time in ms. Defaults to the last 14 days",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Issue"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/issues/{fingerprint}/events": {
+      "get": {
+        "operationId": "get_issue_events",
+        "parameters": [
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IssueEvent"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/logs": {
+      "get": {
+        "operationId": "get_logs",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "query",
+            "description": "Server IDs, comma separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "server_op",
+            "in": "query",
+            "description": "`not` excludes the servers",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "description": "Sources, comma separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "service_op",
+            "in": "query",
+            "description": "`not` excludes the sources",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "query",
+            "description": "HTTP methods, comma separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method_op",
+            "in": "query",
+            "description": "`not` excludes the methods",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "HTTP status classes like 4xx, comma separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status_op",
+            "in": "query",
+            "description": "`not` excludes the status classes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "description": "The lowest level shown: debug, info, warn or error",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Words match the message or the attributes. `key:value` matches an attribute, `*` is a wildcard, and a leading `-` excludes. Quote phrases with spaces",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only lines at or after this time in ms",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only lines at or before this time in ms. Keep it the same while paging",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/logs/context": {
+      "get": {
+        "operationId": "get_log_context",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LogLine"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/logs/sources": {
+      "get": {
+        "operationId": "get_log_sources",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LogSource"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mcp-tokens": {
+      "get": {
+        "operationId": "list_mcp_tokens",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/McpToken"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_mcp_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpTokenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedMcpToken"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mcp-tokens/{token_id}": {
+      "delete": {
+        "operationId": "delete_mcp_token",
+        "parameters": [
+          {
+            "name": "token_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/members": {
+      "get": {
+        "operationId": "list_members",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Member"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "invite_member",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteMemberBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Member"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/members/{member_id}": {
+      "delete": {
+        "operationId": "remove_member",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      },
+      "patch": {
+        "operationId": "update_member",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMemberBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/overview/trends": {
+      "get": {
+        "description": "Hourly fleet CPU and exception counts for the last 24 hours. Times are in ms",
+        "operationId": "get_overview_trends",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewTrends"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/servers": {
+      "get": {
+        "operationId": "list_servers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ServerItem"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/servers/{server_id}": {
+      "get": {
+        "operationId": "get_server",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerDetail"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_server",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      },
+      "patch": {
+        "operationId": "rename_server",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameServerBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/servers/{server_id}/commands": {
+      "post": {
+        "operationId": "create_command",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Command"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/servers/{server_id}/commands/{command_id}": {
+      "get": {
+        "operationId": "get_command",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "command_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Command"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/servers/{server_id}/events": {
+      "get": {
+        "operationId": "list_server_events",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventItem"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/servers/{server_id}/metrics": {
+      "get": {
+        "operationId": "get_server_metrics",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "description": "1h, 6h, 24h, 7d or 30d",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerMetrics"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status-pages": {
+      "get": {
+        "operationId": "list_status_pages",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatusPage"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_status_page",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusPageBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status-pages/{page_id}": {
+      "get": {
+        "operationId": "get_status_page",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPage"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "update_status_page",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusPageBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPage"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_status_page",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/status/{slug}": {
+      "get": {
+        "operationId": "get_public_status_page",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatusPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status/{slug}/feed.atom": {
+      "get": {
+        "operationId": "get_atom_feed",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/atom+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status/{slug}/feed.rss": {
+      "get": {
+        "operationId": "get_rss_feed",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/rss+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status/{slug}/incidents/{incident_id}": {
+      "get": {
+        "operationId": "get_public_incident",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatusIncident"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/traces": {
+      "get": {
+        "operationId": "get_traces",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only traces with a span at or after this time in ms. Defaults to the last 24 hours",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only traces with a span before this time in ms",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "`error` keeps traces with an error span",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_duration_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Matches a span name, an HTTP route or a trace id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TraceSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/traces/services": {
+      "get": {
+        "operationId": "get_trace_services",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Time in ms. Defaults to the last 24 hours",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TraceService"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/traces/status": {
+      "get": {
+        "operationId": "get_trace_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/traces/{trace_id}": {
+      "get": {
+        "operationId": "get_trace_spans",
+        "parameters": [
+          {
+            "name": "trace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TraceSpan"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/uptime-checks": {
+      "get": {
+        "operationId": "list_uptime_checks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UptimeCheck"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_uptime_check",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UptimeCheckBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UptimeCheck"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/uptime-checks/{check_id}": {
+      "get": {
+        "operationId": "get_uptime_check",
+        "parameters": [
+          {
+            "name": "check_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UptimeCheck"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "update_uptime_check",
+        "parameters": [
+          {
+            "name": "check_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UptimeCheckBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UptimeCheck"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_uptime_check",
+        "parameters": [
+          {
+            "name": "check_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/v1/uptime-checks/{check_id}/run": {
+      "post": {
+        "operationId": "run_uptime_check",
+        "parameters": [
+          {
+            "name": "check_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UptimeResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/uptime-checks/{check_id}/stats": {
+      "get": {
+        "operationId": "get_uptime_check_stats",
+        "parameters": [
+          {
+            "name": "check_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UptimeCheckStats"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users": {
+      "get": {
+        "operationId": "list_users",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/User"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActionName": {
+        "type": "string",
+        "enum": [
+          "start_process",
+          "stop_process",
+          "restart_process"
+        ]
+      },
+      "Aggregation": {
+        "type": "string",
+        "enum": [
+          "avg",
+          "max",
+          "min",
+          "p95"
+        ]
+      },
+      "Alert": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "rule_id",
+          "rule_name",
+          "target_name",
+          "subject",
+          "value",
+          "severity",
+          "started_at"
+        ],
+        "properties": {
+          "check_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cron_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "example": "critical"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "example": "firing"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "AlertDelivery": {
+        "type": "object",
+        "required": [
+          "id",
+          "integration_id",
+          "integration_name",
+          "message",
+          "status",
+          "sent_at"
+        ],
+        "properties": {
+          "alert_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "integration_id": {
+            "type": "string"
+          },
+          "integration_name": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "sent_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "example": "sent"
+          }
+        }
+      },
+      "AlertMute": {
+        "type": "object",
+        "required": [
+          "id",
+          "rule_id",
+          "creator_id",
+          "created_at"
+        ],
+        "properties": {
+          "check_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "creator": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/User"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "creator_id": {
+            "type": "string"
+          },
+          "cron_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AlertRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "condition",
+          "for_secs",
+          "scope",
+          "integration_ids",
+          "options",
+          "declare_incident",
+          "declare_hidden_page_ids",
+          "summary",
+          "created_at"
+        ],
+        "properties": {
+          "condition": {
+            "$ref": "#/components/schemas/Condition"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "declare_hidden_page_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "declare_incident": {
+            "type": "boolean"
+          },
+          "declare_severity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "major"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "for_secs": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "integration_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "last_fired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "options": {
+            "$ref": "#/components/schemas/RuleOptions"
+          },
+          "quiet_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "AlertRuleBacktest": {
+        "type": "object",
+        "required": [
+          "is_supported",
+          "days",
+          "hits"
+        ],
+        "properties": {
+          "days": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertRuleBacktestHit"
+            }
+          },
+          "is_supported": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AlertRuleBacktestHit": {
+        "type": "object",
+        "required": [
+          "server_id",
+          "server_name",
+          "subject",
+          "value",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "server_name": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "AlertRuleId": {
+        "type": "string"
+      },
+      "BacktestAlertRuleBody": {
+        "type": "object",
+        "required": [
+          "condition",
+          "scope"
+        ],
+        "properties": {
+          "condition": {
+            "$ref": "#/components/schemas/Condition"
+          },
+          "for_secs": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          }
+        }
+      },
+      "Backup": {
+        "type": "object",
+        "required": [
+          "name",
+          "size_bytes",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "BackupStatus": {
+        "type": "object",
+        "required": [
+          "is_enabled"
+        ],
+        "properties": {
+          "is_enabled": {
+            "type": "boolean"
+          },
+          "last_backup": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Backup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Command": {
+        "type": "object",
+        "required": [
+          "id",
+          "server_id",
+          "action",
+          "name",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "example": "restart_process"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "example": "sent"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CommandBody": {
+        "type": "object",
+        "required": [
+          "action",
+          "name"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ActionName"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Condition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "offline"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "above",
+              "kind"
+            ],
+            "properties": {
+              "above": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cpu"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "above",
+              "kind"
+            ],
+            "properties": {
+              "above": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "memory"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "above",
+              "kind"
+            ],
+            "properties": {
+              "above": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "disk"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "above",
+              "kind"
+            ],
+            "properties": {
+              "above": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "load"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "process_stopped"
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "port_closed"
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "level",
+              "count",
+              "within_secs",
+              "kind"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "logs"
+                ]
+              },
+              "level": {
+                "type": "string"
+              },
+              "service": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "within_secs": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "uptime_down"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "above",
+              "kind"
+            ],
+            "properties": {
+              "above": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "response_time"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "above",
+              "kind"
+            ],
+            "properties": {
+              "above": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "first_byte"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "below",
+              "kind"
+            ],
+            "properties": {
+              "below": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cert_days"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cron_missed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cron_failed"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "CreateAlertMuteBody": {
+        "type": "object",
+        "required": [
+          "rule_id"
+        ],
+        "properties": {
+          "check_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cron_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rule_id": {
+            "$ref": "#/components/schemas/AlertRuleId"
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CreateAlertRuleBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "condition",
+          "scope"
+        ],
+        "properties": {
+          "condition": {
+            "$ref": "#/components/schemas/Condition"
+          },
+          "declare_hidden_page_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "declare_incident": {
+            "type": "boolean"
+          },
+          "declare_severity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "for_secs": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "integration_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "options": {
+            "$ref": "#/components/schemas/RuleOptions"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          }
+        }
+      },
+      "CreateInstallTokenBody": {
+        "type": "object",
+        "properties": {
+          "max_uses": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "CreateIntegrationBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/IntegrationConfig"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreatedIngestToken": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/IngestToken"
+          },
+          {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "CreatedMcpToken": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/McpToken"
+          },
+          {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "Cron": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "ping_key",
+          "schedule_kind",
+          "time_zone",
+          "grace_secs",
+          "paused",
+          "status",
+          "runs",
+          "created_at"
+        ],
+        "properties": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grace_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "id": {
+            "type": "string"
+          },
+          "interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "last_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "last_ping_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "max_duration_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "next_expected_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "ping_key": {
+            "type": "string"
+          },
+          "run_started_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronRunBar"
+            }
+          },
+          "schedule_kind": {
+            "type": "string",
+            "example": "cron"
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "server_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "time_zone": {
+            "type": "string"
+          }
+        }
+      },
+      "CronBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "schedule_kind"
+        ],
+        "properties": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grace_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "max_duration_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "schedule_kind": {
+            "type": "string",
+            "example": "cron"
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time_zone": {
+            "type": "string"
+          }
+        }
+      },
+      "CronFailure": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "cause",
+          "started_at"
+        ],
+        "properties": {
+          "cause": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "missed"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CronPoint": {
+        "type": "object",
+        "required": [
+          "at",
+          "total",
+          "ok"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "delay_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "duration_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "ok": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "CronPreview": {
+        "type": "object",
+        "required": [
+          "next_runs"
+        ],
+        "properties": {
+          "next_runs": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "CronRun": {
+        "type": "object",
+        "required": [
+          "finished_at",
+          "status"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "finished_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "output": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scheduled_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "started_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "example": "ok"
+          }
+        }
+      },
+      "CronRunBar": {
+        "type": "object",
+        "required": [
+          "at",
+          "status"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "example": "ok"
+          }
+        }
+      },
+      "CronStats": {
+        "type": "object",
+        "required": [
+          "runs_today"
+        ],
+        "properties": {
+          "average_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "p95_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "runs_today": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "success_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "CronStatsView": {
+        "type": "object",
+        "required": [
+          "stats",
+          "bars",
+          "points",
+          "recent",
+          "failures"
+        ],
+        "properties": {
+          "bars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronRunBar"
+            }
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronFailure"
+            }
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronPoint"
+            }
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronRun"
+            }
+          },
+          "stats": {
+            "$ref": "#/components/schemas/CronStats"
+          }
+        }
+      },
+      "DiskState": {
+        "type": "object",
+        "required": [
+          "mount",
+          "filesystem",
+          "disk_total",
+          "disk_used",
+          "inode_total",
+          "inode_used",
+          "read_speed",
+          "write_speed"
+        ],
+        "properties": {
+          "disk_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "disk_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "filesystem": {
+            "type": "string"
+          },
+          "inode_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "inode_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "mount": {
+            "type": "string"
+          },
+          "read_speed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "write_speed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "EditUpdateBody": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": true
+              }
+            ],
+            "description": "Plain text, with a blank line between paragraphs, or a TipTap document"
+          }
+        }
+      },
+      "EventItem": {
+        "type": "object",
+        "required": [
+          "at",
+          "kind",
+          "data"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "data": {
+            "type": "object"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "FinishSlackBody": {
+        "type": "object",
+        "required": [
+          "channel_id"
+        ],
+        "properties": {
+          "channel_id": {
+            "type": "string"
+          }
+        }
+      },
+      "FirstUpdateBody": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": true
+              }
+            ],
+            "description": "Plain text, with a blank line between paragraphs, or a TipTap document"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "FollowUpBody": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_done": {
+            "type": "boolean"
+          },
+          "owner_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Host": {
+        "type": "object",
+        "required": [
+          "name",
+          "labels",
+          "hostname",
+          "platform",
+          "platform_version",
+          "kernel",
+          "arch",
+          "cpu",
+          "cpu_cores",
+          "mem_total",
+          "swap_total",
+          "boot_time",
+          "version"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "boot_time": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "cpu": {
+            "type": "string"
+          },
+          "cpu_cores": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "kernel": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mem_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "platform_version": {
+            "type": "string"
+          },
+          "private_ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "swap_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Incident": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "status",
+          "started_at",
+          "auto_start",
+          "auto_finish",
+          "remind_before",
+          "components",
+          "related",
+          "responders",
+          "channel_ids",
+          "status_pages",
+          "follow_ups",
+          "public_update_count",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "auto_finish": {
+            "type": "boolean"
+          },
+          "auto_start": {
+            "type": "boolean"
+          },
+          "channel_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentComponent"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "follow_ups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentFollowUp"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "incident"
+          },
+          "lead": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IncidentPerson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "postmortem": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "postmortem_published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "public_update_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "related": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentRelated"
+            }
+          },
+          "remind_before": {
+            "type": "boolean"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "responders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentResponder"
+            }
+          },
+          "severity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "major"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "starts_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "example": "investigating"
+          },
+          "status_pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentStatusPage"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "IncidentBody": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "auto_finish": {
+            "type": "boolean"
+          },
+          "auto_start": {
+            "type": "boolean"
+          },
+          "channel_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentComponentRef"
+            }
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "hidden_page_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lead_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "related": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentRelatedRef"
+            }
+          },
+          "remind_before": {
+            "type": "boolean"
+          },
+          "responders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentResponderRef"
+            }
+          },
+          "severity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "starts_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "IncidentComponent": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "check"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "example": "outage"
+          }
+        }
+      },
+      "IncidentComponentRef": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "check"
+          },
+          "status": {
+            "type": "string",
+            "example": "outage"
+          }
+        }
+      },
+      "IncidentFollowUp": {
+        "type": "object",
+        "required": [
+          "id",
+          "body",
+          "is_done"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_done": {
+            "type": "boolean"
+          },
+          "owner_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "IncidentPerson": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "IncidentRelated": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "server"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "IncidentRelatedRef": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "server"
+          }
+        }
+      },
+      "IncidentResponder": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "IncidentResponderRef": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "example": "Responder"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        }
+      },
+      "IncidentStatusPage": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "is_shown"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "is_shown": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "IncidentUpdate": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "body",
+          "is_public",
+          "created_at"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "creator": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/User"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "creator_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "edited_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_public": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "example": "update"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "identified"
+          }
+        }
+      },
+      "IncidentUpdateBody": {
+        "type": "object",
+        "required": [
+          "kind",
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": true
+              }
+            ],
+            "description": "Plain text, with a blank line between paragraphs, or a TipTap document"
+          },
+          "is_public": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "example": "update"
+          },
+          "notify": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "IngestToken": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "hint",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "IngestTokenBody": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "InstallToken": {
+        "type": "object",
+        "required": [
+          "id",
+          "token",
+          "expires_at",
+          "max_uses"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "max_uses": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "Integration": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "target",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "slack"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "ok"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "IntegrationConfig": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "api_url",
+              "bot_token",
+              "channel_id",
+              "channel_name",
+              "kind"
+            ],
+            "properties": {
+              "api_url": {
+                "type": "string"
+              },
+              "bot_token": {
+                "type": "string"
+              },
+              "channel_id": {
+                "type": "string"
+              },
+              "channel_name": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "slack"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "webhook_url",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "discord"
+                ]
+              },
+              "webhook_url": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "bot_token",
+              "chat_id",
+              "kind"
+            ],
+            "properties": {
+              "bot_token": {
+                "type": "string"
+              },
+              "chat_id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "telegram"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "url",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "webhook"
+                ]
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "IntegrationConnect": {
+        "type": "object",
+        "required": [
+          "url",
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "IntegrationProviders": {
+        "type": "object",
+        "required": [
+          "slack",
+          "discord",
+          "telegram"
+        ],
+        "properties": {
+          "discord": {
+            "type": "boolean"
+          },
+          "slack": {
+            "type": "boolean"
+          },
+          "slack_manifest_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "telegram": {
+            "type": "boolean"
+          }
+        }
+      },
+      "InviteMemberBody": {
+        "type": "object",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "example": "member"
+          }
+        }
+      },
+      "Issue": {
+        "type": "object",
+        "required": [
+          "fingerprint",
+          "service",
+          "kind",
+          "message",
+          "count",
+          "first_seen_at",
+          "last_seen_at",
+          "trace_id"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "first_seen_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "message": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "IssueEvent": {
+        "type": "object",
+        "required": [
+          "trace_id",
+          "span_id",
+          "message",
+          "occurred_at"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "span_id": {
+            "type": "string"
+          },
+          "stacktrace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "LastReport": {
+        "type": "object",
+        "required": [
+          "state",
+          "processes",
+          "ports"
+        ],
+        "properties": {
+          "ports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortState"
+            }
+          },
+          "processes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProcessState"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/State"
+          }
+        }
+      },
+      "LogLine": {
+        "type": "object",
+        "required": [
+          "at",
+          "server_id",
+          "service",
+          "stream",
+          "level",
+          "severity",
+          "message"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "attributes": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "level": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "raw": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stream": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LogPage": {
+        "type": "object",
+        "required": [
+          "lines",
+          "has_more",
+          "until"
+        ],
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            }
+          },
+          "until": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "LogSource": {
+        "type": "object",
+        "required": [
+          "server_id",
+          "service"
+        ],
+        "properties": {
+          "server_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
+      "McpToken": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "hint",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "McpTokenBody": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Me": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/User"
+          },
+          {
+            "type": "object",
+            "required": [
+              "role"
+            ],
+            "properties": {
+              "role": {
+                "type": "string",
+                "example": "admin"
+              }
+            }
+          }
+        ]
+      },
+      "Member": {
+        "type": "object",
+        "required": [
+          "email",
+          "role",
+          "is_locked"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invited_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "inviter_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_locked": {
+            "type": "boolean"
+          },
+          "role": {
+            "type": "string",
+            "example": "member"
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/User"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "MetricPoint": {
+        "type": "object",
+        "required": [
+          "at",
+          "cpu",
+          "mem_used",
+          "swap_used",
+          "load1",
+          "disk_read_speed",
+          "disk_write_speed",
+          "net_in_speed",
+          "net_out_speed",
+          "tcp_conn_count",
+          "udp_conn_count"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cpu": {
+            "type": "number",
+            "format": "double"
+          },
+          "disk_read_speed": {
+            "type": "number",
+            "format": "double"
+          },
+          "disk_write_speed": {
+            "type": "number",
+            "format": "double"
+          },
+          "load1": {
+            "type": "number",
+            "format": "double"
+          },
+          "mem_used": {
+            "type": "number",
+            "format": "double"
+          },
+          "net_in_speed": {
+            "type": "number",
+            "format": "double"
+          },
+          "net_out_speed": {
+            "type": "number",
+            "format": "double"
+          },
+          "swap_used": {
+            "type": "number",
+            "format": "double"
+          },
+          "tcp_conn_count": {
+            "type": "number",
+            "format": "double"
+          },
+          "udp_conn_count": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "NewIncidentBody": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/IncidentBody"
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "update"
+            ],
+            "properties": {
+              "alert_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "example": "incident"
+              },
+              "update": {
+                "$ref": "#/components/schemas/FirstUpdateBody"
+              }
+            }
+          }
+        ]
+      },
+      "NicState": {
+        "type": "object",
+        "required": [
+          "name",
+          "net_in_speed",
+          "net_out_speed",
+          "net_in_transfer",
+          "net_out_transfer"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "net_in_speed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "net_in_transfer": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "net_out_speed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "net_out_transfer": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "NoData": {
+        "type": "string",
+        "enum": [
+          "keep",
+          "alert",
+          "resolve"
+        ]
+      },
+      "OverviewTrends": {
+        "type": "object",
+        "required": [
+          "cpu",
+          "errors"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrendPoint"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrendPoint"
+            }
+          }
+        }
+      },
+      "PortState": {
+        "type": "object",
+        "required": [
+          "host",
+          "port",
+          "open"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "PostmortemBody": {
+        "type": "object",
+        "properties": {
+          "follow_ups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FollowUpBody"
+            }
+          },
+          "postmortem": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ProcessState": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "count",
+          "cpu",
+          "mem_used",
+          "read_speed",
+          "write_speed"
+        ],
+        "properties": {
+          "controllable": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "cpu": {
+            "type": "number",
+            "format": "float"
+          },
+          "mem_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "read_speed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProcessStatus"
+          },
+          "write_speed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ProcessStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "stopped"
+        ]
+      },
+      "PublicStatusActiveIncident": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "status",
+          "started_at",
+          "components"
+        ],
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusIncidentComponent"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "latest_update": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PublicStatusUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "severity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "major"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "example": "investigating"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicStatusComponent": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "status",
+          "days"
+        ],
+        "properties": {
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UptimeDay"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "example": "check"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "example": "operational"
+          },
+          "uptime": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "PublicStatusFollowUp": {
+        "type": "object",
+        "required": [
+          "body",
+          "is_done"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "is_done": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PublicStatusIncident": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "status",
+          "started_at",
+          "components",
+          "updates",
+          "follow_ups"
+        ],
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusIncidentComponent"
+            }
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "follow_ups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusFollowUp"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "incident"
+          },
+          "postmortem": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "postmortem_published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "severity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "major"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "starts_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "example": "resolved"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusUpdate"
+            }
+          }
+        }
+      },
+      "PublicStatusIncidentComponent": {
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "example": "outage"
+          }
+        }
+      },
+      "PublicStatusMaintenance": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "status",
+          "components"
+        ],
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusIncidentComponent"
+            }
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "latest_update": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PublicStatusUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "starts_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "example": "scheduled"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicStatusPage": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "sections",
+          "active_incidents",
+          "maintenance",
+          "past_incidents",
+          "updated_at"
+        ],
+        "properties": {
+          "active_incidents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusActiveIncident"
+            }
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maintenance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusMaintenance"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "past_incidents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusPastIncident"
+            }
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusSection"
+            }
+          },
+          "status": {
+            "type": "string",
+            "example": "operational"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PublicStatusPastIncident": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "status",
+          "started_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "severity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "major"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "example": "resolved"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicStatusSection": {
+        "type": "object",
+        "required": [
+          "name",
+          "components"
+        ],
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusComponent"
+            }
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicStatusUpdate": {
+        "type": "object",
+        "required": [
+          "body",
+          "created_at"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "identified"
+          }
+        }
+      },
+      "PublishPostmortemBody": {
+        "type": "object",
+        "properties": {
+          "notify": {
+            "type": "boolean"
+          }
+        }
+      },
+      "QuietWindow": {
+        "type": "object",
+        "required": [
+          "days",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "RenameServerBody": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "RuleOptions": {
+        "type": "object",
+        "properties": {
+          "aggregation": {
+            "$ref": "#/components/schemas/Aggregation",
+            "default": "avg"
+          },
+          "message_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "default": null,
+            "minimum": 0
+          },
+          "no_data": {
+            "$ref": "#/components/schemas/NoData",
+            "default": "keep"
+          },
+          "quiet_hours": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuietWindow"
+            },
+            "default": []
+          },
+          "remind_every_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "default": null,
+            "minimum": 0
+          },
+          "remind_times": {
+            "type": "integer",
+            "format": "int32",
+            "default": 0,
+            "minimum": 0
+          },
+          "resolve_at": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "default": null
+          },
+          "resolve_for_secs": {
+            "type": "integer",
+            "format": "int32",
+            "default": 0,
+            "minimum": 0
+          },
+          "runbook_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "severity_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "warning": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "default": null
+          },
+          "warning_integration_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "window_secs": {
+            "type": "integer",
+            "format": "int32",
+            "default": 0,
+            "minimum": 0
+          }
+        }
+      },
+      "Scope": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "all"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "label",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "label"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "server_ids",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "servers"
+                ]
+              },
+              "server_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "check_ids",
+              "kind"
+            ],
+            "properties": {
+              "check_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "checks"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "cron_ids",
+              "kind"
+            ],
+            "properties": {
+              "cron_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "crons"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "ServerDetail": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "labels",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "host": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Host"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "last_report": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LastReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ServerStatus"
+          }
+        }
+      },
+      "ServerItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "labels",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "cpu": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "cpu_cores": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "disk_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "id": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "mem_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "mem_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "private_ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ServerStatus"
+          },
+          "uptime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ServerMetrics": {
+        "type": "object",
+        "required": [
+          "bucket_ms",
+          "points"
+        ],
+        "properties": {
+          "bucket_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            }
+          }
+        }
+      },
+      "ServerStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "healthy",
+          "warning",
+          "down"
+        ]
+      },
+      "SlackChannel": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SlackInstall": {
+        "type": "object",
+        "required": [
+          "team_name",
+          "channels"
+        ],
+        "properties": {
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SlackChannel"
+            }
+          },
+          "team_name": {
+            "type": "string"
+          }
+        }
+      },
+      "StartedSignIn": {
+        "type": "object",
+        "required": [
+          "authorization_url"
+        ],
+        "properties": {
+          "authorization_url": {
+            "type": "string"
+          }
+        }
+      },
+      "State": {
+        "type": "object",
+        "required": [
+          "taken_at",
+          "uptime",
+          "cpu",
+          "load1",
+          "load5",
+          "load15",
+          "mem_used",
+          "swap_used",
+          "process_count",
+          "tcp_conn_count",
+          "udp_conn_count",
+          "disks",
+          "nics"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "number",
+            "format": "float"
+          },
+          "disks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiskState"
+            }
+          },
+          "load1": {
+            "type": "number",
+            "format": "double"
+          },
+          "load15": {
+            "type": "number",
+            "format": "double"
+          },
+          "load5": {
+            "type": "number",
+            "format": "double"
+          },
+          "mem_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "nics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NicState"
+            }
+          },
+          "process_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "swap_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "taken_at": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tcp_conn_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "udp_conn_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "uptime": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "StatusPage": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "is_public",
+          "sections",
+          "status",
+          "component_count",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "component_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_public": {
+            "type": "boolean"
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusPageSection"
+            }
+          },
+          "slug": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "example": "operational"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "StatusPageBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "slug"
+        ],
+        "properties": {
+          "is_public": {
+            "type": "boolean"
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusPageSection"
+            }
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusPageComponent": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "check"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusPageSection": {
+        "type": "object",
+        "required": [
+          "name",
+          "components"
+        ],
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusPageComponent"
+            }
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "TelegramConnectStatus": {
+        "type": "object",
+        "required": [
+          "is_connected"
+        ],
+        "properties": {
+          "integration": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Integration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_connected": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TestAlertRuleBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "condition",
+          "integration_ids"
+        ],
+        "properties": {
+          "condition": {
+            "$ref": "#/components/schemas/Condition"
+          },
+          "for_secs": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "integration_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "TestIntegrationBody": {
+        "type": "object",
+        "required": [
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/IntegrationConfig"
+          }
+        }
+      },
+      "TraceService": {
+        "type": "object",
+        "required": [
+          "service",
+          "span_count",
+          "error_count",
+          "last_seen_at"
+        ],
+        "properties": {
+          "error_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_seen_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "p95_us": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "service": {
+            "type": "string"
+          },
+          "span_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TraceSpan": {
+        "type": "object",
+        "required": [
+          "span_id",
+          "service",
+          "name",
+          "kind",
+          "started_at",
+          "duration_us",
+          "status",
+          "attributes",
+          "resource",
+          "events"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object"
+          },
+          "duration_us": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "http_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "http_route": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource": {
+            "type": "object"
+          },
+          "service": {
+            "type": "string"
+          },
+          "span_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "status_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TraceStatus": {
+        "type": "object",
+        "properties": {
+          "last_span_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "TraceSummary": {
+        "type": "object",
+        "required": [
+          "trace_id",
+          "service",
+          "name",
+          "started_at",
+          "duration_us",
+          "span_count",
+          "error_count",
+          "services"
+        ],
+        "properties": {
+          "duration_us": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "http_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "http_route": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "span_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TrendPoint": {
+        "type": "object",
+        "required": [
+          "at",
+          "value"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "UpdateAlertRuleBody": {
+        "type": "object",
+        "properties": {
+          "condition": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Condition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "declare_hidden_page_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "declare_incident": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "declare_severity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "for_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "integration_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuleOptions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scope": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "UpdateIntegrationBody": {
+        "type": "object",
+        "properties": {
+          "config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IntegrationConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdateMemberBody": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "example": "admin"
+          }
+        }
+      },
+      "UptimeCheck": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "target",
+          "method",
+          "timeout_secs",
+          "interval_secs",
+          "paused",
+          "status",
+          "days",
+          "created_at"
+        ],
+        "properties": {
+          "body_contains": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UptimeDay"
+            }
+          },
+          "expected_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "id": {
+            "type": "string"
+          },
+          "interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string",
+            "example": "http"
+          },
+          "last_checked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "last_response_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "method": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "example": "up"
+          },
+          "target": {
+            "type": "string"
+          },
+          "timeout_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "uptime": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "UptimeCheckBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "target"
+        ],
+        "properties": {
+          "body_contains": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string",
+            "example": "http"
+          },
+          "method": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "target": {
+            "type": "string"
+          },
+          "timeout_secs": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "UptimeCheckStats": {
+        "type": "object",
+        "required": [
+          "stats",
+          "points",
+          "recent",
+          "outages"
+        ],
+        "properties": {
+          "outages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UptimeOutage"
+            }
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UptimePoint"
+            }
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UptimeResult"
+            }
+          },
+          "stats": {
+            "$ref": "#/components/schemas/UptimeStats"
+          }
+        }
+      },
+      "UptimeDay": {
+        "type": "object",
+        "required": [
+          "day",
+          "total",
+          "down",
+          "slow"
+        ],
+        "properties": {
+          "day": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "down": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "slow": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "UptimeOutage": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "cause",
+          "started_at"
+        ],
+        "properties": {
+          "cause": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "example": "down"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UptimePoint": {
+        "type": "object",
+        "required": [
+          "at",
+          "total",
+          "down"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "dns_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "down": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "response_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "tls_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "UptimeResult": {
+        "type": "object",
+        "required": [
+          "at",
+          "status"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "connect_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "dns_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          },
+          "tls_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "ttfb_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "UptimeStats": {
+        "type": "object",
+        "required": [
+          "checks_today"
+        ],
+        "properties": {
+          "average_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "cert_expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "checks_today": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "p95_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "uptime": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "name"
+        ],
+        "properties": {
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

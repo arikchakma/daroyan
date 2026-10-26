@@ -1,0 +1,15 @@
+[Unit]
+Description=Daroyan monitoring agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=daroyan
+ExecStart=/usr/local/bin/daroyan start
+Restart=on-failure
+RestartSec=5
+StateDirectory=daroyan
+LogsDirectory=daroyan
+
+[Install]
+WantedBy=multi-user.target

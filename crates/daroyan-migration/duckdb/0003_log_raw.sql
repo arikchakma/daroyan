@@ -1,0 +1,1 @@
+ALTER TABLE log_lines ADD COLUMN raw VARCHAR;
