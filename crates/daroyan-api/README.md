@@ -66,40 +66,7 @@ SQLite holds the rows people see: servers, install tokens, commands, each server
 
 ## Routes
 
-The dashboard routes take the `daroyan_session` cookie that Google sign-in sets.
-
-| Route | Auth | Does |
-| --- | --- | --- |
-| `POST /v1/auth/google` | none | Start Google sign-in. Returns the Google URL |
-| `GET /v1/auth/google/callback` | none | Finish sign-in, set the session cookie and go back to the dashboard |
-| `GET /v1/auth/me` | session | The signed-in user |
-| `POST /v1/auth/logout` | session | End the session |
-| `GET /v1/logs` | session | Log lines, newest first. Filters: `server_id`, `service`, `level` (the lowest shown), `q`. Pages with `until`, `offset` and `limit` |
-| `GET /v1/logs/sources` | session | The server and service pairs that have log lines |
-| `POST /v1/install-tokens` | admin | `{ "max_uses": 5 }` creates an install token, valid for 24 hours, for up to `max_uses` servers (1 by default, at most 100) |
-| `DELETE /v1/install-tokens/{token_id}` | admin | Revoke an install token |
-| `POST /v1/agent/enroll` | install token | Use up one enrollment of the token, create a server and return its id and token |
-| `GET /v1/agent/connect` | server token | The agent WebSocket. The API pings every 20 seconds |
-| `GET /v1/servers` | session | Servers with status, CPU, memory and disk percent, uptime and last seen |
-| `GET /v1/servers/{server_id}` | session | Host info and the last report (state, processes, ports) |
-| `GET /v1/servers/{server_id}/metrics?range=6h` | session | About 120 averaged points for `1h`, `6h`, `24h`, `7d` or `30d` |
-| `GET /v1/servers/{server_id}/events` | session | The last 50 events |
-| `POST /v1/servers/{server_id}/commands` | session | `{ "action": "restart_process", "name": "nginx" }` to the live socket |
-| `GET /v1/servers/{server_id}/commands/{command_id}` | session | `sent`, then `succeeded` or `failed` with the agent's error |
-| `DELETE /v1/servers/{server_id}` | session | Remove the server, its rows in DuckDB, and its socket |
-| `GET/POST /v1/integrations`, `PATCH/DELETE /v1/integrations/{id}` | session | Slack, Discord, Telegram or webhook targets. Responses mask the URL or token |
-| `POST /v1/integrations/{id}/test`, `POST /v1/integrations/test` | session | Send a test message to a saved integration, or to a config before saving |
-| `GET /v1/integrations/providers` | session | Which kinds can connect in one click on this API |
-| `POST /v1/integrations/{slack,discord}/connect` | session | The Slack or Discord authorize URL. Discord's callback saves the integration. Slack's callback sends the popup to `APP_URL/integrations/slack` to pick a channel |
-| `GET/POST /v1/integrations/slack/installs/{install_id}` | session | The channels of a finished Slack sign-in, then save the picked one |
-| `POST /v1/integrations/telegram/connect`, `GET /v1/integrations/telegram/connect/{state}` | session | A `t.me` link with a one-time code, then whether the bot has joined a chat |
-| `POST /v1/alert-rules/backtest` | session | How often a rule would have fired in the last 7 days, from the DuckDB history |
-| `POST /v1/alert-rules/test` | session | Send a sample alert for a rule to its integrations |
-| `GET /v1/alert-rules/{id}/deliveries` | session | The last 50 messages sent for a rule |
-| `GET/POST /v1/alert-rules`, `PATCH/DELETE /v1/alert-rules/{id}` | session | Alert rules: a condition, a duration, a server scope, and the integrations to notify |
-| `GET /v1/alerts?status=firing` | session | The last 200 `firing` or `resolved` alerts |
-
-`/openapi.json` serves the spec.
+`/openapi.json` serves the full spec, and `packages/client` is the typed client generated from it. Dashboard routes take the `daroyan_session` cookie that Google sign-in sets, or an MCP token (see MCP). Routes that change servers, checks, crons, alert rules, status pages, integrations, backups, tokens or members need an admin (see Sign In). The agent enrolls at `POST /v1/agent/enroll` with an install token and then keeps `GET /v1/agent/connect` open with its server token; the API pings it every 20 seconds.
 
 A server is `pending` until its first report and `down` while its socket is closed. It is `warning` when CPU, memory or a disk is at 90% or more, a watched process is not running, or a watched port is closed. Otherwise it is `healthy`.
 
@@ -203,7 +170,6 @@ DuckDB: set `DUCKDB_BACKUP_DIR`. Every 6 hours the API copies the database into 
 ## Limits
 
 - One API process. The live sockets are a map in memory, and DuckDB allows one writer.
-- Every allowed user can do everything. There are no roles.
 - Integration secrets (webhook URLs, bot tokens) are stored as plain text in SQLite. Protect the file.
 - How long a breach has lasted is kept in memory, so an API restart starts each `for_secs` over.
 - The latest events can take up to 5 seconds to appear, because writes are buffered.

@@ -33,7 +33,7 @@ Build the Linux binary on a Mac with `cargo zigbuild --release -p daroyan-agent 
 
 `/etc/daroyan/agent.yml`. See `agent.example.yml`. Host metrics need no config. Unknown keys fail at start, so a typo stops the agent with a message.
 
-The agent also reads every `*.yml` file in `/etc/daroyan/conf.d/`, in name order, and adds its `processes` and `ports` to the main config. Each app can keep its own file there, for example `conf.d/linkity.yml`. A snippet takes only `processes` and `ports`, and process names must be unique across all files. Restart the agent after you change a file.
+The agent also reads every `*.yml` file in `/etc/daroyan/conf.d/`, in name order, and adds its `processes`, `ports` and `files` to the main config. Each app can keep its own file there, for example `conf.d/linkity.yml`. A snippet takes only `processes`, `ports` and `files`, and process names must be unique across all files. Restart the agent after you change a file.
 
 ```yaml
 processes:
@@ -69,7 +69,7 @@ Each process entry has exactly one source. The source decides how the agent find
 | `processes[].user` | any | Count only processes owned by this user |
 | `processes[].restart.attempts` | no restarts | Restart a stopped `systemd` or `docker` entry up to this many times. An error on `process` entries |
 | `processes[].logs` | `false` | Send this process's logs. `docker` reads `docker logs`, `systemd` reads the journal. An error on `process` entries |
-| `processes[].restart.within` | `10m` | The window for `attempts`, as `30s`, `10m` or `1h`. Once spent, the agent sends a `processRestartGaveUp` event and stops trying until the process runs again |
+| `processes[].restart.within` | `10m` | The window for `attempts`, as `30s`, `10m` or `1h`. Once spent, the agent sends a `process_restart_gave_up` event and stops trying until the process runs again |
 | `files[].name`, `files[].path` | none | A log file to send. The agent follows it and handles rotation. The `daroyan` user must be able to read it |
 | `ports[].name` | none | The label in the dashboard |
 | `ports[].host` | `localhost` | The host to connect to |
@@ -105,10 +105,11 @@ The agent opens `GET /v1/agent/connect` as a WebSocket with `Authorization: Bear
 | Direction | `type` | Body |
 | --- | --- | --- |
 | agent to API | `report` | `host`, `state`, `processes`, `ports`, `events` |
-| agent to API | `commandResult` | `id`, `ok`, `error` |
-| API to agent | `command` | `id`, `action` (`startProcess`, `stopProcess`, `restartProcess`), `name` |
+| agent to API | `command_result` | `id`, `ok`, `error` |
+| agent to API | `logs` | `lines`, `dropped` |
+| API to agent | `command` | `id`, `action` (`start_process`, `stop_process`, `restart_process`), `name` |
 
-- A command works only on a `systemd` or `docker` entry in `processes`. A process stopped from the dashboard is held: the agent does not restart it until a `startProcess` or `restartProcess`.
+- A command works only on a `systemd` or `docker` entry in `processes`. A process stopped from the dashboard is held: the agent does not restart it until a `start_process` or `restart_process`.
 - The API must send a ping at least every 60 seconds. With no frame for 60 seconds, the agent reconnects.
 - The agent reconnects after 1 second, then doubles the wait up to 60 seconds. The first report on a new connection always carries `host`.
 
@@ -118,7 +119,7 @@ The agent opens `GET /v1/agent/connect` as a WebSocket with `Authorization: Bear
 - Process control (auto-restart and dashboard commands) works for `systemd` and `docker` entries. It runs `systemctl` or `docker`, and falls back to `sudo -n` when that is denied. On OpenRC (Alpine) use `process` entries; they are watch-only.
 - Per-process disk I/O reads `/proc/<pid>/io`, which needs `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`. The systemd unit grants them; on OpenRC the script sets them on the binary with `setcap`.
 - A `process` entry includes its child processes in CPU, memory and disk I/O, but its count is only the matching processes. A child that starts and ends between two reports (every 10 seconds) is not counted.
-- Disks are listed once per device. Virtual, host-share (`virtiofs`, `9p`, `fuse.*`) and network (`nfs`, `cifs`) filesystems are skipped unless `disk.allow` names them, because a hung network mount would block the agent.
+- Disks are listed once per device. Virtual, host-share (`virtiofs`, `9p`, `fuse.*`) and network (`nfs`, `cifs`) filesystems are skipped unless `host.disks` names them, because a hung network mount would block the agent.
 - ARM Linux reports no CPU model, so the dashboard shows only the core count there.
 - Port checks are TCP only. Redis and HTTP protocol checks come later.
 - TCP and UDP counts read `/proc/net`, so they are 0 on macOS.

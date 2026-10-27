@@ -31,7 +31,7 @@ start. Put TLS in front of it with a reverse proxy.
 | `APP_URL` | **Yes** | – | Public base URL. Used for OAuth redirects and status-page links. Must match the Google redirect URI host. |
 | `GOOGLE_CLIENT_ID` | **Yes** | – | Google OAuth client ID (needed to log in). |
 | `GOOGLE_CLIENT_SECRET` | **Yes** | – | Google OAuth client secret. |
-| `ALLOWED_EMAILS` | **Yes (first run)** | empty | Comma-separated emails that are **admins** automatically. Set this to your own email to bootstrap the first admin, then invite others from the UI. |
+| `ALLOWED_EMAILS` | **Yes (first run)** | empty | Comma-separated emails, or `@domain` for a whole domain, that are **admins** automatically. Set this to your own email to bootstrap the first admin, then invite others from the UI. |
 | `HOST` | No | `127.0.0.1` | Bind address. Set to `0.0.0.0` (or `::`) when a proxy on another host/container must reach it. The Docker image defaults to `::`. |
 | `PORT` | No | `8900` | Listen port. |
 | `DATABASE_URL` | No | `sqlite://data/daroyan.db?mode=rwc` | SQLite app database. Point it at your persistent volume. |
@@ -199,6 +199,11 @@ curl -fsSL https://monitor.example.com/install.sh | \
   version, so the host needs outbound HTTPS to `github.com`.
 - To let admins start/stop/restart processes from the dashboard, set
   `agent: commands: true` in `/etc/daroyan/agent.yml` on the host.
+- Everything else the agent watches (processes, ports, log files, disks) is set
+  in `/etc/daroyan/agent.yml` and `/etc/daroyan/conf.d/*.yml`. See the
+  [agent config reference](./crates/daroyan-agent/README.md#config) and
+  [`agent.example.yml`](./crates/daroyan-agent/agent.example.yml). Restart the
+  agent after a change: `sudo systemctl restart daroyan`.
 
 ---
 
