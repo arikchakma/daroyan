@@ -65,6 +65,7 @@ async fn declares_updates_and_resolves_incidents() {
     .await
     .unwrap();
     let http = common::sign_in(&state.database).await;
+    let database = state.database.clone();
     let anonymous = Client::new();
     let base = serve(build_app(state)).await;
     let site = serve(Router::new().route("/health", get(|| async { "ok" }))).await;
@@ -354,12 +355,22 @@ async fn declares_updates_and_resolves_incidents() {
 
     let listed = send(http.get(format!("{base}/v1/incidents")), StatusCode::OK).await;
     assert_eq!(listed.as_array().unwrap().len(), 2);
+    assert!(
+        common::count_rows(&database, "incident_updates", "incident_id", &incident_id)
+            .await
+            > 0
+    );
     let deleted = http
         .delete(format!("{base}/v1/incidents/{incident_id}"))
         .send()
         .await
         .unwrap();
     assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        common::count_rows(&database, "incident_updates", "incident_id", &incident_id)
+            .await,
+        0
+    );
     send(http.get(format!("{base}/v1/incidents/{incident_id}")), StatusCode::NOT_FOUND)
         .await;
 }

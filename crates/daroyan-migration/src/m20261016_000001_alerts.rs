@@ -78,18 +78,6 @@ fn create_alerts() -> TableCreateStatement {
         .col(text("status"))
         .col(timestamp("started_at"))
         .col(timestamp_null("resolved_at"))
-        .foreign_key(
-            ForeignKey::create()
-                .from("alerts", "rule_id")
-                .to("alert_rules", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
-        .foreign_key(
-            ForeignKey::create()
-                .from("alerts", "server_id")
-                .to("servers", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
         .to_owned()
 }
 
@@ -105,12 +93,6 @@ fn create_alert_deliveries() -> TableCreateStatement {
         .col(text("status"))
         .col(text_null("error"))
         .col(timestamp("sent_at"))
-        .foreign_key(
-            ForeignKey::create()
-                .from("alert_deliveries", "rule_id")
-                .to("alert_rules", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
         .to_owned()
 }
 

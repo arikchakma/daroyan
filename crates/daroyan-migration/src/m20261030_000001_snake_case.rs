@@ -1,5 +1,5 @@
 use sea_orm_migration::prelude::*;
-use sea_orm_migration::sea_orm::{ConnectionTrait, Statement};
+use sea_orm_migration::sea_orm::ConnectionTrait;
 use serde_json::{Map, Value};
 
 #[derive(DeriveMigrationName)]
@@ -22,21 +22,30 @@ const COMMAND_ACTIONS: [(&str, &str); 3] = [
     ("restartProcess", "restart_process"),
 ];
 
-const UP: &str = r#"
-ALTER TABLE "incident_updates" RENAME COLUMN "author_id" TO "creator_id";
-ALTER TABLE "alert_mutes" RENAME COLUMN "muted_by" TO "creator_id";
-UPDATE "alert_mutes" SET "creator_id" = (SELECT "id" FROM "users" ORDER BY "created_at" LIMIT 1);
-"#;
-
-const DOWN: &str = r#"
-ALTER TABLE "alert_mutes" RENAME COLUMN "creator_id" TO "muted_by";
-ALTER TABLE "incident_updates" RENAME COLUMN "creator_id" TO "author_id";
-"#;
+const RENAMES: [(&str, &str, &str); 2] = [
+    ("incident_updates", "author_id", "creator_id"),
+    ("alert_mutes", "muted_by", "creator_id"),
+];
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.get_connection().execute_unprepared(UP).await?;
+        for (table, from, to) in RENAMES {
+            rename_column(manager, table, from, to).await?;
+        }
+        let first_user = Query::select()
+            .column("id")
+            .from("users")
+            .order_by("created_at", Order::Asc)
+            .limit(1)
+            .to_owned();
+        manager
+            .get_connection()
+            .execute(Query::update().table("alert_mutes").value(
+                "creator_id",
+                Expr::SubQuery(None, Box::new(first_user.into_sub_query_statement())),
+            ))
+            .await?;
         rewrite_json(manager, to_snake).await?;
         rename_actions(manager, COMMAND_ACTIONS).await
     }
@@ -44,7 +53,10 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         rename_actions(manager, COMMAND_ACTIONS.map(|(old, new)| (new, old))).await?;
         rewrite_json(manager, to_camel).await?;
-        manager.get_connection().execute_unprepared(DOWN).await.map(|_| ())
+        for (table, from, to) in RENAMES.into_iter().rev() {
+            rename_column(manager, table, to, from).await?;
+        }
+        Ok(())
     }
 }
 
@@ -100,20 +112,31 @@ fn rename_keys(value: Value, convert: fn(&str) -> String) -> Value {
     }
 }
 
+async fn rename_column(
+    manager: &SchemaManager<'_>,
+    table: &'static str,
+    from: &'static str,
+    to: &'static str,
+) -> Result<(), DbErr> {
+    manager
+        .alter_table(Table::alter().table(table).rename_column(from, to).to_owned())
+        .await
+}
+
 async fn rewrite_json(
     manager: &SchemaManager<'_>,
     convert: fn(&str) -> String,
 ) -> Result<(), DbErr> {
     let db = manager.get_connection();
-    let backend = db.get_database_backend();
     for (table, column) in JSON_COLUMNS {
         let rows = db
-            .query_all_raw(Statement::from_string(
-                backend,
-                format!(
-                    r#"SELECT "id", CAST("{column}" AS TEXT) AS "value" FROM "{table}" WHERE "{column}" IS NOT NULL"#
-                ),
-            ))
+            .query_all(
+                Query::select()
+                    .column("id")
+                    .expr_as(Expr::col(column).cast_as("TEXT"), "value")
+                    .from(table)
+                    .and_where(Expr::col(column).is_not_null()),
+            )
             .await?;
         for row in rows {
             let id: String = row.try_get("", "id")?;
@@ -123,11 +146,12 @@ async fn rewrite_json(
             if renamed == value {
                 continue;
             }
-            db.execute_raw(Statement::from_sql_and_values(
-                backend,
-                format!(r#"UPDATE "{table}" SET "{column}" = ? WHERE "id" = ?"#),
-                [renamed.to_string().into(), id.into()],
-            ))
+            db.execute(
+                Query::update()
+                    .table(table)
+                    .value(column, renamed.to_string())
+                    .and_where(Expr::col("id").eq(id)),
+            )
             .await?;
         }
     }
@@ -139,13 +163,13 @@ async fn rename_actions(
     actions: [(&str, &str); 3],
 ) -> Result<(), DbErr> {
     let db = manager.get_connection();
-    let backend = db.get_database_backend();
     for (old, new) in actions {
-        db.execute_raw(Statement::from_sql_and_values(
-            backend,
-            r#"UPDATE "commands" SET "action" = ? WHERE "action" = ?"#,
-            [new.into(), old.into()],
-        ))
+        db.execute(
+            Query::update()
+                .table("commands")
+                .value("action", new)
+                .and_where(Expr::col("action").eq(old)),
+        )
         .await?;
     }
     Ok(())

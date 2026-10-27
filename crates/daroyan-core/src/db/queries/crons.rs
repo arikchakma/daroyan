@@ -2,10 +2,12 @@ use chrono::{DateTime, Utc};
 use sea_orm::ActiveValue::{NotSet, Set};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, QueryOrder,
+    TransactionTrait,
 };
 
 use crate::db::Database;
 use crate::db::entities::crons::{ActiveModel, Column, Entity, Model};
+use crate::db::entities::{alert_mutes, alerts, cron_failures, cron_open_runs};
 use crate::db::ids::CronId;
 
 pub struct CronFields {
@@ -94,11 +96,26 @@ impl Database {
     }
 
     pub async fn delete_cron(&self, id: &CronId) -> Result<bool, DbErr> {
-        Ok(Entity::delete_by_id(id.as_str())
-            .exec(&self.conn)
-            .await?
-            .rows_affected
-            > 0)
+        let txn = self.conn.begin().await?;
+        alerts::Entity::delete_many()
+            .filter(alerts::Column::CronId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        alert_mutes::Entity::delete_many()
+            .filter(alert_mutes::Column::CronId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        cron_failures::Entity::delete_many()
+            .filter(cron_failures::Column::CronId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        cron_open_runs::Entity::delete_many()
+            .filter(cron_open_runs::Column::CronId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        let deleted = Entity::delete_by_id(id.as_str()).exec(&txn).await?;
+        txn.commit().await?;
+        Ok(deleted.rows_affected > 0)
     }
 }
 

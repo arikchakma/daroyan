@@ -51,12 +51,6 @@ fn create_uptime_incidents() -> TableCreateStatement {
         .col(text("cause"))
         .col(timestamp("started_at"))
         .col(timestamp_null("resolved_at"))
-        .foreign_key(
-            ForeignKey::create()
-                .from("uptime_incidents", "check_id")
-                .to("uptime_checks", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
         .to_owned()
 }
 

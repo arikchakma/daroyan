@@ -56,11 +56,5 @@ fn create_cron_open_runs() -> TableCreateStatement {
         .col(text("run_id"))
         .col(timestamp("started_at"))
         .primary_key(Index::create().col("cron_id").col("run_id"))
-        .foreign_key(
-            ForeignKey::create()
-                .from("cron_open_runs", "cron_id")
-                .to("crons", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
         .to_owned()
 }

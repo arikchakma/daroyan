@@ -18,6 +18,7 @@ mod m20261028_000001_mcp_tokens;
 mod m20261029_000001_members;
 mod m20261030_000001_snake_case;
 mod m20261031_000001_install_token_uses;
+mod m20261102_000001_drop_foreign_keys;
 mod parts;
 
 pub struct Migrator;
@@ -43,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261029_000001_members::Migration),
             Box::new(m20261030_000001_snake_case::Migration),
             Box::new(m20261031_000001_install_token_uses::Migration),
+            Box::new(m20261102_000001_drop_foreign_keys::Migration),
         ]
     }
 }

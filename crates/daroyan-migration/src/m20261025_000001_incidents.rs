@@ -77,11 +77,5 @@ fn create_incident_updates() -> TableCreateStatement {
         .col(text_null("author_id"))
         .col(make_created_at())
         .col(timestamp_null("edited_at"))
-        .foreign_key(
-            ForeignKey::create()
-                .from("incident_updates", "incident_id")
-                .to("incidents", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
         .to_owned()
 }

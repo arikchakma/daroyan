@@ -371,12 +371,17 @@ async fn enrolls_reports_and_runs_commands() {
         .unwrap();
     assert_eq!(sources.as_array().unwrap().len(), 2);
 
+    assert!(common::count_rows(&database, "commands", "server_id", &server_id).await > 0);
     let deleted = http
         .delete(format!("{base}/v1/servers/{server_id}"))
         .send()
         .await
         .unwrap();
     assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        common::count_rows(&database, "commands", "server_id", &server_id).await,
+        0
+    );
 
     let mut guesses = 0;
     loop {

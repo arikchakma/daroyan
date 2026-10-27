@@ -1,10 +1,14 @@
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, QueryFilter, QueryOrder};
-use sea_orm::{ColumnTrait, DbErr};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter,
+    QueryOrder, TransactionTrait,
+};
 use serde_json::Value;
 
 use crate::db::Database;
 use crate::db::entities::servers::{ActiveModel, Column, Entity, Model};
+use crate::db::entities::{alert_mutes, alerts, commands, crons};
 use crate::db::ids::ServerId;
 
 pub struct NewServer {
@@ -95,10 +99,26 @@ impl Database {
     }
 
     pub async fn delete_server(&self, id: &ServerId) -> Result<bool, DbErr> {
-        Ok(Entity::delete_by_id(id.as_str())
-            .exec(&self.conn)
-            .await?
-            .rows_affected
-            > 0)
+        let txn = self.conn.begin().await?;
+        commands::Entity::delete_many()
+            .filter(commands::Column::ServerId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        alerts::Entity::delete_many()
+            .filter(alerts::Column::ServerId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        alert_mutes::Entity::delete_many()
+            .filter(alert_mutes::Column::ServerId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        crons::Entity::update_many()
+            .col_expr(crons::Column::ServerId, Expr::value(Option::<String>::None))
+            .filter(crons::Column::ServerId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        let deleted = Entity::delete_by_id(id.as_str()).exec(&txn).await?;
+        txn.commit().await?;
+        Ok(deleted.rows_affected > 0)
     }
 }

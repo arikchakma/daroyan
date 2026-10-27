@@ -67,6 +67,7 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     .await
     .unwrap();
     let http = common::sign_in(&state.database).await;
+    let database = state.database.clone();
     let analytics = state.analytics.clone();
     let mut engine = AlertEngine::new(
         state.database.clone(),
@@ -380,12 +381,52 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     assert!(list_alerts(&http, &base, "firing").await.is_empty());
     wait_until(|| events().len() == 5).await;
     assert_eq!(events().last().unwrap(), "alert.resolved");
+    assert!(
+        common::count_rows(
+            &database,
+            "alert_deliveries",
+            "rule_id",
+            log_rule["id"].as_str().unwrap()
+        )
+        .await
+            > 0
+    );
+    assert!(
+        common::count_rows(
+            &database,
+            "alerts",
+            "rule_id",
+            log_rule["id"].as_str().unwrap()
+        )
+        .await
+            > 0
+    );
     let deleted = http
         .delete(format!("{base}/v1/alert-rules/{}", log_rule["id"].as_str().unwrap()))
         .send()
         .await
         .unwrap();
     assert!(deleted.status().is_success());
+    assert_eq!(
+        common::count_rows(
+            &database,
+            "alert_deliveries",
+            "rule_id",
+            log_rule["id"].as_str().unwrap()
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        common::count_rows(
+            &database,
+            "alerts",
+            "rule_id",
+            log_rule["id"].as_str().unwrap()
+        )
+        .await,
+        0
+    );
 
     let offline: Value = http
         .post(format!("{base}/v1/alert-rules"))

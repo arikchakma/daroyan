@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ActiveValue::Set, ColumnTrait, DbErr,
-    EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 
 use crate::db::Database;
@@ -155,11 +155,14 @@ impl Database {
     }
 
     pub async fn delete_incident(&self, id: &IncidentId) -> Result<bool, DbErr> {
-        Ok(Entity::delete_by_id(id.as_str())
-            .exec(&self.conn)
-            .await?
-            .rows_affected
-            > 0)
+        let txn = self.conn.begin().await?;
+        incident_updates::Entity::delete_many()
+            .filter(incident_updates::Column::IncidentId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        let deleted = Entity::delete_by_id(id.as_str()).exec(&txn).await?;
+        txn.commit().await?;
+        Ok(deleted.rows_affected > 0)
     }
 
     pub async fn create_incident_update(

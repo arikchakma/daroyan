@@ -44,12 +44,6 @@ fn create_sessions() -> TableCreateStatement {
         .col(text_null("ip_address"))
         .col(make_created_at())
         .col(timestamp("expires_at"))
-        .foreign_key(
-            ForeignKey::create()
-                .from("sessions", "user_id")
-                .to("users", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
         .to_owned()
 }
 

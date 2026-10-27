@@ -1,8 +1,12 @@
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, DbErr, EntityTrait, QueryOrder};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter,
+    QueryOrder, TransactionTrait,
+};
 
 use crate::db::Database;
 use crate::db::entities::uptime_checks::{ActiveModel, Column, Entity, Model};
+use crate::db::entities::{alert_mutes, alerts, uptime_outages};
 use crate::db::ids::UptimeCheckId;
 
 pub struct UptimeCheckFields {
@@ -53,11 +57,22 @@ impl Database {
     }
 
     pub async fn delete_uptime_check(&self, id: &UptimeCheckId) -> Result<bool, DbErr> {
-        Ok(Entity::delete_by_id(id.as_str())
-            .exec(&self.conn)
-            .await?
-            .rows_affected
-            > 0)
+        let txn = self.conn.begin().await?;
+        uptime_outages::Entity::delete_many()
+            .filter(uptime_outages::Column::CheckId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        alerts::Entity::delete_many()
+            .filter(alerts::Column::CheckId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        alert_mutes::Entity::delete_many()
+            .filter(alert_mutes::Column::CheckId.eq(id.as_str()))
+            .exec(&txn)
+            .await?;
+        let deleted = Entity::delete_by_id(id.as_str()).exec(&txn).await?;
+        txn.commit().await?;
+        Ok(deleted.rows_affected > 0)
     }
 }
 

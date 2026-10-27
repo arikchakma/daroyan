@@ -15,15 +15,16 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         create_tables(manager, vec![create_crons(), create_cron_incidents()]).await?;
-        let db = manager.get_connection();
-        db.execute_unprepared(
-            r#"ALTER TABLE "alerts" ADD COLUMN "cron_id" text NULL REFERENCES "crons" ("id") ON DELETE CASCADE"#,
-        )
-        .await?;
-        db.execute_unprepared(
-            r#"ALTER TABLE "alert_mutes" ADD COLUMN "cron_id" text NULL REFERENCES "crons" ("id") ON DELETE CASCADE"#,
-        )
-        .await?;
+        for table in ["alerts", "alert_mutes"] {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(table)
+                        .add_column(text_null("cron_id"))
+                        .to_owned(),
+                )
+                .await?;
+        }
         create_indexes(manager, list_indexes()).await
     }
 
@@ -65,12 +66,6 @@ fn create_crons() -> TableCreateStatement {
         .col(timestamp_null("missed_slot_at"))
         .col(make_created_at())
         .col(make_updated_at())
-        .foreign_key(
-            ForeignKey::create()
-                .from("crons", "server_id")
-                .to("servers", "id")
-                .on_delete(ForeignKeyAction::SetNull),
-        )
         .to_owned()
 }
 
@@ -83,12 +78,6 @@ fn create_cron_incidents() -> TableCreateStatement {
         .col(text("cause"))
         .col(timestamp("started_at"))
         .col(timestamp_null("resolved_at"))
-        .foreign_key(
-            ForeignKey::create()
-                .from("cron_incidents", "cron_id")
-                .to("crons", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
         .to_owned()
 }
 
