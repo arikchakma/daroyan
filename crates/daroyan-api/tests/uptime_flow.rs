@@ -348,6 +348,14 @@ async fn opens_and_resolves_outages_as_a_site_goes_down_and_up() {
         ]
     );
 
+    is_up.store(false, Ordering::SeqCst);
+    let recover = Arc::clone(&is_up);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        recover.store(true, Ordering::SeqCst);
+    });
+    assert_eq!(run(&http, &base, &check_id).await["status"], "up");
+
     let deleted = http
         .delete(format!("{base}/v1/uptime-checks/{check_id}"))
         .send()

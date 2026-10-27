@@ -22,6 +22,7 @@ use crate::uptime::probe::{Probe, STATUS_DOWN, build_tls_config, run_probe};
 
 const TICK: Duration = Duration::from_secs(1);
 const MANUAL_RUNS: usize = 8;
+const RETRY_DELAY: Duration = Duration::from_secs(2);
 pub const FAILURES_TO_OPEN: u32 = 2;
 
 #[derive(Clone)]
@@ -53,7 +54,11 @@ impl Uptime {
     }
 
     pub async fn run_check(&self, check: &UptimeCheck) -> Result<Probe> {
-        let probe = run_probe(&self.tls, check).await;
+        let mut probe = run_probe(&self.tls, check).await;
+        if probe.status == STATUS_DOWN {
+            tokio::time::sleep(RETRY_DELAY).await;
+            probe = run_probe(&self.tls, check).await;
+        }
         append_result(&self.analytics, check.id.clone(), probe.clone()).await?;
         self.track_outage(check, &probe).await?;
         Ok(probe)
