@@ -1,6 +1,7 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter,
+    QueryOrder,
 };
 
 use crate::commands::STATUS_SENT;
@@ -14,9 +15,21 @@ pub struct NewCommand {
     pub action: String,
     pub name: String,
     pub status: String,
+    pub creator_id: Option<String>,
 }
 
 impl Database {
+    pub async fn list_commands_since(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<Model>, DbErr> {
+        Entity::find()
+            .filter(Column::CreatedAt.gte(since))
+            .order_by_desc(Column::CreatedAt)
+            .all(&self.conn)
+            .await
+    }
+
     pub async fn create_command(&self, command: NewCommand) -> Result<Model, DbErr> {
         let now = Utc::now();
         ActiveModel {
@@ -26,6 +39,7 @@ impl Database {
             name: Set(command.name),
             status: Set(command.status),
             error: Set(None),
+            creator_id: Set(command.creator_id),
             created_at: Set(now),
             updated_at: Set(now),
         }

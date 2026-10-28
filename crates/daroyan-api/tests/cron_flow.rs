@@ -291,6 +291,23 @@ async fn tracks_runs_failures_misses_and_timeouts() {
     assert!(failures[0]["resolved_at"].is_string());
     assert_eq!(failures[1]["cause"], format!("Exit code 1: {}", "x".repeat(200)));
 
+    let fleet = read(&http, format!("{base}/v1/overview/events")).await;
+    let labels: Vec<&str> = fleet["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["title"] == "contacts.sync")
+        .map(|event| event["label"].as_str().unwrap())
+        .collect();
+    assert!(labels.contains(&"Failed") && labels.contains(&"Recovered"), "{labels:?}");
+    let problem_events = fleet["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["outcome"] == "problem")
+        .count();
+    assert_eq!(fleet["problems"].as_u64(), u64::try_from(problem_events).ok());
+
     assert_eq!(ping(&base, &key, "/start?rid=run-1", "").await, StatusCode::OK);
     crons
         .check_crons(Utc::now() + ChronoDuration::minutes(11))

@@ -10,6 +10,7 @@ use axum::response::Response;
 use daroyan_core::commands::finish_command;
 use daroyan_core::db::ids::ServerId;
 use daroyan_core::error::{ErrorName, Result};
+use daroyan_core::fleet_events::{AGENT_CONNECTED, AGENT_DISCONNECTED};
 use daroyan_core::limits::new_socket_limiter;
 use daroyan_core::servers::enroll::enroll_server;
 use daroyan_core::servers::report::save_report;
@@ -81,6 +82,9 @@ async fn connect_agent(
 async fn run_agent_socket(state: AppState, server_id: ServerId, socket: WebSocket) {
     let (sender, commands) = mpsc::channel(16);
     let generation = state.agents.register(server_id.as_str(), sender);
+    state
+        .analytics
+        .buffer_server_event(server_id.as_str(), AGENT_CONNECTED);
     tracing::info!(server_id = %server_id, "agent connected");
     match relay_agent_socket(&state, &server_id, socket, commands).await {
         Ok(()) => tracing::info!(server_id = %server_id, "agent disconnected"),
@@ -88,7 +92,12 @@ async fn run_agent_socket(state: AppState, server_id: ServerId, socket: WebSocke
             tracing::info!(server_id = %server_id, error = %format!("{error:#}"), "agent dropped");
         }
     }
-    state.agents.unregister(server_id.as_str(), generation);
+    let was_current = state.agents.unregister(server_id.as_str(), generation);
+    if was_current && !state.agents.is_shutting_down() {
+        state
+            .analytics
+            .buffer_server_event(server_id.as_str(), AGENT_DISCONNECTED);
+    }
 }
 
 async fn relay_agent_socket(

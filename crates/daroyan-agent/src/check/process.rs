@@ -19,6 +19,7 @@ pub struct ProcessWatch {
     uids: HashMap<String, Option<Uid>>,
     container_ids: HashMap<String, String>,
     running: HashMap<String, bool>,
+    main_pids: HashMap<String, Pid>,
     restarts: HashMap<String, Vec<Instant>>,
     gave_up: HashSet<String>,
     held: HeldProcesses,
@@ -59,6 +60,7 @@ impl ProcessWatch {
             uids,
             container_ids: HashMap::new(),
             running: HashMap::new(),
+            main_pids: HashMap::new(),
             restarts: HashMap::new(),
             gave_up: HashSet::new(),
             held,
@@ -96,7 +98,8 @@ impl ProcessWatch {
     ) -> ProcessState {
         let matches = self.find_matches(check, system, cgroups);
         let family = collect_family(system, &matches);
-        let started_at = matches.iter().map(|process| process.start_time()).min();
+        let main = matches.iter().min_by_key(|process| process.start_time());
+        let started_at = main.map(|process| process.start_time());
         let is_running = !matches.is_empty();
         let was_running =
             self.running.insert(check.name.clone(), is_running).unwrap_or(false);
@@ -115,6 +118,22 @@ impl ProcessWatch {
 
         if is_running {
             self.gave_up.remove(&check.name);
+        }
+
+        let old_pid = match main {
+            Some(process) => self.main_pids.insert(check.name.clone(), process.pid()),
+            None => self.main_pids.remove(&check.name),
+        };
+        if was_running
+            && let (Some(old_pid), Some(process)) = (old_pid, main)
+            && old_pid != process.pid()
+        {
+            warn!("{} changed PID from {old_pid} to {}", check.name, process.pid());
+            events.push(new_event(EventKind::ProcessChanged {
+                name: check.name.clone(),
+                old_pid: old_pid.as_u32(),
+                new_pid: process.pid().as_u32(),
+            }));
         }
 
         let is_held = hold(&self.held).contains(&check.name);
@@ -388,6 +407,51 @@ mod tests {
         assert!(!has_cgroup_part(user_unit, &|part| part == "nginx.service"));
         assert_eq!(to_unit_name("nginx"), "nginx.service");
         assert_eq!(to_unit_name("backup.timer"), "backup.timer");
+    }
+
+    #[test]
+    fn reports_a_main_process_that_changed_pid_between_checks() {
+        let check = ProcessCheck {
+            name: "sleeper".to_string(),
+            source: Source::Process("*sleep 3007.25*".to_string()),
+            user: None,
+            restart: None,
+            logs: false,
+        };
+        let mut watch = ProcessWatch::new(vec![check], false, HeldProcesses::default());
+        let spawn =
+            || std::process::Command::new("sleep").arg("3007.25").spawn().unwrap();
+        let check_now = |watch: &mut ProcessWatch| {
+            let mut system = System::new();
+            system.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::All,
+                true,
+                sysinfo::ProcessRefreshKind::nothing()
+                    .with_cmd(sysinfo::UpdateKind::Always),
+            );
+            let mut events = Vec::new();
+            watch.check_processes(&system, 1.0, &mut events);
+            events
+        };
+
+        let mut first = spawn();
+        assert!(check_now(&mut watch).is_empty());
+        first.kill().unwrap();
+        first.wait().unwrap();
+        let mut second = spawn();
+        let events = check_now(&mut watch);
+        second.kill().unwrap();
+        second.wait().unwrap();
+
+        let expected = EventKind::ProcessChanged {
+            name: "sleeper".to_string(),
+            old_pid: first.id(),
+            new_pid: second.id(),
+        };
+        assert_eq!(
+            events.iter().map(|event| &event.kind).collect::<Vec<_>>(),
+            [&expected]
+        );
     }
 
     #[test]

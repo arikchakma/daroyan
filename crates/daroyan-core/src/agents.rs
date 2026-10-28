@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use daroyan_protocol::message::ApiMessage;
@@ -9,6 +9,7 @@ use tokio::sync::mpsc::Sender;
 pub struct Agents {
     sockets: Arc<Mutex<HashMap<String, AgentSocket>>>,
     next_generation: Arc<AtomicU64>,
+    is_shutting_down: Arc<AtomicBool>,
 }
 
 struct AgentSocket {
@@ -24,14 +25,15 @@ impl Agents {
         generation
     }
 
-    pub fn unregister(&self, server_id: &str, generation: u64) {
+    pub fn unregister(&self, server_id: &str, generation: u64) -> bool {
         let mut sockets = self.lock();
-        if sockets
+        let is_current = sockets
             .get(server_id)
-            .is_some_and(|socket| socket.generation == generation)
-        {
+            .is_some_and(|socket| socket.generation == generation);
+        if is_current {
             sockets.remove(server_id);
         }
+        is_current
     }
 
     pub fn disconnect(&self, server_id: &str) {
@@ -39,7 +41,12 @@ impl Agents {
     }
 
     pub fn disconnect_all(&self) {
+        self.is_shutting_down.store(true, Ordering::Relaxed);
         self.lock().clear();
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        self.is_shutting_down.load(Ordering::Relaxed)
     }
 
     pub fn is_connected(&self, server_id: &str) -> bool {

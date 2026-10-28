@@ -46,7 +46,7 @@ struct CommandBody {
 )]
 async fn create_command(
     State(state): State<AppState>,
-    AdminUser(_user): AdminUser,
+    AdminUser(current): AdminUser,
     Path(server_id): Path<ServerId>,
     Json(body): Json<CommandBody>,
 ) -> Result<(StatusCode, Json<CommandView>)> {
@@ -57,7 +57,9 @@ async fn create_command(
         ActionName::Stop => CommandAction::StopProcess { name },
         ActionName::Restart => CommandAction::RestartProcess { name },
     };
-    let command = send_command(&state.database, &state.agents, &server, action).await?;
+    let command =
+        send_command(&state.database, &state.agents, &server, action, &current.user.id)
+            .await?;
     Ok((StatusCode::CREATED, Json(command.into())))
 }
 

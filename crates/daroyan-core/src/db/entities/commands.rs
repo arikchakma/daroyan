@@ -18,6 +18,8 @@ pub struct Model {
     pub status: String,
     #[sea_orm(column_type = "Text", nullable)]
     pub error: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub creator_id: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     #[sea_orm(
