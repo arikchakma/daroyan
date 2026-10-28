@@ -93,7 +93,7 @@ async fn run_agent_socket(state: AppState, server_id: ServerId, socket: WebSocke
         }
     }
     let was_current = state.agents.unregister(server_id.as_str(), generation);
-    if was_current && !state.agents.is_shutting_down() {
+    if was_current {
         state
             .analytics
             .buffer_server_event(server_id.as_str(), AGENT_DISCONNECTED);

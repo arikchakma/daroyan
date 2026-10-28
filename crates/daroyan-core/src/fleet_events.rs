@@ -1,16 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use crate::agents::Agents;
 use crate::alerts::rules::format_duration;
 use crate::analytics::Analytics;
 use crate::analytics::server_events::{FleetEventRow, list_fleet_events};
-use crate::commands::STATUS_FAILED;
+use crate::commands::{STATUS_FAILED, STATUS_SENT};
 use crate::db::Database;
 use crate::db::entities::alerts::Model as Alert;
-use crate::error::Result;
+use crate::db::entities::{alerts, cron_failures, uptime_outages};
+use crate::error::{Error, Result};
 
 pub const AGENT_CONNECTED: &str = "agent_connected";
 pub const AGENT_DISCONNECTED: &str = "agent_disconnected";
@@ -27,6 +29,9 @@ const SERVER_EVENT_KINDS: [&str; 7] = [
 const BUCKET_MS: i64 = 30 * 60 * 1000;
 const BUCKETS: i64 = 48;
 const MAX_EVENTS: usize = 100;
+const OFFLINE_AFTER_SECS: i64 = 60;
+const DUPLICATE_CONDITIONS: [&str; 4] =
+    ["offline", "uptime_down", "cron_failed", "cron_missed"];
 
 #[derive(Serialize, ToSchema, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -91,21 +96,68 @@ fn lasted(from: DateTime<Utc>, to: DateTime<Utc>) -> String {
 pub async fn list_events(
     database: &Database,
     analytics: &Analytics,
+    agents: &Agents,
     now: DateTime<Utc>,
 ) -> Result<FleetEvents> {
     let now_ms = now.timestamp_millis();
     let first_bucket = (now_ms / BUCKET_MS - (BUCKETS - 1)) * BUCKET_MS;
     let since = DateTime::<Utc>::from_timestamp_millis(first_bucket).unwrap_or(now);
+    let stored = async {
+        Ok::<_, Error>(tokio::try_join!(
+            database.list_alert_rules(),
+            database.list_servers(),
+            database.list_uptime_checks(),
+            database.list_crons(),
+            database.list_users(),
+            database.list_open_or_since::<alerts::Entity>(
+                alerts::Column::StartedAt,
+                alerts::Column::ResolvedAt,
+                since,
+            ),
+            database.list_open_or_since::<uptime_outages::Entity>(
+                uptime_outages::Column::StartedAt,
+                uptime_outages::Column::ResolvedAt,
+                since,
+            ),
+            database.list_open_or_since::<cron_failures::Entity>(
+                cron_failures::Column::StartedAt,
+                cron_failures::Column::ResolvedAt,
+                since,
+            ),
+            database.list_commands_since(since),
+        )?)
+    };
+    let (
+        (rules, servers, checks, crons, users, alert_rows, outages, failures, commands),
+        rows,
+    ) = tokio::try_join!(
+        stored,
+        list_fleet_events(analytics, first_bucket, &SERVER_EVENT_KINDS)
+    )?;
+    let offline_now = servers
+        .iter()
+        .filter(|server| {
+            !agents.is_connected(&server.id)
+                && server
+                    .last_seen_at
+                    .is_some_and(|seen| (now - seen).num_seconds() > OFFLINE_AFTER_SECS)
+        })
+        .count();
+    let duplicate_rules: HashSet<String> = rules
+        .iter()
+        .filter(|rule| {
+            rule.condition["kind"]
+                .as_str()
+                .is_some_and(|kind| DUPLICATE_CONDITIONS.contains(&kind))
+        })
+        .map(|rule| rule.id.clone())
+        .collect();
     let names = Names {
-        rules: to_names(database.list_alert_rules().await?, |rule| (rule.id, rule.name)),
-        servers: to_names(database.list_servers().await?, |server| {
-            (server.id, server.name)
-        }),
-        checks: to_names(database.list_uptime_checks().await?, |check| {
-            (check.id, check.name)
-        }),
-        crons: to_names(database.list_crons().await?, |cron| (cron.id, cron.name)),
-        users: to_names(database.list_users().await?, |user| (user.id, user.name)),
+        rules: to_names(rules, |rule| (rule.id, rule.name)),
+        servers: to_names(servers, |server| (server.id, server.name)),
+        checks: to_names(checks, |check| (check.id, check.name)),
+        crons: to_names(crons, |cron| (cron.id, cron.name)),
+        users: to_names(users, |user| (user.id, user.name)),
     };
 
     let mut events = Vec::new();
@@ -123,7 +175,10 @@ pub async fn list_events(
             }
         };
 
-    for alert in database.list_alerts_since(since).await? {
+    for alert in alert_rows {
+        if duplicate_rules.contains(&alert.rule_id) {
+            continue;
+        }
         let rule = Names::of(&names.rules, &alert.rule_id);
         let title = match names.alert_target(&alert) {
             Some(target) => format!("{rule} on {target}"),
@@ -147,7 +202,7 @@ pub async fn list_events(
             None => open += 1,
         }
     }
-    for outage in database.list_uptime_outages_since(since).await? {
+    for outage in outages {
         let title = Names::of(&names.checks, &outage.check_id).to_string();
         push(
             outage.started_at,
@@ -167,7 +222,7 @@ pub async fn list_events(
             None => open += 1,
         }
     }
-    for failure in database.list_cron_failures_since(since).await? {
+    for failure in failures {
         let title = Names::of(&names.crons, &failure.cron_id).to_string();
         push(
             failure.started_at,
@@ -188,12 +243,16 @@ pub async fn list_events(
         }
     }
 
-    for command in database.list_commands_since(since).await? {
+    for command in commands {
         let Some(server) = names.servers.get(&command.server_id) else { continue };
-        let label = match command.action.as_str() {
-            "start_process" => "Started",
-            "stop_process" => "Stopped",
-            _ => "Restarted",
+        let is_pending = command.status == STATUS_SENT;
+        let label = match (command.action.as_str(), is_pending) {
+            ("start_process", false) => "Started",
+            ("start_process", true) => "Start sent",
+            ("stop_process", false) => "Stopped",
+            ("stop_process", true) => "Stop sent",
+            (_, false) => "Restarted",
+            (_, true) => "Restart sent",
         };
         let by = command
             .creator_id
@@ -215,7 +274,6 @@ pub async fn list_events(
         );
     }
 
-    let rows = list_fleet_events(analytics, first_bucket, &SERVER_EVENT_KINDS).await?;
     let mut offline_since: HashMap<String, i64> = HashMap::new();
     for row in rows {
         let Some(server) = names.servers.get(&row.server_id) else { continue };
@@ -247,7 +305,7 @@ pub async fn list_events(
             _ => push_process_event(&row, server, at, &mut push),
         }
     }
-    open += u32::try_from(offline_since.len()).unwrap_or(u32::MAX);
+    open += u32::try_from(offline_now).unwrap_or(u32::MAX);
 
     events.sort_by_key(|event| std::cmp::Reverse(event.at));
     let mut buckets: Vec<EventBucket> = (0..BUCKETS)

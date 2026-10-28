@@ -24,11 +24,10 @@ import { listIssuesOptions, traceServicesOptions, traceStatusOptions } from '~/q
 import { describeFiring, findMute } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
 import { formatUntil } from '~/utils/crons';
-import { formatClock, formatCount, formatRelative } from '~/utils/format';
+import { DAY_MS, formatClock, formatCount, formatRelative } from '~/utils/format';
 import { getStatusMeta, isClosed, isMaintenance } from '~/utils/incidents';
 import { formatMs, formatUptime, getUptime } from '~/utils/uptime';
 
-const DAY_MS = 86_400_000;
 const CRON_BARS = 30;
 const BAD_CRON_STATUSES = ['failed', 'missed', 'late'];
 

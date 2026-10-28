@@ -7,10 +7,9 @@ import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 
 import { cn } from '~/utils/classname';
-import { formatClock, formatDate } from '~/utils/format';
+import { DAY_MS, formatClock, formatDate } from '~/utils/format';
 
 const CHART_HEIGHT = 112;
-const DAY_MS = 86_400_000;
 
 export type ChartSeries = {
   label: string;

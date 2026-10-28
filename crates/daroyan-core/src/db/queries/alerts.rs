@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DbErr, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect,
 };
 
 use crate::db::Database;
@@ -24,22 +24,6 @@ pub struct NewAlert {
 }
 
 impl Database {
-    pub async fn list_alerts_since(
-        &self,
-        since: DateTime<Utc>,
-    ) -> Result<Vec<Model>, DbErr> {
-        Entity::find()
-            .filter(
-                Condition::any()
-                    .add(Column::StartedAt.gte(since))
-                    .add(Column::ResolvedAt.gte(since))
-                    .add(Column::ResolvedAt.is_null()),
-            )
-            .order_by_desc(Column::StartedAt)
-            .all(&self.conn)
-            .await
-    }
-
     pub async fn create_alert(&self, alert: NewAlert) -> Result<Model, DbErr> {
         ActiveModel {
             id: Set(alert.id),

@@ -58,5 +58,7 @@ async fn list_overview_events(
     State(state): State<AppState>,
     _user: CurrentUser,
 ) -> Result<Json<FleetEvents>> {
-    Ok(Json(list_events(&state.database, &state.analytics, Utc::now()).await?))
+    Ok(Json(
+        list_events(&state.database, &state.analytics, &state.agents, Utc::now()).await?,
+    ))
 }

@@ -300,6 +300,14 @@ async fn tracks_runs_failures_misses_and_timeouts() {
         .map(|event| event["label"].as_str().unwrap())
         .collect();
     assert!(labels.contains(&"Failed") && labels.contains(&"Recovered"), "{labels:?}");
+    assert!(
+        fleet["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["label"] != "Firing"),
+        "a cron alert repeats the cron failure: {fleet}"
+    );
     let problem_events = fleet["events"]
         .as_array()
         .unwrap()
