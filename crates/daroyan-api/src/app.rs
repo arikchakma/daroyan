@@ -150,7 +150,7 @@ pub fn build_app(state: AppState) -> Router {
     let api = router.clone().layer(from_fn(render_errors)).with_state(state.clone());
     let mcp = Mcp::new(
         api,
-        &serde_json::to_value(&spec).unwrap_or_default(),
+        &serde_json::to_value(&spec).expect("openapi spec serializes"),
         state.config.app_url.as_deref(),
     );
     let router = router

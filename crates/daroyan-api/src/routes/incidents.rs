@@ -16,7 +16,7 @@ use daroyan_core::incidents::{
     KIND_INCIDENT, KIND_MAINTENANCE, MAINTENANCE, NOTE, RELATED_KINDS, RelatedItem,
     Responder, SCHEDULED, SEVERITIES, UPDATE, add_entry as record_entry,
     describe_component_status, is_closed, notify_incident,
-    notify_update as notify_update_with, statuses_of,
+    notify_update as notify_update_with, read_json, statuses_of,
 };
 use daroyan_core::rich_text::{RichTextError, paragraph, read_document};
 use serde::Deserialize;
@@ -334,10 +334,6 @@ impl Directory {
             format!("Affected components are now {}.", names.join(", "))
         }
     }
-}
-
-fn read_json<T: serde::de::DeserializeOwned + Default>(value: &serde_json::Value) -> T {
-    serde_json::from_value(value.clone()).unwrap_or_default()
 }
 
 fn to_json<T: serde::Serialize>(value: &T) -> Result<serde_json::Value> {
@@ -684,17 +680,14 @@ async fn create_incident(
                 .find_alert(&AlertId::from(alert_id.as_str()))
                 .await?
                 .ok_or_else(|| invalid("The alert does not exist"))?;
-            let (kind, target_id) =
-                match (&alert.server_id, &alert.check_id, &alert.cron_id) {
-                    (_, Some(check_id), _) => ("check", check_id.clone()),
-                    (_, _, Some(cron_id)) => ("cron", cron_id.clone()),
-                    (server_id, _, _) => {
-                        ("server", server_id.clone().unwrap_or_default())
-                    }
-                };
             let rule = directory.name_of("rule", &alert.rule_id).unwrap_or("An alert");
-            let target =
-                directory.name_of(kind, &target_id).unwrap_or("a deleted target");
+            let target = match (&alert.server_id, &alert.check_id, &alert.cron_id) {
+                (_, Some(check_id), _) => directory.name_of("check", check_id),
+                (_, _, Some(cron_id)) => directory.name_of("cron", cron_id),
+                (Some(server_id), _, _) => directory.name_of("server", server_id),
+                _ => None,
+            }
+            .unwrap_or("a deleted target");
             Some(format!(
                 "{rule} fired on {target}. {} declared this incident from the alert.",
                 current.user.name

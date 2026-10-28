@@ -69,17 +69,24 @@ impl Outbox {
         let mut bytes = 0;
         while let Some(batch) = self.logs.front_mut() {
             chunk.dropped += std::mem::take(&mut batch.dropped);
-            while let Some(line) = batch.lines.first() {
+            let mut fits = 0;
+            let mut is_full = false;
+            for line in &batch.lines {
                 let size = measure_line(line);
-                if !chunk.lines.is_empty()
-                    && (bytes + size > LOG_CHUNK_BYTES
-                        || chunk.lines.len() >= LOG_CHUNK_LINES)
+                let count = chunk.lines.len() + fits;
+                if count > 0
+                    && (bytes + size > LOG_CHUNK_BYTES || count >= LOG_CHUNK_LINES)
                 {
-                    self.log_bytes -= bytes;
-                    return Some(chunk);
+                    is_full = true;
+                    break;
                 }
                 bytes += size;
-                chunk.lines.push(batch.lines.remove(0));
+                fits += 1;
+            }
+            chunk.lines.extend(batch.lines.drain(..fits));
+            if is_full {
+                self.log_bytes -= bytes;
+                return Some(chunk);
             }
             self.logs.pop_front();
         }

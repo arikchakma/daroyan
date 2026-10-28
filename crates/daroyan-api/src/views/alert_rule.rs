@@ -35,7 +35,12 @@ impl AlertRuleView {
         let parsed = parse_rule(&rule).ok_or_else(|| {
             Error::Internal(anyhow::anyhow!("alert rule {} is unreadable", rule.id))
         })?;
-        let for_secs = u32::try_from(rule.for_secs).unwrap_or_default();
+        let for_secs = u32::try_from(rule.for_secs).map_err(|_| {
+            Error::Internal(anyhow::anyhow!(
+                "alert rule {} has an invalid for_secs",
+                rule.id
+            ))
+        })?;
         Ok(Self {
             summary: describe_rule(&parsed.condition, &parsed.options, for_secs),
             id: rule.id,

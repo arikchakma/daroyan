@@ -107,9 +107,15 @@ fn find_number(attributes: &[KeyValue], keys: &[&str]) -> Option<i64> {
     match &find(attributes, keys)?.value {
         Some(AnyValueKind::IntValue(number)) => Some(*number),
         Some(AnyValueKind::StringValue(text)) => text.parse().ok(),
-        Some(AnyValueKind::DoubleValue(number)) => Some(*number as i64),
+        Some(AnyValueKind::DoubleValue(number)) => double_to_i64(*number),
         _ => None,
     }
+}
+
+fn double_to_i64(number: f64) -> Option<i64> {
+    let number = number.trunc();
+    let in_range = (i64::MIN as f64..i64::MAX as f64).contains(&number);
+    in_range.then_some(number as i64)
 }
 
 fn to_hex(bytes: &[u8]) -> Option<String> {
@@ -647,6 +653,15 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn keeps_only_finite_in_range_doubles() {
+        assert_eq!(double_to_i64(404.9), Some(404));
+        assert_eq!(double_to_i64(-2.5), Some(-2));
+        assert_eq!(double_to_i64(f64::NAN), None);
+        assert_eq!(double_to_i64(f64::INFINITY), None);
+        assert_eq!(double_to_i64(1e30), None);
     }
 
     #[test]

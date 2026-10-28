@@ -226,7 +226,7 @@ fn parse_size(text: &str) -> Result<u64, String> {
     if value == 0 {
         return Err(invalid());
     }
-    Ok(value * unit)
+    value.checked_mul(unit).ok_or_else(invalid)
 }
 
 fn default_log_level() -> String {
@@ -253,12 +253,13 @@ fn parse_duration(text: &str) -> Result<Duration, String> {
     let split = text.len().checked_sub(1).ok_or_else(invalid)?;
     let (number, unit) = text.split_at(split);
     let number: u64 = number.parse().map_err(|_| invalid())?;
-    let secs = match unit {
-        "s" => number,
-        "m" => number * 60,
-        "h" => number * 3600,
+    let unit_secs = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
         _ => return Err(invalid()),
     };
+    let secs = number.checked_mul(unit_secs).ok_or_else(invalid)?;
     Ok(Duration::from_secs(secs))
 }
 
@@ -347,6 +348,9 @@ mod tests {
         assert!(parse_config("processes:\n  - process: node\n    logs: true\n").is_err());
         assert_eq!(parse_size("512KB"), Ok(512 * 1024));
         assert!(parse_size("lots").is_err());
+        assert!(parse_size("99999999999999MB").is_err());
+        assert_eq!(parse_duration("2h"), Ok(Duration::from_secs(7200)));
+        assert!(parse_duration("9999999999999999999h").is_err());
     }
 
     #[test]

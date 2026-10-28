@@ -126,7 +126,10 @@ pub fn describe_component_status(status: &str) -> &'static str {
 }
 
 pub fn read_json<T: serde::de::DeserializeOwned + Default>(value: &Value) -> T {
-    serde_json::from_value(value.clone()).unwrap_or_default()
+    T::deserialize(value).unwrap_or_else(|error| {
+        tracing::warn!(%error, "unreadable incident json, using the default");
+        T::default()
+    })
 }
 
 pub fn describe_status(status: &str) -> &'static str {
@@ -301,11 +304,10 @@ pub async fn declare_from_rule(
                 auto_start: true,
                 auto_finish: true,
                 remind_before: false,
-                components: serde_json::to_value(components).unwrap_or_default(),
-                related: serde_json::to_value(related).unwrap_or_default(),
+                components: serde_json::to_value(components)?,
+                related: serde_json::to_value(related)?,
                 responders: json!([]),
-                channel_ids: serde_json::to_value(fire.integration_ids)
-                    .unwrap_or_default(),
+                channel_ids: serde_json::to_value(fire.integration_ids)?,
                 hidden_page_ids: rule.declare_hidden_page_ids.clone(),
             },
         )

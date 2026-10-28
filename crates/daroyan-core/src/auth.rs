@@ -28,7 +28,7 @@ static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
-        .unwrap_or_default()
+        .expect("http client with a fixed timeout builds")
 });
 
 struct GoogleClient<'a> {
