@@ -488,7 +488,7 @@ impl AlertMessage<'_> {
             fields: vec![
                 self.target_field(),
                 Field::new(
-                    "Expires",
+                    if expires_at <= self.now { "Expired" } else { "Expires" },
                     format!(
                         "{} at {}{}",
                         local.format("%b %-d"),
@@ -1284,6 +1284,10 @@ mod tests {
         assert_eq!(
             case.details(Moment::Firing).summary.to_string(),
             "The certificate for app.inboxjot.com expired 3 days ago, on Oct 25."
+        );
+        assert_eq!(
+            case.details(Moment::Firing).fields[1],
+            Field::new("Expired", "Oct 25 at 8:00 AM UTC")
         );
     }
 
