@@ -1,7 +1,7 @@
 use chrono::Utc;
 use daroyan_protocol::report::Event;
 use duckdb::{Connection, OptionalExt, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -79,11 +79,21 @@ pub async fn list_recent_events(
         .await
 }
 
-pub async fn find_exit_code(
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ProcessExit {
+    pub code: Option<i32>,
+    pub signal: Option<String>,
+    pub oom: bool,
+    pub ran_secs: Option<u64>,
+    pub restarts: Option<u32>,
+}
+
+pub async fn find_last_exit(
     analytics: &Analytics,
     server_id: String,
     name: String,
-) -> Result<Option<i32>> {
+) -> Result<Option<ProcessExit>> {
     analytics
         .read(move |conn| {
             let mut statement = conn.prepare(
@@ -94,10 +104,7 @@ pub async fn find_exit_code(
             let data: Option<String> = statement
                 .query_row(params![server_id, name], |row| row.get(0))
                 .optional()?;
-            Ok(data
-                .and_then(|data| serde_json::from_str::<Value>(&data).ok())
-                .and_then(|data| data["code"].as_i64())
-                .and_then(|code| i32::try_from(code).ok()))
+            Ok(data.and_then(|data| serde_json::from_str(&data).ok()))
         })
         .await
 }

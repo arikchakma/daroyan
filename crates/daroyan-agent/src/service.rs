@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use chrono::DateTime;
 
 use crate::config::{ProcessCheck, Source};
 
@@ -29,23 +31,100 @@ impl Controller {
         output.map(drop)
     }
 
-    pub fn read_exit_code(&self) -> Option<i32> {
-        let output = match self {
+    pub fn read_exit(&self) -> ExitInfo {
+        match self {
             Self::Systemd(unit) => Command::new("systemctl")
-                .args(["show", unit, "--property=ExecMainStatus", "--value"])
-                .output(),
-            Self::Docker(container) => Command::new("docker")
                 .args([
+                    "show",
+                    unit,
+                    "--property=Result,ExecMainCode,ExecMainStatus,NRestarts,ExecMainStartTimestampMonotonic,ExecMainExitTimestampMonotonic",
+                ])
+                .output()
+                .map(|output| parse_systemd_exit(&String::from_utf8_lossy(&output.stdout)))
+                .unwrap_or_default(),
+            Self::Docker(container) => run_with_sudo_fallback(
+                "docker",
+                &[
                     "inspect",
                     "--format",
-                    "{{.State.ExitCode}}",
+                    "{{.RestartCount}} {{json .State}}",
                     &resolve_container(container),
-                ])
-                .output(),
-            Self::None => return None,
-        };
-        String::from_utf8_lossy(&output.ok()?.stdout).trim().parse().ok()
+                ],
+            )
+            .map(|output| parse_docker_exit(&output))
+            .unwrap_or_default(),
+            Self::None => ExitInfo::default(),
+        }
     }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ExitInfo {
+    pub code: Option<i32>,
+    pub signal: Option<String>,
+    pub oom: bool,
+    pub ran_secs: Option<u64>,
+    pub restarts: Option<u32>,
+}
+
+fn parse_systemd_exit(output: &str) -> ExitInfo {
+    let properties: HashMap<&str, &str> =
+        output.lines().filter_map(|line| line.split_once('=')).collect();
+    let read = |key: &str| properties.get(key)?.parse::<i64>().ok();
+    let status = read("ExecMainStatus").and_then(|status| i32::try_from(status).ok());
+    let is_signal = matches!(properties.get("ExecMainCode"), Some(&"2" | &"3"));
+    let ran_secs = read("ExecMainStartTimestampMonotonic")
+        .zip(read("ExecMainExitTimestampMonotonic"))
+        .filter(|(started, exited)| *started > 0 && exited >= started)
+        .and_then(|(started, exited)| u64::try_from((exited - started) / 1_000_000).ok());
+    ExitInfo {
+        code: status.filter(|_| !is_signal),
+        signal: status.filter(|_| is_signal).and_then(read_signal_name),
+        oom: properties.get("Result") == Some(&"oom-kill"),
+        ran_secs,
+        restarts: read("NRestarts").and_then(|count| u32::try_from(count).ok()),
+    }
+}
+
+fn parse_docker_exit(output: &str) -> ExitInfo {
+    let Some((restarts, state)) = output.trim().split_once(' ') else {
+        return ExitInfo::default();
+    };
+    let Ok(state) = serde_json::from_str::<serde_json::Value>(state) else {
+        return ExitInfo::default();
+    };
+    let read_time = |key: &str| DateTime::parse_from_rfc3339(state[key].as_str()?).ok();
+    let code = state["ExitCode"].as_i64().and_then(|code| i32::try_from(code).ok());
+    ExitInfo {
+        code,
+        signal: code
+            .filter(|code| *code > 128)
+            .and_then(|code| read_signal_name(code - 128)),
+        oom: state["OOMKilled"].as_bool().unwrap_or_default(),
+        ran_secs: read_time("StartedAt").zip(read_time("FinishedAt")).and_then(
+            |(started, finished)| u64::try_from((finished - started).num_seconds()).ok(),
+        ),
+        restarts: restarts.parse().ok(),
+    }
+}
+
+fn read_signal_name(number: i32) -> Option<String> {
+    let name = match number {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        4 => "SIGILL",
+        6 => "SIGABRT",
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        11 => "SIGSEGV",
+        13 => "SIGPIPE",
+        14 => "SIGALRM",
+        15 => "SIGTERM",
+        _ => return None,
+    };
+    Some(name.to_string())
 }
 
 pub fn resolve_controller(check: &ProcessCheck) -> Controller {
@@ -177,6 +256,46 @@ mod tests {
             "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock"
         ));
         assert!(!is_permission_error("Unit nginx.service not found."));
+    }
+
+    #[test]
+    fn reads_systemd_exits() {
+        let oom = "Result=oom-kill\nExecMainCode=2\nExecMainStatus=9\nNRestarts=3\nExecMainStartTimestampMonotonic=1000000\nExecMainExitTimestampMonotonic=187201000000\n";
+        assert_eq!(
+            parse_systemd_exit(oom),
+            ExitInfo {
+                code: None,
+                signal: Some("SIGKILL".to_string()),
+                oom: true,
+                ran_secs: Some(187_200),
+                restarts: Some(3),
+            }
+        );
+        let failed = "Result=exit-code\nExecMainCode=1\nExecMainStatus=1\nNRestarts=0\nExecMainStartTimestampMonotonic=0\nExecMainExitTimestampMonotonic=0\n";
+        let exit = parse_systemd_exit(failed);
+        assert_eq!(
+            (exit.code, exit.signal, exit.oom, exit.ran_secs),
+            (Some(1), None, false, None)
+        );
+    }
+
+    #[test]
+    fn reads_docker_exits() {
+        let output = r#"2 {"Status":"exited","OOMKilled":true,"ExitCode":137,"StartedAt":"2026-10-26T04:42:03.123456789Z","FinishedAt":"2026-10-28T08:42:03.5Z"}"#;
+        assert_eq!(
+            parse_docker_exit(output),
+            ExitInfo {
+                code: Some(137),
+                signal: Some("SIGKILL".to_string()),
+                oom: true,
+                ran_secs: Some(187_200),
+                restarts: Some(2),
+            }
+        );
+        let clean = r#"0 {"OOMKilled":false,"ExitCode":0,"StartedAt":"0001-01-01T00:00:00Z","FinishedAt":"0001-01-01T00:00:00Z"}"#;
+        let exit = parse_docker_exit(clean);
+        assert_eq!((exit.code, exit.signal, exit.oom), (Some(0), None, false));
+        assert_eq!(parse_docker_exit("garbage"), ExitInfo::default());
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub struct ProcessWatch {
     held: HeldProcesses,
     commands: bool,
     families: HashMap<String, HashSet<Pid>>,
+    started: HashMap<String, u64>,
 }
 
 impl ProcessWatch {
@@ -65,6 +66,7 @@ impl ProcessWatch {
             held,
             commands,
             families: HashMap::new(),
+            started: HashMap::new(),
         }
     }
 
@@ -111,12 +113,26 @@ impl ProcessWatch {
             self.controllers.get(&check.name).cloned().unwrap_or(Controller::None);
 
         if was_running && !is_running {
-            let code = controller.read_exit_code();
-            warn!("{} stopped with code {code:?}", check.name);
+            let exit = controller.read_exit();
+            let ran_secs = exit.ran_secs.or_else(|| {
+                let started = self.started.get(&check.name)?;
+                (now_millis() / 1000).checked_sub(*started)
+            });
+            warn!(
+                "{} stopped with code {:?}, signal {:?}, out of memory {}",
+                check.name, exit.code, exit.signal, exit.oom
+            );
             events.push(new_event(EventKind::ProcessExited {
                 name: check.name.clone(),
-                code,
+                code: exit.code,
+                signal: exit.signal,
+                oom: exit.oom,
+                ran_secs,
+                restarts: exit.restarts,
             }));
+        }
+        if let Some(started_at) = started_at {
+            self.started.insert(check.name.clone(), started_at);
         }
 
         if is_running {

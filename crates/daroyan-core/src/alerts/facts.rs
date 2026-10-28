@@ -9,7 +9,7 @@ use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, LogRun, list_last_lines, list_top_messages, summarize_log_run,
 };
-use crate::analytics::server_events::find_exit_code;
+use crate::analytics::server_events::{ProcessExit, find_last_exit};
 use crate::analytics::server_states::find_disk_used_before;
 use crate::analytics::uptime_results::{
     ResultItem, find_last_up, list_cert_expiries, list_recent_results,
@@ -57,7 +57,7 @@ pub struct UsageFacts {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProcessFacts {
-    pub exit_code: Option<i32>,
+    pub exit: Option<ProcessExit>,
     pub last_lines: Vec<LogLine>,
 }
 
@@ -177,7 +177,7 @@ impl FactSources<'_> {
             }
             Condition::ProcessStopped { .. } => {
                 let Some(server) = self.server else { return Ok(AlertFacts::None) };
-                let exit_code = find_exit_code(
+                let exit = find_last_exit(
                     self.analytics,
                     server.id.clone(),
                     alert.subject.clone(),
@@ -200,7 +200,7 @@ impl FactSources<'_> {
                     })
                 })
                 .collect();
-                AlertFacts::Process(ProcessFacts { exit_code, last_lines })
+                AlertFacts::Process(ProcessFacts { exit, last_lines })
             }
             Condition::Disk { .. } => {
                 let (Some(server), Some(report)) = (self.server, self.report()) else {
@@ -520,7 +520,7 @@ mod tests {
         else {
             panic!("expected process facts");
         };
-        assert_eq!(process.exit_code, Some(137));
+        assert_eq!(process.exit.unwrap().code, Some(137));
         assert_eq!(process.last_lines.len(), 1);
         assert_eq!(process.last_lines[0].message, "memory at 3.6 GB");
         assert_eq!(

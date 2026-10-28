@@ -214,22 +214,45 @@ impl AlertMessage<'_> {
 
     fn process(&self, facts: &ProcessFacts) -> Details {
         let name = self.alert.subject.as_str();
-        let (summary, mut fields) = match facts.exit_code {
-            Some(code) => (
-                Text::default()
-                    .bold(name)
-                    .plain(" exited with code ")
-                    .bold(code.to_string())
-                    .plain(format!(". {}", explain_exit(code))),
-                vec![
-                    self.target_field(),
-                    Field::new("Exit code", format!("{code} · {}", describe_exit(code))),
-                ],
-            ),
-            None => {
-                (Text::default().bold(name).plain(" stopped."), vec![self.target_field()])
-            }
+        let exit = facts.exit.clone().unwrap_or_default();
+        let summary = match (&exit.signal, exit.code) {
+            _ if exit.oom => Text::default()
+                .bold(name)
+                .plain(" ran out of memory, so the kernel killed it."),
+            (Some(signal), _) => Text::default()
+                .bold(name)
+                .plain(" was killed by ")
+                .bold(signal.as_str())
+                .plain(format!(". {}", explain_signal(signal))),
+            (None, Some(0)) => Text::default()
+                .bold(name)
+                .plain(" exited with code ")
+                .bold("0")
+                .plain(". It finished without an error, but it is no longer running."),
+            (None, Some(code)) => Text::default()
+                .bold(name)
+                .plain(" exited with code ")
+                .bold(code.to_string())
+                .plain(". Its last log lines usually show why."),
+            (None, None) => Text::default().bold(name).plain(" stopped."),
         };
+        let mut fields = vec![self.target_field()];
+        let reason = match (exit.oom, &exit.signal, exit.code) {
+            (true, _, _) => Some("Out of memory".to_string()),
+            (false, Some(signal), Some(code)) => Some(format!("{signal} · code {code}")),
+            (false, Some(signal), None) => Some(signal.clone()),
+            (false, None, Some(code)) => Some(format!("Code {code}")),
+            (false, None, None) => None,
+        };
+        if let Some(reason) = reason {
+            fields.push(Field::new("Exit", reason));
+        }
+        if let Some(secs) = exit.ran_secs {
+            fields.push(Field::new("Ran for", format_span(secs)));
+        }
+        if let Some(restarts) = exit.restarts.filter(|count| *count > 0) {
+            fields.push(Field::new("Restarts", restarts.to_string()));
+        }
         fields.push(self.started_field());
         let time_zone = self.time_zone();
         let snippet = (!facts.last_lines.is_empty()).then(|| Snippet {
@@ -605,33 +628,13 @@ fn to_one_line(message: &str) -> String {
     cut
 }
 
-fn describe_exit(code: i32) -> String {
-    match code {
-        0 => "exited cleanly".to_string(),
-        1 => "application error".to_string(),
-        126 => "not executable".to_string(),
-        127 => "command not found".to_string(),
-        130 => "interrupted".to_string(),
-        134 => "aborted".to_string(),
-        137 => "killed, often out of memory".to_string(),
-        139 => "segmentation fault".to_string(),
-        143 => "terminated".to_string(),
-        129..=192 => format!("killed by signal {}", code - 128),
-        _ => "error".to_string(),
-    }
-}
-
-fn explain_exit(code: i32) -> &'static str {
-    match code {
-        0 => "It finished without an error, but it is no longer running.",
-        137 => {
-            "Something sent it SIGKILL. Most often the kernel killed it because it ran out of memory."
-        }
-        139 => "It crashed with a segmentation fault.",
-        143 => "Something asked it to stop with SIGTERM.",
-        130 => "Something interrupted it with SIGINT.",
-        126 | 127 => "Its command could not run.",
-        _ => "Check its last log lines for the cause.",
+fn explain_signal(signal: &str) -> &'static str {
+    match signal {
+        "SIGTERM" | "SIGINT" | "SIGHUP" => "Something asked it to stop.",
+        "SIGKILL" => "Something forced it to stop.",
+        "SIGSEGV" | "SIGBUS" | "SIGILL" | "SIGFPE" => "It crashed.",
+        "SIGABRT" => "It aborted itself, usually after a failed check.",
+        _ => "Its last log lines usually show why.",
     }
 }
 
@@ -709,6 +712,7 @@ mod tests {
     use super::*;
     use crate::alerts::facts::{CheckCount, CheckResult, LogLine};
     use crate::analytics::log_lines::LogRun;
+    use crate::analytics::server_events::ProcessExit;
 
     fn at(hour: u32, minute: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 28, hour, minute, 0).unwrap()
@@ -934,33 +938,71 @@ mod tests {
         assert_eq!(labels(&details.links), ["Open server", "View alert", "Runbook"]);
     }
 
-    #[test]
-    fn builds_a_crashed_process() {
-        let case = Case::new(
+    fn crash(exit: ProcessExit) -> Details {
+        Case::new(
             Condition::ProcessStopped { name: None },
             make_alert("inboxjot-api-blue", "Stopped"),
             AlertFacts::Process(ProcessFacts {
-                exit_code: Some(137),
+                exit: Some(exit),
                 last_lines: vec![LogLine {
                     at: at(8, 53),
                     severity: 17,
                     message: "failed to allocate 64 MB".to_string(),
                 }],
             }),
-        );
-        let details = case.details(Moment::Firing);
-        assert!(details.summary.to_string().starts_with(
-            "inboxjot-api-blue exited with code 137. Something sent it SIGKILL."
-        ));
+        )
+        .details(Moment::Firing)
+    }
+
+    #[test]
+    fn builds_a_crashed_process() {
+        let details = crash(ProcessExit {
+            code: Some(137),
+            signal: Some("SIGKILL".to_string()),
+            oom: true,
+            ran_secs: Some(187_200),
+            restarts: Some(2),
+        });
         assert_eq!(
-            details.fields[1],
-            Field::new("Exit code", "137 · killed, often out of memory")
+            details.summary.to_string(),
+            "inboxjot-api-blue ran out of memory, so the kernel killed it."
+        );
+        assert_eq!(
+            details.fields[1..4],
+            [
+                Field::new("Exit", "Out of memory"),
+                Field::new("Ran for", "2 days 4 hours"),
+                Field::new("Restarts", "2"),
+            ]
         );
         assert_eq!(
             details.snippet.unwrap().lines,
             ["08:53:00 ERROR failed to allocate 64 MB"]
         );
         assert_eq!(labels(&details.links), ["Open server", "Open logs", "View alert"]);
+    }
+
+    #[test]
+    fn does_not_call_every_sigkill_out_of_memory() {
+        let killed = crash(ProcessExit {
+            code: Some(137),
+            signal: Some("SIGKILL".to_string()),
+            ..ProcessExit::default()
+        });
+        assert_eq!(
+            killed.summary.to_string(),
+            "inboxjot-api-blue was killed by SIGKILL. Something forced it to stop."
+        );
+        assert_eq!(killed.fields[1], Field::new("Exit", "SIGKILL · code 137"));
+        let failed = crash(ProcessExit { code: Some(1), ..ProcessExit::default() });
+        assert_eq!(
+            failed.summary.to_string(),
+            "inboxjot-api-blue exited with code 1. Its last log lines usually show why."
+        );
+        assert_eq!(failed.fields[1], Field::new("Exit", "Code 1"));
+        let unknown = crash(ProcessExit::default());
+        assert_eq!(unknown.summary.to_string(), "inboxjot-api-blue stopped.");
+        assert_eq!(unknown.fields[1].label, "Started");
     }
 
     #[test]

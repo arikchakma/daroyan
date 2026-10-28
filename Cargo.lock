@@ -1113,6 +1113,7 @@ name = "daroyan-agent"
 version = "0.0.3"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "daroyan-protocol",
  "flexi_logger",
