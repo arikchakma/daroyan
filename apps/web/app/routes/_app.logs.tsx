@@ -5,6 +5,8 @@ import { useSearchParams } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { LogSheet } from '~/components/logs/log-sheet';
+import { ViewMenu, VIEWS } from '~/components/logs/view-menu';
+import type { LevelView } from '~/components/logs/view-menu';
 import { ColumnMenu } from '~/components/ui/column-menu';
 import { DataTable } from '~/components/ui/data-table';
 import { EmptyState } from '~/components/ui/empty-state';
@@ -21,7 +23,6 @@ import { apiClient } from '~/lib/api-client';
 import { request } from '~/lib/http';
 import { toast } from '~/lib/toast';
 import { logsOptions, logSourcesOptions } from '~/queries/logs';
-import type { LogLevel } from '~/queries/logs';
 import { listServersOptions } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { joinNames } from '~/utils/alerts';
@@ -47,15 +48,6 @@ function store(key: string, value: unknown) {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {}
 }
-
-type LevelView = 'all' | LogLevel;
-
-const VIEWS: { value: LevelView; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'error', label: 'Errors' },
-  { value: 'warn', label: 'Warnings and Errors' },
-  { value: 'info', label: 'Info and Above' },
-];
 
 const FILTER_KEYS = [
   { key: 'server', param: 'server_id' },
@@ -436,44 +428,5 @@ export default function LogsPage() {
         onClose={() => setOpenLine(undefined)}
       />
     </div>
-  );
-}
-
-type ViewMenuProps = {
-  view: LevelView;
-  onChange: (view: LevelView) => void;
-};
-
-function ViewMenu(props: ViewMenuProps) {
-  const { view, onChange } = props;
-
-  const current = VIEWS.find((item) => item.value === view) ?? VIEWS[0]!;
-
-  return (
-    <Menu.Root>
-      <Menu.Trigger
-        aria-label={`View: ${current.label}`}
-        className="flex h-7 shrink-0 items-center gap-1 rounded-sm pr-1.5 pl-2.5 text-body font-medium outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40 data-popup-open:bg-surface-fill"
-      >
-        {current.label}
-        <Icon name="chevrons-updown" className="size-3.5" />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner align="start" sideOffset={6}>
-          <Menu.Popup>
-            <Menu.Group>
-              <Menu.GroupLabel>Views</Menu.GroupLabel>
-              <Menu.RadioGroup value={current.value} onValueChange={(value) => onChange(value as LevelView)}>
-                {VIEWS.map((item) => (
-                  <Menu.RadioItem key={item.value} value={item.value}>
-                    {item.label}
-                  </Menu.RadioItem>
-                ))}
-              </Menu.RadioGroup>
-            </Menu.Group>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
   );
 }

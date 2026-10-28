@@ -1,3 +1,5 @@
+export const DAY_MS = 86_400_000;
+
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
 
 function splitBytes(bytes: number) {
