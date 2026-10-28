@@ -68,9 +68,10 @@ Each process entry has exactly one source. The source decides how the agent find
 | `processes[].name` | the source value | The label in the dashboard. Names must be unique |
 | `processes[].user` | any | Count only processes owned by this user |
 | `processes[].restart.attempts` | no restarts | Restart a stopped `systemd` or `docker` entry up to this many times. An error on `process` entries |
-| `processes[].logs` | `false` | Send this process's logs. `docker` reads `docker logs`, `systemd` reads the journal. An error on `process` entries |
+| `processes[].logs` | `false` | Send this process's logs. `docker` reads `docker logs`, `systemd` reads the journal. An error on `process` entries. `logs: { format: nginx }` sets the format; see Logs |
 | `processes[].restart.within` | `10m` | The window for `attempts`, as `30s`, `10m` or `1h`. Once spent, the agent sends a `process_restart_gave_up` event and stops trying until the process runs again |
 | `files[].name`, `files[].path` | none | A log file to send. The agent follows it and handles rotation. The `daroyan` user must be able to read it |
+| `files[].format` | `auto` | The file's log format; see Logs |
 | `ports[].name` | none | The label in the dashboard |
 | `ports[].host` | `localhost` | The host to connect to |
 | `ports[].port` | required | Checked with a TCP connect, 3 second timeout |
@@ -89,6 +90,9 @@ Mark a `docker` or `systemd` process with `logs: true`, or list a file under `fi
 - systemd: `journalctl --unit --output json`, from a saved cursor. The level comes from the journal priority.
 - Files: read from a saved offset. A new inode or a shorter file means rotation, and reading starts again at 0.
 - Level: a JSON line uses its `level`, `severity`, `lvl` or `levelname` field, and its other fields become attributes. Otherwise a level word near the start of the line. Otherwise stderr is a warning and anything else is info.
+- Multi-line entries are joined into one line: indented lines, Java `Caused by:` and `... N more`, PHP and Laravel stack frames (`#0 …`, `[stacktrace]`), Python tracebacks with their final exception line, and MySQL slow query blocks up to the query's `;`.
+- The API reads the rest: nginx, Apache, Caddy, HAProxy, Envoy and Traefik requests; Laravel, PHP, PHP-FPM, Rails, Django, Flask, uvicorn, Spring Boot, Logback and log4j app logs; MySQL, PostgreSQL, MongoDB, Redis, Kafka, RabbitMQ and Elasticsearch; sshd, sudo, cron, UFW, fail2ban and kernel OOM kills; and OpenTelemetry, Elastic ECS, structlog and Docker JSON.
+- Format: by default (`auto`) every reader is tried on each line. Set `format` to read a source with only one family: `plain`, `json`, `logfmt`, `nginx`, `apache`, `caddy`, `haproxy`, `envoy`, `traefik`, `laravel`, `php`, `php-fpm`, `rails`, `python`, `java`, `mysql`, `postgresql`, `mongodb`, `redis`, `kafka`, `rabbitmq`, `elasticsearch` or `system`. `plain` keeps lines as they are. Lines get a `log.format` attribute, and a line the format cannot read is kept with `log.parse_failed: true`. An unknown name logs a warning and falls back to `auto`.
 - A new source starts at its newest line. Read positions live in `log_positions.json` in `agent.state_path`, so a restart neither loses nor repeats lines.
 - While the API cannot be reached, the agent keeps up to 10 MB of lines and drops the oldest past that.
 

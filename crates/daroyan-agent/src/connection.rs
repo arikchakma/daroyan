@@ -256,6 +256,7 @@ fn build_connect_url(api_url: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use daroyan_protocol::log::LogFormat;
     use daroyan_protocol::message::CommandResult;
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
@@ -276,6 +277,7 @@ mod tests {
             trace_id: None,
             span_id: None,
             raw: None,
+            format: LogFormat::Auto,
         };
         LogBatch { lines: vec![line; count], dropped }
     }
