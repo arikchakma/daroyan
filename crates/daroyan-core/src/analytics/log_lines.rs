@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::analytics::log_parse::{normalize_json_attributes, parse_text_line};
+use crate::analytics::log_parse::{normalize_json_line, parse_text_line, take_json_time};
 use crate::analytics::{Analytics, clamp_future_ms};
 use crate::error::Result;
 
@@ -48,15 +48,27 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
         .take(MAX_LINES)
         .map(|mut line| {
             let mut at = i64::try_from(line.at).unwrap_or(now_ms);
+            let is_json = line.raw.is_some() || !line.attributes.is_empty();
             let original = line.raw.take().unwrap_or_else(|| line.message.clone());
-            if line.attributes.is_empty() {
-                let parsed = parse_text_line(&line.message);
+            if !is_json {
+                let parsed = parse_text_line(&line.message, line.format);
                 at = parsed.at.unwrap_or(at);
                 line.severity = parsed.severity.unwrap_or(line.severity);
                 line.message = parsed.message;
                 line.attributes = parsed.attributes;
             } else {
-                normalize_json_attributes(&mut line.attributes);
+                at = take_json_time(&mut line.attributes).unwrap_or(at);
+                let mut severity = Some(line.severity);
+                normalize_json_line(
+                    &mut line.attributes,
+                    &mut line.message,
+                    &mut severity,
+                );
+                line.severity = severity.unwrap_or(line.severity);
+                if !line.format.is_auto() {
+                    line.attributes
+                        .insert("log.format".into(), line.format.as_str().into());
+                }
             }
             LogRow {
                 server_id: server_id.to_string(),
@@ -490,7 +502,9 @@ pub async fn list_last_lines(
 
 #[cfg(test)]
 mod tests {
-    use daroyan_protocol::log::{LogBatch, LogLine, LogStream, SEVERITY_ERROR};
+    use daroyan_protocol::log::{
+        LogBatch, LogFormat, LogLine, LogStream, SEVERITY_ERROR,
+    };
 
     use super::{LogFilter, LogQuery, SearchTerm, list_logs, read_level, to_log_rows};
     use crate::analytics::Analytics;
@@ -506,6 +520,7 @@ mod tests {
             trace_id: None,
             span_id: None,
             raw: None,
+            format: LogFormat::Auto,
         }
     }
 
@@ -516,6 +531,32 @@ mod tests {
         assert_eq!(read_level(13), "warn");
         assert_eq!(read_level(17), "error");
         assert_eq!(read_level(21), "error");
+    }
+
+    #[test]
+    fn reads_agent_json_lines_without_reparsing_them() {
+        let mut empty = line(1, "api", 9, "hello");
+        empty.raw = Some(r#"{"level":"info","msg":"hello"}"#.to_string());
+        empty.format = LogFormat::Json;
+        let mut mongo = line(1, "db", 9, "Slow query");
+        mongo.raw = Some("{}".to_string());
+        mongo.attributes = serde_json::json!({
+            "t": { "$date": "2026-10-28T01:50:02.123+00:00" },
+            "s": "W",
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+        let rows = to_log_rows(
+            "srv_1",
+            LogBatch { lines: vec![empty, mongo], dropped: 0 },
+            2_000_000_000_000,
+        );
+        let attributes = rows[0].attributes.as_deref().unwrap();
+        assert!(!attributes.contains("parse_failed"));
+        assert!(attributes.contains(r#""log.format":"json""#));
+        assert_eq!(rows[1].at, 1_793_152_202_123);
+        assert_eq!(rows[1].severity, 13);
     }
 
     #[test]

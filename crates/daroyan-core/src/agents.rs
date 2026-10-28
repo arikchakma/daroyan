@@ -24,14 +24,15 @@ impl Agents {
         generation
     }
 
-    pub fn unregister(&self, server_id: &str, generation: u64) {
+    pub fn unregister(&self, server_id: &str, generation: u64) -> bool {
         let mut sockets = self.lock();
-        if sockets
+        let is_current = sockets
             .get(server_id)
-            .is_some_and(|socket| socket.generation == generation)
-        {
+            .is_some_and(|socket| socket.generation == generation);
+        if is_current {
             sockets.remove(server_id);
         }
+        is_current
     }
 
     pub fn disconnect(&self, server_id: &str) {

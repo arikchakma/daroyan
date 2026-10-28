@@ -1832,6 +1832,23 @@
         }
       }
     },
+    "/v1/overview/events": {
+      "get": {
+        "description": "What happened across the fleet in the last 24 hours: alerts firing and resolving, uptime checks going down and up, crons failing and recovering, processes exiting and restarting, and agents going offline and online. Counts come in 30 minute buckets. Times are in ms",
+        "operationId": "list_overview_events",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetEvents"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/overview/trends": {
       "get": {
         "description": "Hourly fleet CPU and exception counts for the last 24 hours. Times are in ms",
@@ -4080,6 +4097,30 @@
           }
         }
       },
+      "EventBucket": {
+        "type": "object",
+        "required": [
+          "at",
+          "problems",
+          "recoveries"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "problems": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "recoveries": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "EventItem": {
         "type": "object",
         "required": [
@@ -4134,6 +4175,73 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "FleetEvent": {
+        "type": "object",
+        "required": [
+          "at",
+          "outcome",
+          "label",
+          "title",
+          "detail"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/Outcome"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "FleetEvents": {
+        "type": "object",
+        "required": [
+          "problems",
+          "recoveries",
+          "open",
+          "buckets",
+          "events"
+        ],
+        "properties": {
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventBucket"
+            }
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetEvent"
+            }
+          },
+          "open": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "problems": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "recoveries": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -5495,6 +5603,14 @@
           "keep",
           "alert",
           "resolve"
+        ]
+      },
+      "Outcome": {
+        "type": "string",
+        "enum": [
+          "problem",
+          "recovery",
+          "neutral"
         ]
       },
       "OverviewTrends": {

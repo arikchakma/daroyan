@@ -20,6 +20,7 @@ mod m20261030_000001_snake_case;
 mod m20261031_000001_install_token_uses;
 mod m20261101_000001_install_token_keys;
 mod m20261102_000001_drop_foreign_keys;
+mod m20261103_000001_command_creators;
 mod m20261103_000001_delivery_threads;
 mod m20261104_000001_delivery_payloads;
 mod parts;
@@ -49,6 +50,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261031_000001_install_token_uses::Migration),
             Box::new(m20261101_000001_install_token_keys::Migration),
             Box::new(m20261102_000001_drop_foreign_keys::Migration),
+            Box::new(m20261103_000001_command_creators::Migration),
             Box::new(m20261103_000001_delivery_threads::Migration),
             Box::new(m20261104_000001_delivery_payloads::Migration),
         ]

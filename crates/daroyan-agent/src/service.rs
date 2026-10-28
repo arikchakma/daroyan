@@ -149,7 +149,8 @@ fn build_name_filter(container: &str) -> String {
         .map(|character| match character {
             '*' => ".*".to_string(),
             character
-                if character.is_ascii_alphanumeric() || "_-".contains(character) =>
+                if character.is_ascii_alphanumeric()
+                    || matches!(character, '_' | '-') =>
             {
                 character.to_string()
             }
@@ -260,7 +261,7 @@ mod tests {
             source,
             user: None,
             restart: None,
-            logs: false,
+            logs: None,
         }
     }
 

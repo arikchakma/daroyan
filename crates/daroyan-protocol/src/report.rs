@@ -151,4 +151,11 @@ pub enum EventKind {
         name: String,
         attempts: u32,
     },
+    ProcessChanged {
+        name: String,
+        old_pid: u32,
+        new_pid: u32,
+    },
+    #[serde(other)]
+    Unknown,
 }

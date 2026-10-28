@@ -9,7 +9,13 @@ use tokio::task::spawn_blocking;
 use crate::config::Config;
 use crate::service::resolve_controller;
 
-pub type HeldProcesses = Arc<Mutex<HashSet<String>>>;
+#[derive(Default)]
+pub struct Held {
+    pub stopped: HashSet<String>,
+    pub restarted: HashSet<String>,
+}
+
+pub type HeldProcesses = Arc<Mutex<Held>>;
 
 pub async fn run_command(
     command: Command,
@@ -43,16 +49,27 @@ async fn apply_action(
     let controller = resolve_controller(check);
 
     info!("the dashboard asked to {verb} {name}");
-    if verb == "stop" {
-        hold(held).insert(name.clone());
-    } else {
-        hold(held).remove(&name);
+    {
+        let mut held = hold(held);
+        if verb == "stop" {
+            held.stopped.insert(name.clone());
+        } else {
+            held.stopped.remove(&name);
+        }
+        if verb == "restart" {
+            held.restarted.insert(name.clone());
+        }
     }
-    spawn_blocking(move || controller.run(verb))
+    let outcome = spawn_blocking(move || controller.run(verb))
         .await
-        .map_err(|error| anyhow!(error))?
+        .map_err(|error| anyhow!(error))
+        .and_then(|outcome| outcome);
+    if outcome.is_err() {
+        hold(held).restarted.remove(&name);
+    }
+    outcome
 }
 
-pub fn hold(held: &HeldProcesses) -> std::sync::MutexGuard<'_, HashSet<String>> {
+pub fn hold(held: &HeldProcesses) -> std::sync::MutexGuard<'_, Held> {
     held.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }

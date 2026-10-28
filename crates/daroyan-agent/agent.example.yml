@@ -14,9 +14,19 @@ processes:
       within: 10m
   - name: Redis Cache
     docker: redis-cache
+    logs: true
+  - name: Nginx
+    systemd: nginx
+    logs:
+      format: nginx
   - name: Celery
     process: "*celery worker*"
     user: app
+
+files:
+  - name: Laravel
+    path: /var/www/app/storage/logs/laravel.log
+    format: laravel
 
 ports:
   - name: Redis

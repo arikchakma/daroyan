@@ -19,7 +19,9 @@ use duckdb::Connection;
 use tokio::task::{JoinHandle, spawn_blocking};
 
 use crate::analytics::log_lines::{LogRow, append_logs, to_log_rows};
-use crate::analytics::server_events::{EventRow, append_events, to_event_rows};
+use crate::analytics::server_events::{
+    EventRow, append_events, to_event_row, to_event_rows,
+};
 use crate::analytics::server_states::{
     DiskRow, StateRow, append_disks, append_states, to_disk_rows,
 };
@@ -104,6 +106,20 @@ impl Analytics {
         pending.states.push(StateRow::from_state(server_id, &report.state));
         pending.disks.extend(to_disk_rows(server_id, &report.state));
         pending.events.extend(to_event_rows(server_id, &report.events));
+    }
+
+    pub fn buffer_server_event(&self, server_id: &str, kind: &str) {
+        let mut pending = lock(&self.pending);
+        if pending.states.len() + pending.events.len() >= MAX_PENDING_ROWS {
+            tracing::warn!(
+                server_id,
+                kind,
+                "dropped a server event, the write buffer is full"
+            );
+            return;
+        }
+        let at = Utc::now().timestamp_millis();
+        pending.events.push(to_event_row(server_id, at, kind));
     }
 
     pub fn buffer_logs(&self, server_id: &str, batch: LogBatch) {

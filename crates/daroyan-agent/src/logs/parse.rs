@@ -1,5 +1,6 @@
 use daroyan_protocol::log::{
-    LogLine, LogStream, SEVERITY_DEBUG, SEVERITY_ERROR, SEVERITY_INFO, SEVERITY_WARN,
+    LogFormat, LogLine, LogStream, SEVERITY_DEBUG, SEVERITY_ERROR, SEVERITY_INFO,
+    SEVERITY_WARN,
 };
 use serde_json::{Map, Value};
 
@@ -76,11 +77,13 @@ fn take_string(map: &mut Map<String, Value>, keys: &[&str]) -> Option<String> {
     })
 }
 
-pub fn to_log_line(service: &str, raw: RawLine) -> LogLine {
+pub fn to_log_line(service: &str, format: LogFormat, raw: RawLine) -> LogLine {
     let text = strip_ansi(raw.text.trim_end());
     let fallback =
         if raw.stream == LogStream::Stderr { SEVERITY_WARN } else { SEVERITY_INFO };
-    if let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(text.trim()) {
+    if format != LogFormat::Plain
+        && let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(text.trim())
+    {
         let severity = LEVEL_KEYS
             .iter()
             .find_map(|key| map.remove(*key).as_ref().and_then(read_value_severity))
@@ -98,6 +101,7 @@ pub fn to_log_line(service: &str, raw: RawLine) -> LogLine {
             span_id: take_string(&mut map, &SPAN_KEYS),
             attributes: map,
             raw: Some(text),
+            format,
         };
     }
     LogLine {
@@ -113,18 +117,20 @@ pub fn to_log_line(service: &str, raw: RawLine) -> LogLine {
         trace_id: None,
         span_id: None,
         raw: None,
+        format,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use daroyan_protocol::log::LogStream;
+    use daroyan_protocol::log::{LogFormat, LogStream};
 
     use super::{RawLine, strip_ansi, to_log_line};
 
     fn parse(stream: LogStream, text: &str) -> daroyan_protocol::log::LogLine {
         to_log_line(
             "api",
+            LogFormat::Auto,
             RawLine {
                 at: 1,
                 stream,
