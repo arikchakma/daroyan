@@ -4,7 +4,7 @@ import { useId, useRef, useState } from 'react';
 import type { DragEvent, KeyboardEvent, ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { FormSection } from '~/components/alerts/rule-form';
+import { FormSection } from '~/components/alerts/form-section';
 import { Icon } from '~/components/icons/icon';
 import { MonitorPicker } from '~/components/monitors/monitor-picker';
 import { Button } from '~/components/ui/button';

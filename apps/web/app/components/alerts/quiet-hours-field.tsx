@@ -1,7 +1,7 @@
 import type { Schemas } from '@daroyan/client';
 import { useId } from 'react';
 
-import { SelectField } from '~/components/alerts/rule-form';
+import { SelectField } from '~/components/alerts/select-field';
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
 import { TimePicker } from '~/components/ui/time-picker';

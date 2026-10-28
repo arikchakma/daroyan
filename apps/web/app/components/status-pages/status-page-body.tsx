@@ -3,7 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Fragment, useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { FormSection } from '~/components/alerts/rule-form';
+import { FormSection } from '~/components/alerts/form-section';
 import { Icon } from '~/components/icons/icon';
 import { PageStatusBadge } from '~/components/status-pages/status-page-badges';
 import { useMonitors } from '~/components/status-pages/status-page-form';

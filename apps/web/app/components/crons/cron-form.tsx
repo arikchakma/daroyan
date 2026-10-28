@@ -4,7 +4,8 @@ import { useId, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { getTimeZones } from '~/components/alerts/quiet-hours-field';
-import { FormSection, SelectField } from '~/components/alerts/rule-form';
+import { FormSection } from '~/components/alerts/form-section';
+import { SelectField } from '~/components/alerts/select-field';
 import { CronRules } from '~/components/crons/cron-rules';
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
