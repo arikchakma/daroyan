@@ -804,6 +804,23 @@ export interface paths {
         patch: operations["update_member"];
         trace?: never;
     };
+    "/v1/overview/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What happened across the fleet in the last 24 hours: alerts firing and resolving, uptime checks going down and up, crons failing and recovering, processes exiting and restarting, and agents going offline and online. Counts come in 30 minute buckets. Times are in ms */
+        get: operations["list_overview_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/overview/trends": {
         parameters: {
             query?: never;
@@ -1524,6 +1541,14 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        EventBucket: {
+            /** Format: int64 */
+            at: number;
+            /** Format: int32 */
+            problems: number;
+            /** Format: int32 */
+            recoveries: number;
+        };
         EventItem: {
             /** Format: int64 */
             at: number;
@@ -1539,6 +1564,24 @@ export interface components {
                 [key: string]: unknown;
             };
             status?: string | null;
+        };
+        FleetEvent: {
+            /** Format: int64 */
+            at: number;
+            detail: string;
+            label: string;
+            outcome: components["schemas"]["Outcome"];
+            title: string;
+        };
+        FleetEvents: {
+            buckets: components["schemas"]["EventBucket"][];
+            events: components["schemas"]["FleetEvent"][];
+            /** Format: int32 */
+            open: number;
+            /** Format: int32 */
+            problems: number;
+            /** Format: int32 */
+            recoveries: number;
         };
         FollowUpBody: {
             body: string;
@@ -1905,6 +1948,8 @@ export interface components {
         };
         /** @enum {string} */
         NoData: "keep" | "alert" | "resolve";
+        /** @enum {string} */
+        Outcome: "problem" | "recovery" | "neutral";
         OverviewTrends: {
             cpu: components["schemas"]["TrendPoint"][];
             errors: components["schemas"]["TrendPoint"][];
@@ -3999,6 +4044,25 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_overview_events: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetEvents"];
+                };
             };
         };
     };

@@ -55,6 +55,13 @@ mod tests {
     }
 
     #[test]
+    fn reads_unknown_event_kinds_from_newer_agents() {
+        let text = r#"{"at":1,"kind":"file_changed","path":"/etc/nginx/nginx.conf"}"#;
+        let event: crate::report::Event = serde_json::from_str(text).unwrap();
+        assert_eq!(event.kind, crate::report::EventKind::Unknown);
+    }
+
+    #[test]
     fn command_wire_format() {
         let text = r#"{"type":"command","id":"c1","action":"restart_process","name":"inboxing-worker"}"#;
         let message: ApiMessage = serde_json::from_str(text).unwrap();

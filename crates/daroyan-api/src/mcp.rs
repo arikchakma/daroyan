@@ -72,6 +72,12 @@ fn list_tool_defs() -> Vec<ToolDef> {
             "The last 50 events of a server, like processes exiting or the agent reconnecting."
         ),
         tool!(
+            "list_events",
+            GET,
+            "/v1/overview/events",
+            "Everything that happened across the fleet in the last 24 hours, newest first: alerts firing and resolving, uptime checks down and up, crons failing and recovering, processes exiting and restarting, agents offline and online."
+        ),
+        tool!(
             "create_install_command",
             POST,
             "/v1/install-tokens",

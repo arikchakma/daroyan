@@ -1,5 +1,5 @@
 use chrono::Utc;
-use daroyan_protocol::report::Event;
+use daroyan_protocol::report::{Event, EventKind};
 use duckdb::{Connection, params};
 use serde::Serialize;
 use serde_json::Value;
@@ -19,6 +19,7 @@ pub struct EventRow {
 pub fn to_event_rows(server_id: &str, events: &[Event]) -> Vec<EventRow> {
     events
         .iter()
+        .filter(|event| !matches!(event.kind, EventKind::Unknown))
         .filter_map(|event| {
             let Ok(Value::Object(mut data)) = serde_json::to_value(&event.kind) else {
                 return None;
@@ -35,6 +36,15 @@ pub fn to_event_rows(server_id: &str, events: &[Event]) -> Vec<EventRow> {
             })
         })
         .collect()
+}
+
+pub fn to_event_row(server_id: &str, at: i64, kind: &str) -> EventRow {
+    EventRow {
+        server_id: server_id.to_string(),
+        at,
+        kind: kind.to_string(),
+        data: "{}".to_string(),
+    }
 }
 
 pub fn append_events(conn: &Connection, rows: &[EventRow]) -> duckdb::Result<()> {
@@ -71,6 +81,43 @@ pub async fn list_recent_events(
                     Ok(EventItem {
                         at: row.get(0)?,
                         kind: row.get(1)?,
+                        data: serde_json::from_str(&data).unwrap_or(Value::Null),
+                    })
+                })?
+                .collect()
+        })
+        .await
+}
+
+#[derive(Debug)]
+pub struct FleetEventRow {
+    pub server_id: String,
+    pub at: i64,
+    pub kind: String,
+    pub data: Value,
+}
+
+pub async fn list_fleet_events(
+    analytics: &Analytics,
+    since_ms: i64,
+    kinds: &'static [&'static str],
+) -> Result<Vec<FleetEventRow>> {
+    analytics
+        .read(move |conn| {
+            let placeholders = vec!["?"; kinds.len()].join(", ");
+            let mut statement = conn.prepare(&format!(
+                "SELECT server_id, occurred_at, kind, CAST(data AS VARCHAR) FROM server_events \
+                 WHERE occurred_at >= ? AND kind IN ({placeholders}) ORDER BY occurred_at"
+            ))?;
+            let mut values: Vec<&dyn duckdb::ToSql> = vec![&since_ms];
+            values.extend(kinds.iter().map(|kind| kind as &dyn duckdb::ToSql));
+            statement
+                .query_map(values.as_slice(), |row| {
+                    let data: String = row.get(3)?;
+                    Ok(FleetEventRow {
+                        server_id: row.get(0)?,
+                        at: row.get(1)?,
+                        kind: row.get(2)?,
                         data: serde_json::from_str(&data).unwrap_or(Value::Null),
                     })
                 })?

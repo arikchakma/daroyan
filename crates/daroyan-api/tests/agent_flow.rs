@@ -344,8 +344,46 @@ async fn enrolls_reports_and_runs_commands() {
         .json()
         .await
         .unwrap();
-    assert_eq!(events[0]["kind"], "agent_started");
-    assert_eq!(events[0]["data"]["version"], "0.1.0");
+    let started = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "agent_started")
+        .unwrap();
+    assert_eq!(started["data"]["version"], "0.1.0");
+    assert!(
+        events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["kind"] == "agent_connected")
+    );
+
+    let fleet: Value = http
+        .get(format!("{base}/v1/overview/events"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(fleet["buckets"].as_array().unwrap().len(), 48);
+    assert!(
+        fleet["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["label"] != "Online"),
+        "a first connect is not a recovery: {fleet}"
+    );
+    let restart = fleet["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["outcome"] == "neutral")
+        .unwrap_or_else(|| panic!("no command event: {fleet}"));
+    assert_eq!(restart["label"], "Restarted");
+    assert_eq!(restart["detail"], "by Ops");
 
     agent
         .send(Message::text(

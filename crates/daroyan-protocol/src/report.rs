@@ -99,9 +99,28 @@ pub struct Event {
 #[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventKind {
-    AgentStarted { version: String },
-    ProcessExited { name: String, code: Option<i32> },
-    ProcessRestarted { name: String },
-    ProcessRestartFailed { name: String },
-    ProcessRestartGaveUp { name: String, attempts: u32 },
+    AgentStarted {
+        version: String,
+    },
+    ProcessExited {
+        name: String,
+        code: Option<i32>,
+    },
+    ProcessRestarted {
+        name: String,
+    },
+    ProcessRestartFailed {
+        name: String,
+    },
+    ProcessRestartGaveUp {
+        name: String,
+        attempts: u32,
+    },
+    ProcessChanged {
+        name: String,
+        old_pid: u32,
+        new_pid: u32,
+    },
+    #[serde(other)]
+    Unknown,
 }

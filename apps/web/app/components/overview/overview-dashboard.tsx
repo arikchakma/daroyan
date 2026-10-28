@@ -6,6 +6,7 @@ import { Link } from 'react-router';
 import { CronRunBars } from '~/components/crons/cron-run-bars';
 import { CronStatusBadge } from '~/components/crons/cron-status-badge';
 import { Icon } from '~/components/icons/icon';
+import { EventsTile } from '~/components/overview/events-tile';
 import type { IconName } from '~/components/icons/icon-paths';
 import { DetailSection } from '~/components/servers/detail-table';
 import { ServerStatusBadge } from '~/components/servers/server-status-badge';
@@ -18,16 +19,15 @@ import { UptimeStatusBadge } from '~/components/uptime/uptime-status-badge';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { listAlertMutesOptions, listAlertsOptions } from '~/queries/alerts';
 import { listIncidentsOptions } from '~/queries/incidents';
-import { overviewTrendsOptions } from '~/queries/overview';
+import { overviewEventsOptions, overviewTrendsOptions } from '~/queries/overview';
 import { listIssuesOptions, traceServicesOptions, traceStatusOptions } from '~/queries/traces';
 import { describeFiring, findMute } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
 import { formatUntil } from '~/utils/crons';
-import { formatClock, formatCount, formatRelative } from '~/utils/format';
+import { DAY_MS, formatClock, formatCount, formatRelative } from '~/utils/format';
 import { getStatusMeta, isClosed, isMaintenance } from '~/utils/incidents';
 import { formatMs, formatUptime, getUptime } from '~/utils/uptime';
 
-const DAY_MS = 86_400_000;
 const CRON_BARS = 30;
 const BAD_CRON_STATUSES = ['failed', 'missed', 'late'];
 
@@ -115,6 +115,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
   const { data: mutes = [] } = useQuery(listAlertMutesOptions());
   const { data: incidents = [] } = useQuery(listIncidentsOptions());
   const { data: trends } = useQuery(overviewTrendsOptions());
+  const { data: events } = useQuery(overviewEventsOptions());
   const { data: traceStatus } = useQuery(traceStatusOptions());
   const { data: services = [] } = useQuery(traceServicesOptions(DAY_MS));
   const { data: issues = [] } = useQuery(listIssuesOptions());
@@ -288,6 +289,8 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
               )}
             </div>
           </DetailSection>
+
+          <EventsTile events={events} />
 
           <div className="grid grid-cols-2 gap-4 max-lg:grid-cols-1">
             <Tile
