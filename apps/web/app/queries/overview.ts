@@ -10,3 +10,11 @@ export function overviewTrendsOptions() {
     refetchInterval: 60_000,
   });
 }
+
+export function overviewEventsOptions() {
+  return queryOptions({
+    queryKey: ['overview', 'events'],
+    queryFn: () => request(apiClient.GET('/v1/overview/events')),
+    refetchInterval: 60_000,
+  });
+}

@@ -7,6 +7,7 @@ pub mod config;
 pub mod crons;
 pub mod db;
 pub mod error;
+pub mod fleet_events;
 pub mod id;
 pub mod incidents;
 pub mod limits;

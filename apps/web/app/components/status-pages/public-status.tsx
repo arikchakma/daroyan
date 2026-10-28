@@ -9,7 +9,7 @@ import { RichText } from '~/components/rich-text/rich-text';
 import { Chip } from '~/components/ui/chip';
 import { Tooltip } from '~/components/ui/tooltip';
 import { cn } from '~/utils/classname';
-import { formatClock, formatDate, formatRelative } from '~/utils/format';
+import { DAY_MS, formatClock, formatDate, formatRelative } from '~/utils/format';
 import { formatIncidentDuration, formatWindow, getStatusMeta } from '~/utils/incidents';
 import { toDocument } from '~/utils/rich-text';
 import {
@@ -23,7 +23,6 @@ import { formatUptime } from '~/utils/uptime';
 const PHONE_DAYS = 30;
 const HISTORY_DAYS = 14;
 const DAY_PREVIEW = 3;
-const DAY_MS = 86_400_000;
 
 const SEVERITY_CLASS_NAMES: Record<string, string> = {
   critical: 'text-tone-critical-fg',

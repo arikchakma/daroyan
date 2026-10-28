@@ -114,3 +114,9 @@ export function orderSpans(spans: TraceSpan[]): SpanNode[] {
 export function shortenId(id: string) {
   return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id;
 }
+
+export const TICKS = 4;
+
+export function stringify(value: unknown) {
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}

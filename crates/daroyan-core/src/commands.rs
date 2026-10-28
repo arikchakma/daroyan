@@ -20,6 +20,7 @@ pub async fn send_command(
     agents: &Agents,
     server: &Server,
     action: CommandAction,
+    creator_id: &str,
 ) -> Result<StoredCommand> {
     let (action_name, name) = match &action {
         CommandAction::StartProcess { name } => ("start_process", name),
@@ -54,6 +55,7 @@ pub async fn send_command(
             action: action_name.to_string(),
             name: name.clone(),
             status: STATUS_SENT.to_string(),
+            creator_id: Some(creator_id.to_string()),
         })
         .await?;
     let message = ApiMessage::Command(Command { id: command.id.clone(), action });
