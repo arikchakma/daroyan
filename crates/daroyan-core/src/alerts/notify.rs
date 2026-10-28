@@ -226,16 +226,23 @@ impl Notice {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChatMessage {
     pub channel_id: String,
     pub message_id: String,
+    pub payload: Option<Value>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Thread<'a> {
+    pub parent: &'a ChatMessage,
+    pub broadcast: bool,
 }
 
 pub async fn send_notice(
     config: &IntegrationConfig,
     notice: &Notice,
-    thread: Option<&ChatMessage>,
+    thread: Option<Thread<'_>>,
 ) -> Result<Option<ChatMessage>, String> {
     let request = match config {
         IntegrationConfig::Slack { api_url, bot_token, channel_id, .. } => CLIENT
@@ -247,7 +254,11 @@ pub async fn send_notice(
         }
         IntegrationConfig::Telegram { bot_token, chat_id } => CLIENT
             .post(format!("https://api.telegram.org/bot{bot_token}/sendMessage"))
-            .json(&build_telegram_message(chat_id, notice, thread)),
+            .json(&build_telegram_message(
+                chat_id,
+                notice,
+                thread.map(|thread| thread.parent),
+            )),
         IntegrationConfig::Webhook { url } => CLIENT.post(url).json(&json!({
             "event": notice.event,
             "title": notice.title,
@@ -257,6 +268,42 @@ pub async fn send_notice(
             "details": notice.details,
         })),
     };
+    let answer = execute(request).await?;
+    let payload = match config {
+        IntegrationConfig::Slack { .. } if thread.is_none() => {
+            Some(build_slack_body(notice))
+        }
+        _ => None,
+    };
+    Ok(answer.and_then(|answer| read_chat_message(config, &answer, payload)))
+}
+
+pub async fn update_parent(
+    config: &IntegrationConfig,
+    parent: &ChatMessage,
+    notice: &Notice,
+) -> Result<Option<Value>, String> {
+    let IntegrationConfig::Slack { api_url, bot_token, .. } = config else {
+        return Ok(None);
+    };
+    let body = if notice.tone == Tone::Resolved {
+        let Some(original) = &parent.payload else { return Ok(None) };
+        mark_resolved(original, notice)
+    } else {
+        build_slack_body(notice)
+    };
+    let mut request_body = body.clone();
+    request_body["channel"] = json!(parent.channel_id);
+    request_body["ts"] = json!(parent.message_id);
+    let request = CLIENT
+        .post(format!("{}/api/chat.update", api_url.trim_end_matches('/')))
+        .bearer_auth(bot_token)
+        .json(&request_body);
+    execute(request).await?;
+    Ok(Some(body))
+}
+
+async fn execute(request: reqwest::RequestBuilder) -> Result<Option<Value>, String> {
     let request = request.build().map_err(|error| describe_error(&error))?;
     if let Some(ip) = request
         .url()
@@ -287,14 +334,18 @@ pub async fn send_notice(
                 answer["error"].as_str().or_else(|| answer["description"].as_str())
             });
     if status.is_success() && refusal.is_none() {
-        return Ok(answer.and_then(|answer| read_chat_message(config, &answer)));
+        return Ok(answer);
     }
     let detail = refusal
         .map_or_else(|| body.chars().take(200).collect::<String>(), str::to_string);
     Err(format!("HTTP {}: {}", status.as_u16(), detail.trim()))
 }
 
-fn read_chat_message(config: &IntegrationConfig, answer: &Value) -> Option<ChatMessage> {
+fn read_chat_message(
+    config: &IntegrationConfig,
+    answer: &Value,
+    payload: Option<Value>,
+) -> Option<ChatMessage> {
     let (channel_id, message_id) = match config {
         IntegrationConfig::Slack { .. } => {
             (answer["channel"].as_str()?.to_string(), answer["ts"].as_str()?.to_string())
@@ -306,21 +357,63 @@ fn read_chat_message(config: &IntegrationConfig, answer: &Value) -> Option<ChatM
             return None;
         }
     };
-    Some(ChatMessage { channel_id, message_id })
+    Some(ChatMessage { channel_id, message_id, payload })
 }
 
 fn build_slack_message(
     channel_id: &str,
     notice: &Notice,
-    thread: Option<&ChatMessage>,
+    thread: Option<Thread<'_>>,
 ) -> Value {
-    let section = |text: String| json!({ "type": "section", "text": { "type": "mrkdwn", "text": cut(&text, SLACK_MAX_TEXT) } });
+    let mut message = build_slack_body(notice);
+    message["channel"] = json!(channel_id);
+    if let Some(thread) = thread.filter(|thread| thread.parent.channel_id == channel_id) {
+        message["thread_ts"] = json!(thread.parent.message_id);
+        if thread.broadcast {
+            message["reply_broadcast"] = json!(true);
+        }
+    }
+    message
+}
+
+fn mark_resolved(original: &Value, notice: &Notice) -> Value {
+    let mut body = original.clone();
+    let title = format!("*{}{}*", notice.tone.emoji(), escape_slack(&notice.title));
+    body["text"] = json!(build_slack_text(notice));
+    body["blocks"] = json!([slack_section(title)]);
+    if let Some(attachment) = body["attachments"].get_mut(0) {
+        attachment["color"] = json!(format!("#{:06X}", notice.tone.color()));
+        let summary = notice.summary().render(escape_slack, "*", "*");
+        if let Some(blocks) = attachment["blocks"].as_array_mut() {
+            blocks.retain(|block| block["type"] != "context");
+            blocks.push(json!({
+                "type": "context",
+                "elements": [{ "type": "mrkdwn", "text": cut(&summary, SLACK_MAX_TEXT) }],
+            }));
+        }
+    }
+    body
+}
+
+fn slack_section(text: String) -> Value {
+    json!({ "type": "section", "text": { "type": "mrkdwn", "text": cut(&text, SLACK_MAX_TEXT) } })
+}
+
+fn build_slack_text(notice: &Notice) -> String {
+    let summary = notice.summary().to_string();
+    if summary.is_empty() {
+        format!("{}{}", notice.tone.emoji(), notice.title)
+    } else {
+        format!("{}{}: {summary}", notice.tone.emoji(), notice.title)
+    }
+}
+
+fn build_slack_body(notice: &Notice) -> Value {
+    let section = slack_section;
     let details = &notice.details;
-    let mut blocks = vec![section(format!(
-        "*{}{}*",
-        notice.tone.emoji(),
-        escape_slack(&notice.title)
-    ))];
+    let title =
+        section(format!("*{}{}*", notice.tone.emoji(), escape_slack(&notice.title)));
+    let mut blocks = Vec::new();
     let summary = notice.summary();
     if !summary.is_empty() {
         blocks.push(section(summary.render(escape_slack, "*", "*")));
@@ -377,22 +470,21 @@ fn build_slack_message(
             "elements": [{ "type": "mrkdwn", "text": cut(&escape_slack(context), SLACK_MAX_TEXT) }],
         }));
     }
-    blocks.truncate(SLACK_MAX_BLOCKS);
-    // The blocks sit in an attachment for the colored bar. A top-level `text`
-    // would show above it, so the notification text goes in `fallback`.
-    let mut message = json!({
-        "channel": channel_id,
-        "attachments": [{
-            "color": format!("#{:06X}", notice.tone.color()),
-            "fallback": format!("{}{}: {}", notice.tone.emoji(), notice.title, summary),
-            "blocks": blocks,
-        }],
+    blocks.truncate(SLACK_MAX_BLOCKS - 1);
+    // Slack shows `text` above a message that only has attachments, so the
+    // title goes in a top-level block and `text` stays a notification fallback.
+    let mut body = json!({
+        "text": build_slack_text(notice),
+        "blocks": [title],
+        "attachments": [],
     });
-    if let Some(thread) = thread.filter(|thread| thread.channel_id == channel_id) {
-        message["thread_ts"] = json!(thread.message_id);
-        message["reply_broadcast"] = json!(true);
+    if !blocks.is_empty() {
+        body["attachments"] = json!([{
+            "color": format!("#{:06X}", notice.tone.color()),
+            "blocks": blocks,
+        }]);
     }
-    message
+    body
 }
 
 fn build_discord_message(notice: &Notice) -> Value {
@@ -647,39 +739,74 @@ mod tests {
     #[test]
     fn builds_slack_blocks() {
         let message = build_slack_message("C1", &make_notice(make_details()), None);
-        assert_eq!(message.get("text"), None);
-        let attachment = &message["attachments"][0];
-        assert_eq!(attachment["color"], "#D93025");
         assert_eq!(
-            attachment["fallback"],
+            message["text"],
             "🔴 Critical: InboxJot error spike: 11 error lines in the last 5m."
         );
+        assert_eq!(
+            message["blocks"][0]["text"]["text"],
+            "*🔴 Critical: InboxJot error spike*"
+        );
+        let attachment = &message["attachments"][0];
+        assert_eq!(attachment["color"], "#D93025");
         let blocks = attachment["blocks"].as_array().unwrap();
         let types: Vec<&str> =
             blocks.iter().map(|block| block["type"].as_str().unwrap()).collect();
         assert_eq!(
             types,
-            ["section", "section", "section", "section", "section", "actions", "context"]
+            ["section", "section", "section", "section", "actions", "context"]
         );
-        assert_eq!(blocks[0]["text"]["text"], "*🔴 Critical: InboxJot error spike*");
-        assert_eq!(blocks[1]["text"]["text"], "*11 error lines* in the last 5m.");
-        assert_eq!(blocks[2]["fields"][1]["text"], "*Source*\n&lt;!channel&gt;");
-        assert_eq!(blocks[3]["text"]["text"], "*Top errors*");
+        assert_eq!(blocks[0]["text"]["text"], "*11 error lines* in the last 5m.");
+        assert_eq!(blocks[1]["fields"][1]["text"], "*Source*\n&lt;!channel&gt;");
+        assert_eq!(blocks[2]["text"]["text"], "*Top errors*");
         assert_eq!(
-            blocks[4]["text"]["text"],
+            blocks[3]["text"]["text"],
             "```11× HTTP export failed with status code: 404```"
         );
-        assert_eq!(blocks[5]["elements"][0]["style"], "primary");
-        assert_eq!(blocks[5]["elements"][1].get("style"), None);
-        assert_eq!(blocks[5]["elements"][1]["url"], "https://daroyan.test/alerts/rule_1");
+        assert_eq!(blocks[4]["elements"][0]["style"], "primary");
+        assert_eq!(blocks[4]["elements"][1].get("style"), None);
+        assert_eq!(blocks[4]["elements"][1]["url"], "https://daroyan.test/alerts/rule_1");
     }
 
     #[test]
     fn falls_back_to_the_body_and_url() {
         let message = build_slack_message("C1", &make_notice(Details::default()), None);
         let blocks = message["attachments"][0]["blocks"].as_array().unwrap();
-        assert_eq!(blocks[1]["text"]["text"], "Inboxjot Server · Logs: 11 lines");
-        assert_eq!(blocks[2]["elements"][0]["text"]["text"], "Open in Daroyan");
+        assert_eq!(blocks[0]["text"]["text"], "Inboxjot Server · Logs: 11 lines");
+        assert_eq!(blocks[1]["elements"][0]["text"]["text"], "Open in Daroyan");
+    }
+
+    #[test]
+    fn marks_the_parent_resolved() {
+        let original = build_slack_body(&make_notice(make_details()));
+        let resolved = Notice {
+            event: "alert.resolved",
+            tone: Tone::Resolved,
+            title: "Resolved: InboxJot error spike".to_string(),
+            details: Details {
+                summary: Text::from("Back to normal after ").bold("51 min").plain("."),
+                ..Details::default()
+            },
+            ..make_notice(Details::default())
+        };
+        let updated = mark_resolved(&original, &resolved);
+        assert_eq!(
+            updated["text"],
+            "✅ Resolved: InboxJot error spike: Back to normal after 51 min."
+        );
+        assert_eq!(
+            updated["blocks"][0]["text"]["text"],
+            "*✅ Resolved: InboxJot error spike*"
+        );
+        let attachment = &updated["attachments"][0];
+        assert_eq!(attachment["color"], "#1F8A4C");
+        let blocks = attachment["blocks"].as_array().unwrap();
+        assert_eq!(blocks[0], original["attachments"][0]["blocks"][0]);
+        assert_eq!(blocks.iter().filter(|block| block["type"] == "context").count(), 1);
+        assert_eq!(
+            blocks.last().unwrap()["elements"][0]["text"],
+            "Back to normal after *51 min*."
+        );
     }
 
     #[test]
@@ -695,7 +822,7 @@ mod tests {
         };
         let message = build_slack_message("C1", &make_notice(details), None);
         let blocks = message["attachments"][0]["blocks"].as_array().unwrap();
-        assert!(blocks.len() <= SLACK_MAX_BLOCKS);
+        assert!(blocks.len() < SLACK_MAX_BLOCKS);
         for block in blocks {
             if let Some(text) = block["text"]["text"].as_str() {
                 assert!(text.chars().count() <= SLACK_MAX_TEXT);
@@ -735,29 +862,38 @@ mod tests {
         assert!(text.ends_with("<i>Checked every 60 s</i>"));
     }
 
+    fn chat_message(channel_id: &str, message_id: &str) -> ChatMessage {
+        ChatMessage {
+            channel_id: channel_id.to_string(),
+            message_id: message_id.to_string(),
+            payload: None,
+        }
+    }
+
     #[test]
     fn replies_in_the_thread_of_the_same_channel() {
         let notice = make_notice(Details::default());
-        let thread = ChatMessage {
-            channel_id: "C1".to_string(),
-            message_id: "1730000000.000100".to_string(),
-        };
-        let reply = build_slack_message("C1", &notice, Some(&thread));
+        let parent = chat_message("C1", "1730000000.000100");
+        let broadcast = Thread { parent: &parent, broadcast: true };
+        let reply = build_slack_message("C1", &notice, Some(broadcast));
         assert_eq!(reply["thread_ts"], "1730000000.000100");
         assert_eq!(reply["reply_broadcast"], true);
-        let moved = build_slack_message("C2", &notice, Some(&thread));
+        let quiet = build_slack_message(
+            "C1",
+            &notice,
+            Some(Thread { broadcast: false, ..broadcast }),
+        );
+        assert_eq!(quiet["thread_ts"], "1730000000.000100");
+        assert_eq!(quiet.get("reply_broadcast"), None);
+        let moved = build_slack_message("C2", &notice, Some(broadcast));
         assert_eq!(moved.get("thread_ts"), None);
-        assert_eq!(moved.get("reply_broadcast"), None);
 
-        let thread = ChatMessage {
-            channel_id: "42".to_string(),
-            message_id: "7".to_string(),
-        };
-        let reply = build_telegram_message("42", &notice, Some(&thread));
+        let parent = chat_message("42", "7");
+        let reply = build_telegram_message("42", &notice, Some(&parent));
         assert_eq!(reply["reply_parameters"]["message_id"], 7);
         assert_eq!(reply["reply_parameters"]["allow_sending_without_reply"], true);
         assert_eq!(
-            build_telegram_message("43", &notice, Some(&thread)).get("reply_parameters"),
+            build_telegram_message("43", &notice, Some(&parent)).get("reply_parameters"),
             None
         );
     }
@@ -770,17 +906,15 @@ mod tests {
             channel_id: "C1".to_string(),
             channel_name: "alerts".to_string(),
         };
+        let answer = json!({ "ok": true, "channel": "C1", "ts": "1.2" });
         assert_eq!(
-            read_chat_message(
-                &slack,
-                &json!({ "ok": true, "channel": "C1", "ts": "1.2" })
-            ),
+            read_chat_message(&slack, &answer, Some(json!({ "text": "hi" }))),
             Some(ChatMessage {
-                channel_id: "C1".to_string(),
-                message_id: "1.2".to_string()
+                payload: Some(json!({ "text": "hi" })),
+                ..chat_message("C1", "1.2")
             })
         );
-        assert_eq!(read_chat_message(&slack, &json!({ "ok": true })), None);
+        assert_eq!(read_chat_message(&slack, &json!({ "ok": true }), None), None);
         let telegram = IntegrationConfig::Telegram {
             bot_token: "1:token".to_string(),
             chat_id: "42".to_string(),
@@ -788,15 +922,13 @@ mod tests {
         assert_eq!(
             read_chat_message(
                 &telegram,
-                &json!({ "ok": true, "result": { "message_id": 7 } })
+                &json!({ "ok": true, "result": { "message_id": 7 } }),
+                None
             ),
-            Some(ChatMessage {
-                channel_id: "42".to_string(),
-                message_id: "7".to_string()
-            })
+            Some(chat_message("42", "7"))
         );
         let webhook = IntegrationConfig::Webhook { url: "https://hook.test".to_string() };
-        assert_eq!(read_chat_message(&webhook, &json!({ "ts": "1.2" })), None);
+        assert_eq!(read_chat_message(&webhook, &json!({ "ts": "1.2" }), None), None);
     }
 
     #[tokio::test]

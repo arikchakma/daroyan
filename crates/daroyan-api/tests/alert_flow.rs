@@ -101,17 +101,27 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     let slack_posts = Arc::new(Mutex::new(Vec::<Value>::new()));
     let slack_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let slack_url = format!("http://{}", slack_listener.local_addr().unwrap());
+    let slack_updates = Arc::new(Mutex::new(Vec::<Value>::new()));
     let slack_store = Arc::clone(&slack_posts);
+    let update_store = Arc::clone(&slack_updates);
     tokio::spawn(async move {
-        let app = Router::new().route(
-            "/api/chat.postMessage",
-            post(move |Json(body): Json<Value>| async move {
-                let mut posts = slack_store.lock().unwrap();
-                posts.push(body);
-                let ts = format!("1730000000.{:06}", posts.len());
-                Json(json!({ "ok": true, "channel": "C1", "ts": ts }))
-            }),
-        );
+        let app = Router::new()
+            .route(
+                "/api/chat.postMessage",
+                post(move |Json(body): Json<Value>| async move {
+                    let mut posts = slack_store.lock().unwrap();
+                    posts.push(body);
+                    let ts = format!("1730000000.{:06}", posts.len());
+                    Json(json!({ "ok": true, "channel": "C1", "ts": ts }))
+                }),
+            )
+            .route(
+                "/api/chat.update",
+                post(move |Json(body): Json<Value>| async move {
+                    update_store.lock().unwrap().push(body);
+                    Json(json!({ "ok": true }))
+                }),
+            );
         axum::serve(slack_listener, app).await
     });
     let slack_count = || slack_posts.lock().unwrap().len();
@@ -307,19 +317,32 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
         .unwrap();
     assert!(list_alerts(&http, &base, "firing").await.is_empty());
     assert_eq!(list_alerts(&http, &base, "resolved").await.len(), 1);
-    wait_until(|| events().len() == 3 && slack_count() == 2).await;
+    wait_until(|| {
+        events().len() == 3
+            && slack_count() == 2
+            && slack_updates.lock().unwrap().len() == 1
+    })
+    .await;
     assert_eq!(events(), ["test", "alert.firing", "alert.resolved"]);
     let posts = slack_posts.lock().unwrap().clone();
     assert_eq!(posts[0].get("thread_ts"), None);
-    assert_eq!(
-        posts[0]["attachments"][0]["blocks"][0]["text"]["text"],
-        "*🔴 Critical: High CPU*"
+    assert!(
+        posts[0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("🔴 Critical: High CPU: CPU at 34%")
     );
+    assert_eq!(posts[0]["blocks"][0]["text"]["text"], "*🔴 Critical: High CPU*");
     assert_eq!(posts[1]["thread_ts"], "1730000000.000001");
     assert_eq!(posts[1]["reply_broadcast"], true);
+    assert_eq!(posts[1]["blocks"][0]["text"]["text"], "*✅ Resolved: High CPU*");
+    let update = slack_updates.lock().unwrap()[0].clone();
+    assert_eq!(update["ts"], "1730000000.000001");
+    assert_eq!(update["blocks"][0]["text"]["text"], "*✅ Resolved: High CPU*");
+    assert_eq!(update["attachments"][0]["color"], "#1F8A4C");
     assert_eq!(
-        posts[1]["attachments"][0]["blocks"][0]["text"]["text"],
-        "*✅ Resolved: High CPU*"
+        update["attachments"][0]["blocks"][0],
+        posts[0]["attachments"][0]["blocks"][0]
     );
 
     let log_rule: Value = http

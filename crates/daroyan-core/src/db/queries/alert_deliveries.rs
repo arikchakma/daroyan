@@ -19,6 +19,7 @@ pub struct NewAlertDelivery {
     pub sent_at: DateTime<Utc>,
     pub chat_channel_id: Option<String>,
     pub chat_message_id: Option<String>,
+    pub chat_payload: Option<String>,
 }
 
 impl Database {
@@ -40,6 +41,7 @@ impl Database {
             sent_at: Set(delivery.sent_at),
             chat_channel_id: Set(delivery.chat_channel_id),
             chat_message_id: Set(delivery.chat_message_id),
+            chat_payload: Set(delivery.chat_payload),
         }
         .insert(&self.conn)
         .await
@@ -58,6 +60,19 @@ impl Database {
             .limit(limit)
             .all(&self.conn)
             .await
+    }
+
+    pub async fn update_chat_payload(
+        &self,
+        id: &str,
+        payload: String,
+    ) -> Result<(), DbErr> {
+        Entity::update_many()
+            .col_expr(Column::ChatPayload, sea_orm::sea_query::Expr::value(payload))
+            .filter(Column::Id.eq(id))
+            .exec(&self.conn)
+            .await
+            .map(drop)
     }
 
     pub async fn find_alert_thread(
