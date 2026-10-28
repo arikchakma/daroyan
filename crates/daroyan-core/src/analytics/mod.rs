@@ -198,9 +198,7 @@ impl Analytics {
         prune_backups(&dir);
         let backup = Backup {
             name,
-            size_bytes: fs::metadata(&path)
-                .map(|metadata| metadata.len())
-                .unwrap_or_default(),
+            size_bytes: fs::metadata(&path).context("read the backup size")?.len(),
             created_at: Utc::now(),
         };
         *lock(&self.last_backup) = Some(backup.clone());
@@ -240,14 +238,14 @@ pub fn spawn_analytics_tasks(
                 }
                 _ = purge.tick() => {
                     let now = Utc::now().timestamp_millis();
-                    let cutoff = now - i64::from(retention_days) * 86_400_000;
-                    let log_cutoff = now - i64::from(log_retention_days) * 86_400_000;
+                    let cutoff = now - i64::from(retention_days) * DAY_MS;
+                    let log_cutoff = now - i64::from(log_retention_days) * DAY_MS;
                     if let Err(error) = analytics.purge_before(cutoff, log_cutoff).await {
                         tracing::error!(error = %error, "purge analytics");
                     }
                 }
                 _ = backup.tick(), if backup_dir.is_some() => {
-                    let dir = backup_dir.clone().unwrap_or_default();
+                    let Some(dir) = backup_dir.clone() else { continue };
                     match analytics.back_up(dir).await {
                         Ok(backup) => tracing::info!(name = %backup.name, "backed up analytics"),
                         Err(error) => tracing::error!(error = %error, "back up analytics"),

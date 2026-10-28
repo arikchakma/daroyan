@@ -63,12 +63,6 @@ fn create_commands() -> TableCreateStatement {
         .col(text_null("error"))
         .col(make_created_at())
         .col(make_updated_at())
-        .foreign_key(
-            ForeignKey::create()
-                .from("commands", "server_id")
-                .to("servers", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
         .to_owned()
 }
 

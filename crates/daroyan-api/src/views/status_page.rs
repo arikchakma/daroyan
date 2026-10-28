@@ -68,7 +68,10 @@ impl StatusPageView {
 }
 
 pub fn read_sections(page: &StatusPage) -> Vec<SectionRef> {
-    serde_json::from_value(page.sections.clone()).unwrap_or_default()
+    Vec::deserialize(&page.sections).unwrap_or_else(|error| {
+        tracing::warn!(page_id = %page.id, %error, "unreadable status page sections");
+        Vec::new()
+    })
 }
 
 #[derive(Serialize, ToSchema)]

@@ -3,7 +3,7 @@ use daroyan_core::db::entities::servers::Model as Server;
 use daroyan_core::servers::report::LastReport;
 use daroyan_core::servers::status::{ServerStatus, get_percent, get_server_status};
 use daroyan_protocol::host::Host;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 #[derive(Serialize, ToSchema)]
@@ -51,12 +51,15 @@ struct ParsedServer {
 
 fn parse_server(server: &Server) -> ParsedServer {
     ParsedServer {
-        host: serde_json::from_value(server.host.clone()).ok(),
+        host: Host::deserialize(&server.host).ok(),
         report: server
             .last_report
-            .clone()
-            .and_then(|report| serde_json::from_value(report).ok()),
-        labels: serde_json::from_value(server.labels.clone()).unwrap_or_default(),
+            .as_ref()
+            .and_then(|report| LastReport::deserialize(report).ok()),
+        labels: Vec::deserialize(&server.labels).unwrap_or_else(|error| {
+            tracing::warn!(server_id = %server.id, %error, "unreadable server labels");
+            Vec::new()
+        }),
     }
 }
 

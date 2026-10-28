@@ -55,7 +55,10 @@ pub fn parse_rule(rule: &AlertRule) -> Option<ParsedRule> {
         condition: serde_json::from_value(rule.condition.clone()).ok()?,
         scope: serde_json::from_value(rule.scope.clone()).ok()?,
         integration_ids: serde_json::from_value(rule.integration_ids.clone()).ok()?,
-        options: serde_json::from_value(rule.options.clone()).unwrap_or_default(),
+        options: serde_json::from_value(rule.options.clone()).unwrap_or_else(|error| {
+            tracing::warn!(rule_id = %rule.id, %error, "unreadable alert rule options, using defaults");
+            RuleOptions::default()
+        }),
     })
 }
 
@@ -507,7 +510,7 @@ impl AlertEngine {
             }
             self.clearing.remove(&key);
             firing_by_key.remove(&key);
-            let name = names.get(&key.1).cloned().unwrap_or_default();
+            let name = names.get(&key.1).cloned().unwrap_or_else(|| key.1.clone());
             self.resolve_alert(rule, &parsed, alert, &name, now, &integrations)
                 .await?;
         }
@@ -694,7 +697,8 @@ impl AlertEngine {
         let level = Level::read(&alert.severity);
         let target_id = get_target_id(alert);
         let target = get_target(alert);
-        let target_name = names.get(&target_id).cloned().unwrap_or_default();
+        let target_name =
+            names.get(&target_id).cloned().unwrap_or_else(|| target_id.clone());
         let lasted =
             u32::try_from((now - alert.started_at).num_seconds()).unwrap_or_default();
         let notice = Notice {
@@ -803,7 +807,8 @@ impl AlertEngine {
                 }
                 let target_id = get_target_id(alert);
                 let target = get_target(alert);
-                let target_name = names.get(&target_id).cloned().unwrap_or_default();
+                let target_name =
+                    names.get(&target_id).cloned().unwrap_or_else(|| target_id.clone());
                 let lasted = u32::try_from((now - alert.started_at).num_seconds())
                     .unwrap_or_default();
                 let notice = Notice {
@@ -990,7 +995,10 @@ pub async fn deliver_notice(
 fn read_server_facts(server: &Server) -> ServerFacts<'_> {
     ServerFacts {
         server,
-        labels: serde_json::from_value(server.labels.clone()).unwrap_or_default(),
+        labels: serde_json::from_value(server.labels.clone()).unwrap_or_else(|error| {
+            tracing::warn!(server_id = %server.id, %error, "unreadable server labels, using none");
+            Vec::new()
+        }),
         mem_total: serde_json::from_value::<Host>(server.host.clone())
             .map(|host| host.mem_total)
             .unwrap_or_default(),

@@ -64,6 +64,7 @@ async fn opens_and_resolves_outages_as_a_site_goes_down_and_up() {
     .await
     .unwrap();
     let http = common::sign_in(&state.database).await;
+    let database = state.database.clone();
     let mut engine = AlertEngine::new(
         state.database.clone(),
         state.agents.clone(),
@@ -356,11 +357,18 @@ async fn opens_and_resolves_outages_as_a_site_goes_down_and_up() {
     });
     assert_eq!(run(&http, &base, &check_id).await["status"], "up");
 
+    assert!(
+        common::count_rows(&database, "uptime_outages", "check_id", &check_id).await > 0
+    );
     let deleted = http
         .delete(format!("{base}/v1/uptime-checks/{check_id}"))
         .send()
         .await
         .unwrap();
     assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        common::count_rows(&database, "uptime_outages", "check_id", &check_id).await,
+        0
+    );
     std::fs::remove_dir_all(dir).ok();
 }

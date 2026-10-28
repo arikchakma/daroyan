@@ -38,11 +38,5 @@ fn create_mcp_tokens() -> TableCreateStatement {
         .col(text("hint"))
         .col(make_created_at())
         .col(timestamp_null("last_used_at"))
-        .foreign_key(
-            ForeignKey::create()
-                .from("mcp_tokens", "user_id")
-                .to("users", "id")
-                .on_delete(ForeignKeyAction::Cascade),
-        )
         .to_owned()
 }

@@ -47,3 +47,27 @@ async fn sign_in_as(database: &Database, key: &str, name: &str, role: &str) -> C
     headers.insert(COOKIE, HeaderValue::from_str(&cookie).unwrap());
     Client::builder().default_headers(headers).build().unwrap()
 }
+
+#[allow(dead_code)]
+pub async fn count_rows(
+    database: &Database,
+    table: &'static str,
+    column: &'static str,
+    id: &str,
+) -> i64 {
+    use sea_orm::ConnectionTrait;
+    use sea_orm::sea_query::{Asterisk, Expr, ExprTrait, Func, Query};
+
+    let row = database
+        .conn
+        .query_one(
+            Query::select()
+                .expr_as(Func::count(Expr::col(Asterisk)), "count")
+                .from(table)
+                .and_where(Expr::col(column).eq(id)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    row.try_get("", "count").unwrap()
+}

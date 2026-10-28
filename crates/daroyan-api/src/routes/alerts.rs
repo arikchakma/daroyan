@@ -57,7 +57,7 @@ async fn list_alerts(
                 .iter()
                 .find(|rule| rule.id == alert.rule_id)
                 .map(|rule| rule.name.clone())
-                .unwrap_or_default();
+                .unwrap_or_else(|| alert.rule_id.clone());
             let target_name = servers
                 .iter()
                 .find(|server| Some(&server.id) == alert.server_id.as_ref())
@@ -73,6 +73,13 @@ async fn list_alerts(
                         .iter()
                         .find(|cron| Some(&cron.id) == alert.cron_id.as_ref())
                         .map(|cron| cron.name.clone())
+                })
+                .or_else(|| {
+                    alert
+                        .server_id
+                        .clone()
+                        .or_else(|| alert.check_id.clone())
+                        .or_else(|| alert.cron_id.clone())
                 })
                 .unwrap_or_default();
             AlertView::new(alert, rule_name, target_name)

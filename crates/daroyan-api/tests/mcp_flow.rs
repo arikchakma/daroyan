@@ -151,7 +151,7 @@ async fn serves_tools_over_mcp_with_a_bearer_token() {
 
     let listed = rpc(&anonymous, &url, &token, "tools/list", json!({})).await;
     let tools = listed["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 51);
+    assert_eq!(tools.len(), 52);
     let find =
         |name: &str| tools.iter().find(|tool| tool["name"] == name).unwrap().clone();
     assert!(

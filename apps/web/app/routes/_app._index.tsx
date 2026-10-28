@@ -11,7 +11,7 @@ import { PageBar } from '~/components/ui/page-bar';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { listIntegrationsOptions } from '~/queries/alerts';
 import { listCronsOptions } from '~/queries/crons';
-import { installTokenOptions } from '~/queries/install-tokens';
+import { ONE_OFF_LIMITS, installTokenOptions } from '~/queries/install-tokens';
 import { listServersOptions } from '~/queries/servers';
 import { listUptimeChecksOptions } from '~/queries/uptime';
 import { cn } from '~/utils/classname';
@@ -220,7 +220,7 @@ export default function OverviewPage() {
 }
 
 function InstallCommand() {
-  const { data: installToken } = useQuery(installTokenOptions(0, 1));
+  const { data: installToken } = useQuery(installTokenOptions(0, ONE_OFF_LIMITS));
   const token = installToken?.token ?? '…';
   const command = `curl -fsSL ${window.location.origin}/install.sh | \\\n  sudo DAROYAN_API_URL=${window.location.origin} DAROYAN_TOKEN=${token} sh`;
 

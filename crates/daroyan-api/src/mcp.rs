@@ -75,7 +75,13 @@ fn list_tool_defs() -> Vec<ToolDef> {
             "create_install_command",
             POST,
             "/v1/install-tokens",
-            "Create an install command to add servers. Run the returned command as root on each server. It is valid for 24 hours and for max_uses servers (1 by default, up to 100)."
+            "Create an install command to add servers. Run the returned command as root on each server. name labels the key. expires_in_hours defaults to 24 (up to 2160); null never expires. max_uses defaults to 1 (up to 100); null is unlimited."
+        ),
+        tool!(
+            "list_install_tokens",
+            GET,
+            "/v1/install-tokens",
+            "List install keys that can still enroll servers, with their expiry, uses and last use."
         ),
         tool!(
             "revoke_install_token",

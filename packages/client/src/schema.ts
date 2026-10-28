@@ -443,7 +443,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["list_install_tokens"];
         put?: never;
         post: operations["create_install_token"];
         delete?: never;
@@ -1372,14 +1372,20 @@ export interface components {
             scope: components["schemas"]["Scope"];
         };
         CreateInstallTokenBody: {
+            /** Format: int64 */
+            expires_in_hours?: number | null;
             /** Format: int32 */
             max_uses?: number | null;
+            name?: string | null;
         };
         CreateIntegrationBody: {
             config: components["schemas"]["IntegrationConfig"];
             name: string;
         };
         CreatedIngestToken: components["schemas"]["IngestToken"] & {
+            token: string;
+        };
+        CreatedInstallToken: components["schemas"]["InstallToken"] & {
             token: string;
         };
         CreatedMcpToken: components["schemas"]["McpToken"] & {
@@ -1715,11 +1721,18 @@ export interface components {
         };
         InstallToken: {
             /** Format: date-time */
-            expires_at: string;
+            created_at: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+            hint: string;
             id: string;
+            /** Format: date-time */
+            last_used_at?: string | null;
             /** Format: int32 */
-            max_uses: number;
-            token: string;
+            max_uses?: number | null;
+            name: string;
+            /** Format: int32 */
+            uses: number;
         };
         Integration: {
             /** Format: date-time */
@@ -3341,6 +3354,25 @@ export interface operations {
             };
         };
     };
+    list_install_tokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstallToken"][];
+                };
+            };
+        };
+    };
     create_install_token: {
         parameters: {
             query?: never;
@@ -3359,7 +3391,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["InstallToken"];
+                    "application/json": components["schemas"]["CreatedInstallToken"];
                 };
             };
         };

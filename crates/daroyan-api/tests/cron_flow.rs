@@ -76,6 +76,7 @@ async fn tracks_runs_failures_misses_and_timeouts() {
     .await
     .unwrap();
     let http = common::sign_in(&state.database).await;
+    let database = state.database.clone();
     let crons = state.crons.clone();
     let mut engine = AlertEngine::new(
         state.database.clone(),
@@ -384,12 +385,19 @@ async fn tracks_runs_failures_misses_and_timeouts() {
         assert_eq!(response.status(), StatusCode::CREATED);
     }
 
+    assert!(
+        common::count_rows(&database, "cron_failures", "cron_id", &cron_id).await > 0
+    );
     let deleted = http
         .delete(format!("{base}/v1/crons/{cron_id}"))
         .send()
         .await
         .unwrap();
     assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        common::count_rows(&database, "cron_failures", "cron_id", &cron_id).await,
+        0
+    );
     assert_eq!(ping(&base, &key, "", "").await, StatusCode::NOT_FOUND);
     let rules: Vec<Value> = read(&http, format!("{base}/v1/alert-rules"))
         .await
