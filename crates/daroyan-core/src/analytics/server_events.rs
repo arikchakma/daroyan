@@ -85,6 +85,7 @@ pub struct ProcessExit {
     pub code: Option<i32>,
     pub signal: Option<String>,
     pub oom: bool,
+    pub stopped: bool,
     pub ran_secs: Option<u64>,
     pub restarts: Option<u32>,
 }

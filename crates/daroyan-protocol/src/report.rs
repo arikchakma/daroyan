@@ -85,6 +85,20 @@ pub struct ProcessState {
     pub write_speed: u64,
     #[serde(default)]
     pub controllable: bool,
+    #[serde(default)]
+    pub container: Option<Container>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct Container {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub service: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -120,6 +134,8 @@ pub enum EventKind {
         signal: Option<String>,
         #[serde(default)]
         oom: bool,
+        #[serde(default)]
+        stopped: bool,
         #[serde(default)]
         ran_secs: Option<u64>,
         #[serde(default)]

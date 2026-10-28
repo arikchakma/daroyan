@@ -4,14 +4,19 @@ use std::hash::Hash;
 use std::path::Path;
 use std::time::Instant;
 
-use daroyan_protocol::report::{Event, EventKind, ProcessState, ProcessStatus};
+use daroyan_protocol::report::{
+    Container, Event, EventKind, ProcessState, ProcessStatus,
+};
 use log::{info, warn};
 use sysinfo::{Pid, Process, System, Uid, Users};
 
+use crate::check::docker_events::{DockerEvents, read_exit_code, was_oom, was_stopped};
 use crate::collect::{now_millis, per_sec};
 use crate::command::{HeldProcesses, hold};
 use crate::config::{ProcessCheck, Restart, Source};
-use crate::service::{Controller, find_container_id, resolve_controller};
+use crate::service::{
+    Controller, find_container_id, inspect_container, resolve_controller,
+};
 
 pub struct ProcessWatch {
     checks: Vec<ProcessCheck>,
@@ -25,6 +30,9 @@ pub struct ProcessWatch {
     commands: bool,
     families: HashMap<String, HashSet<Pid>>,
     started: HashMap<String, u64>,
+    docker: Option<DockerEvents>,
+    containers: HashMap<String, Container>,
+    last_containers: HashMap<String, Container>,
 }
 
 impl ProcessWatch {
@@ -55,6 +63,10 @@ impl ProcessWatch {
             .iter()
             .map(|check| (check.name.clone(), resolve_controller(check)))
             .collect();
+        let docker = checks
+            .iter()
+            .any(|check| matches!(check.source, Source::Docker(_)))
+            .then(DockerEvents::start);
         Self {
             checks,
             controllers,
@@ -67,6 +79,9 @@ impl ProcessWatch {
             commands,
             families: HashMap::new(),
             started: HashMap::new(),
+            docker,
+            containers: HashMap::new(),
+            last_containers: HashMap::new(),
         }
     }
 
@@ -112,8 +127,22 @@ impl ProcessWatch {
         let controller =
             self.controllers.get(&check.name).cloned().unwrap_or(Controller::None);
 
+        let container = if is_running { self.read_container(check) } else { None };
+        if let Some(container) = &container {
+            self.last_containers.insert(check.name.clone(), container.clone());
+        }
+
         if was_running && !is_running {
-            let exit = controller.read_exit();
+            let mut exit = controller.read_exit();
+            let actions = self
+                .docker
+                .as_ref()
+                .zip(self.last_containers.get(&check.name))
+                .map(|(docker, last)| docker.list_actions(&last.id))
+                .unwrap_or_default();
+            exit.oom |= was_oom(&actions);
+            exit.code = exit.code.or_else(|| read_exit_code(&actions));
+            let stopped = was_stopped(&actions);
             let ran_secs = exit.ran_secs.or_else(|| {
                 let started = self.started.get(&check.name)?;
                 (now_millis() / 1000).checked_sub(*started)
@@ -127,6 +156,7 @@ impl ProcessWatch {
                 code: exit.code,
                 signal: exit.signal,
                 oom: exit.oom,
+                stopped,
                 ran_secs,
                 restarts: exit.restarts,
             }));
@@ -167,6 +197,7 @@ impl ProcessWatch {
             read_speed: per_sec(disk.0, elapsed_secs),
             write_speed: per_sec(disk.1, elapsed_secs),
             controllable: self.commands && controller.is_controllable(),
+            container,
         }
     }
 
@@ -180,18 +211,45 @@ impl ProcessWatch {
         system: &'a System,
         cgroups: &HashMap<Pid, String>,
     ) -> Vec<&'a Process> {
-        let container_id = match &check.source {
-            Source::Docker(container) => self.find_container_id(container),
-            _ => None,
+        let Source::Docker(container) = &check.source else {
+            return self.match_processes(check, system, cgroups, None);
         };
+        let cached = self.container_ids.get(container).cloned();
+        let id = self.find_container_id(container);
+        let matches = self.match_processes(check, system, cgroups, id.as_deref());
+        if !matches.is_empty() {
+            return matches;
+        }
+        self.container_ids.remove(container);
+        if cached.is_none() {
+            return matches;
+        }
+        let fresh = self.find_container_id(container);
+        if fresh.is_none() || fresh == cached {
+            self.container_ids.remove(container);
+            return matches;
+        }
+        let matches = self.match_processes(check, system, cgroups, fresh.as_deref());
+        if matches.is_empty() {
+            self.container_ids.remove(container);
+        }
+        matches
+    }
+
+    fn match_processes<'a>(
+        &self,
+        check: &ProcessCheck,
+        system: &'a System,
+        cgroups: &HashMap<Pid, String>,
+        container_id: Option<&str>,
+    ) -> Vec<&'a Process> {
         let uid = self.uids.get(&check.name);
         let in_cgroup = |process: &Process, is_part: &dyn Fn(&str) -> bool| {
             cgroups
                 .get(&process.pid())
                 .is_some_and(|cgroup| has_cgroup_part(cgroup, is_part))
         };
-
-        let matches: Vec<&Process> = system
+        system
             .processes()
             .values()
             .filter(|process| process.thread_kind().is_none())
@@ -202,18 +260,24 @@ impl ProcessWatch {
                     in_cgroup(process, &|part| part == unit)
                 }
                 Source::Docker(_) => container_id
-                    .as_deref()
                     .is_some_and(|id| in_cgroup(process, &|part| part.contains(id))),
                 Source::Process(pattern) => is_matched(process, pattern),
             })
-            .collect();
+            .collect()
+    }
 
-        if let Source::Docker(container) = &check.source
-            && matches.is_empty()
-        {
-            self.container_ids.remove(container);
+    fn read_container(&mut self, check: &ProcessCheck) -> Option<Container> {
+        let Source::Docker(container) = &check.source else { return None };
+        let id = self.container_ids.get(container)?.clone();
+        if let Some(info) = self.containers.get(&id) {
+            return Some(info.clone());
         }
-        matches
+        let info = inspect_container(&id)?;
+        self.containers.retain(|_, cached| {
+            self.last_containers.values().any(|last| last.id == cached.id)
+        });
+        self.containers.insert(id, info.clone());
+        Some(info)
     }
 
     fn find_container_id(&mut self, container: &str) -> Option<String> {

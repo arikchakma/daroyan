@@ -195,6 +195,7 @@ mod tests {
             read_speed: 0,
             write_speed: 0,
             controllable: true,
+            container: None,
         }
     }
 

@@ -3,6 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use chrono::DateTime;
+use daroyan_protocol::report::Container;
 
 use crate::config::{ProcessCheck, Source};
 
@@ -158,6 +159,26 @@ fn build_name_filter(container: &str) -> String {
     format!("name=^/?{pattern}$")
 }
 
+pub fn inspect_container(id: &str) -> Option<Container> {
+    let output =
+        run_with_sudo_fallback("docker", &["inspect", "--format", "{{json .}}", id])
+            .ok()?;
+    parse_container(&output)
+}
+
+fn parse_container(output: &str) -> Option<Container> {
+    let details: serde_json::Value = serde_json::from_str(output.trim()).ok()?;
+    let labels = &details["Config"]["Labels"];
+    let label = |key: &str| labels[key].as_str().map(str::to_string);
+    Some(Container {
+        id: details["Id"].as_str()?.to_string(),
+        name: details["Name"].as_str()?.trim_start_matches('/').to_string(),
+        image: details["Config"]["Image"].as_str().unwrap_or_default().to_string(),
+        project: label("com.docker.compose.project"),
+        service: label("com.docker.compose.service"),
+    })
+}
+
 pub fn find_container_ids(container: &str) -> Vec<String> {
     let filter = build_name_filter(container);
     run_with_sudo_fallback(
@@ -277,6 +298,22 @@ mod tests {
             (exit.code, exit.signal, exit.oom, exit.ran_secs),
             (Some(1), None, false, None)
         );
+    }
+
+    #[test]
+    fn reads_containers() {
+        let output = r#"{"Id":"4f2a9c","Name":"/inboxjot-api-1","Config":{"Image":"ghcr.io/inboxjot/api:0.0.19","Labels":{"com.docker.compose.project":"inboxjot","com.docker.compose.service":"api"}}}"#;
+        assert_eq!(
+            parse_container(output),
+            Some(Container {
+                id: "4f2a9c".to_string(),
+                name: "inboxjot-api-1".to_string(),
+                image: "ghcr.io/inboxjot/api:0.0.19".to_string(),
+                project: Some("inboxjot".to_string()),
+                service: Some("api".to_string()),
+            })
+        );
+        assert_eq!(parse_container("[]"), None);
     }
 
     #[test]

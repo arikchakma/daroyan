@@ -219,6 +219,9 @@ impl AlertMessage<'_> {
             _ if exit.oom => Text::default()
                 .bold(name)
                 .plain(" ran out of memory, so the kernel killed it."),
+            _ if exit.stopped => Text::default().bold(name).plain(
+                " was stopped on purpose, with docker stop or docker kill. It has not started again.",
+            ),
             (Some(signal), _) => Text::default()
                 .bold(name)
                 .plain(" was killed by ")
@@ -239,6 +242,7 @@ impl AlertMessage<'_> {
         let mut fields = vec![self.target_field()];
         let reason = match (exit.oom, &exit.signal, exit.code) {
             (true, _, _) => Some("Out of memory".to_string()),
+            _ if exit.stopped => Some("Stopped on purpose".to_string()),
             (false, Some(signal), Some(code)) => Some(format!("{signal} · code {code}")),
             (false, Some(signal), None) => Some(signal.clone()),
             (false, None, Some(code)) => Some(format!("Code {code}")),
@@ -960,6 +964,7 @@ mod tests {
             code: Some(137),
             signal: Some("SIGKILL".to_string()),
             oom: true,
+            stopped: false,
             ran_secs: Some(187_200),
             restarts: Some(2),
         });
@@ -1000,6 +1005,17 @@ mod tests {
             "inboxjot-api-blue exited with code 1. Its last log lines usually show why."
         );
         assert_eq!(failed.fields[1], Field::new("Exit", "Code 1"));
+        let stopped = crash(ProcessExit {
+            code: Some(143),
+            signal: Some("SIGTERM".to_string()),
+            stopped: true,
+            ..ProcessExit::default()
+        });
+        assert_eq!(
+            stopped.summary.to_string(),
+            "inboxjot-api-blue was stopped on purpose, with docker stop or docker kill. It has not started again."
+        );
+        assert_eq!(stopped.fields[1], Field::new("Exit", "Stopped on purpose"));
         let unknown = crash(ProcessExit::default());
         assert_eq!(unknown.summary.to_string(), "inboxjot-api-blue stopped.");
         assert_eq!(unknown.fields[1].label, "Started");

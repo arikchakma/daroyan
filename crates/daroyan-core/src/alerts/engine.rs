@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
 use crate::agents::Agents;
+use crate::alerts::deploys::{DEPLOY_WINDOW_SECS, DeployNote, DeployWatch};
 use crate::alerts::evaluate::{
     Level, Reading, ServerSnapshot, find_readings, format_percent, is_past, make_reading,
     rate,
@@ -105,6 +106,7 @@ pub struct AlertEngine {
     servers: HashMap<String, Server>,
     checks: HashMap<String, UptimeCheck>,
     down: HashSet<String>,
+    deploys: DeployWatch,
 }
 
 enum Slot {
@@ -174,6 +176,7 @@ impl AlertEngine {
             servers: HashMap::new(),
             checks: HashMap::new(),
             down: HashSet::new(),
+            deploys: DeployWatch::default(),
         }
     }
 
@@ -403,6 +406,11 @@ impl AlertEngine {
         self.checks =
             checks.iter().map(|check| (check.id.clone(), check.clone())).collect();
         self.down = down.keys().cloned().collect();
+        for server in &facts {
+            if let Some(report) = &server.report {
+                self.deploys.observe(&server.server.id, &report.processes, now);
+            }
+        }
         let target_names: HashMap<String, String> = servers
             .iter()
             .map(|server| (server.id.clone(), server.name.clone()))
@@ -464,7 +472,15 @@ impl AlertEngine {
                     breaching.insert(key.clone());
                     self.clearing.remove(&key);
                     let since = *self.pending.entry(key.clone()).or_insert(now);
-                    if (now - since).num_seconds() < for_secs {
+                    let hold =
+                        if matches!(parsed.condition, Condition::ProcessStopped { .. })
+                            && self.deploys.is_container(&target.id, &reading.subject)
+                        {
+                            for_secs.max(DEPLOY_WINDOW_SECS)
+                        } else {
+                            for_secs
+                        };
+                    if (now - since).num_seconds() < hold {
                         continue;
                     }
                     match firing_by_key.get(&key) {
@@ -537,6 +553,7 @@ impl AlertEngine {
                 .await?;
         }
 
+        self.send_deploy_notes(&rules, &facts, &integrations, now);
         self.pending.retain(|key, _| breaching.contains(key));
         let open: HashSet<AlertKey> = firing.iter().map(to_alert_key).collect();
         self.clearing.retain(|key, _| open.contains(key));
@@ -979,6 +996,64 @@ impl AlertEngine {
             }
         }
         Ok(())
+    }
+
+    fn send_deploy_notes(
+        &mut self,
+        rules: &[AlertRule],
+        facts: &[ServerFacts<'_>],
+        integrations: &[Integration],
+        now: DateTime<Utc>,
+    ) {
+        for (server_id, replacements) in self.deploys.take_ready(now) {
+            let Some(server) = facts.iter().find(|server| server.server.id == server_id)
+            else {
+                continue;
+            };
+            if self.maintained.contains(&server_id) {
+                continue;
+            }
+            let watching: Vec<(&AlertRule, ParsedRule)> = rules
+                .iter()
+                .filter(|rule| rule.enabled)
+                .filter_map(|rule| Some((rule, parse_rule(rule)?)))
+                .filter(|(_, parsed)| match &parsed.condition {
+                    Condition::ProcessStopped { name } => {
+                        name.as_ref().is_none_or(|name| {
+                            replacements
+                                .iter()
+                                .any(|replacement| &replacement.name == name)
+                        })
+                    }
+                    _ => false,
+                })
+                .filter(|(_, parsed)| parsed.scope.includes(&server_id, &server.labels))
+                .collect();
+            let Some((first, _)) = watching.first() else { continue };
+            let mut recipients: Vec<String> = Vec::new();
+            for (_, parsed) in &watching {
+                for id in &parsed.integration_ids {
+                    if !recipients.contains(id) {
+                        recipients.push(id.clone());
+                    }
+                }
+            }
+            let notice = DeployNote {
+                server_id: &server_id,
+                server_name: &server.server.name,
+                labels: &server.labels,
+                replacements: &replacements,
+                app_url: self.app_url.as_deref(),
+            }
+            .notice();
+            tracing::info!(server_id, count = replacements.len(), "deploy noted");
+            let log = DeliveryLog {
+                rule_id: first.id.clone(),
+                alert_id: None,
+                reply: None,
+            };
+            notify_integrations(&self.database, &recipients, integrations, &notice, &log);
+        }
     }
 
     fn take_slot(&mut self, rule_id: &str, limit: u32, now: DateTime<Utc>) -> Slot {
