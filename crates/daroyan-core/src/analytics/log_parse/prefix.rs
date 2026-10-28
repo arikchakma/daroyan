@@ -231,9 +231,9 @@ pub(super) fn take_logger(text: &str, parsed: &mut ParsedLine) -> bool {
     let (Some(logger), Some("-")) = (tokens.next(), tokens.next()) else {
         return false;
     };
-    let is_name = logger
-        .chars()
-        .all(|character| character.is_alphanumeric() || "._$:/".contains(character));
+    let is_name = logger.chars().all(|character| {
+        character.is_alphanumeric() || matches!(character, '.' | '_' | '$' | ':' | '/')
+    });
     if !is_name {
         return false;
     }

@@ -159,7 +159,22 @@ fn escape_slack(text: &str) -> String {
 fn escape_markdown(text: &str) -> String {
     text.chars()
         .fold(String::with_capacity(text.len()), |mut escaped, character| {
-            if "\\*_~`|[]()<>#@".contains(character) {
+            if matches!(
+                character,
+                '\\' | '*'
+                    | '_'
+                    | '~'
+                    | '`'
+                    | '|'
+                    | '['
+                    | ']'
+                    | '('
+                    | ')'
+                    | '<'
+                    | '>'
+                    | '#'
+                    | '@'
+            ) {
                 escaped.push('\\');
             }
             escaped.push(character);

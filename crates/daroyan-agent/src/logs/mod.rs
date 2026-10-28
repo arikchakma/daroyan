@@ -148,7 +148,7 @@ fn is_exception_line(text: &str) -> bool {
     let is_name = !name.is_empty()
         && name.starts_with(|character: char| character.is_ascii_alphabetic())
         && name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || "._".contains(character)
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_')
         });
     let is_class = name.rsplit('.').next().is_some_and(|class| {
         class.starts_with(|character: char| character.is_ascii_uppercase())

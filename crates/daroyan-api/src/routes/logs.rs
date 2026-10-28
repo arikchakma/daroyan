@@ -88,7 +88,9 @@ fn read_term(token: String, colon: Option<usize>, negate: bool) -> Option<Search
         !key.is_empty()
             && value.len() > 1
             && !value.starts_with("://")
-            && key.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+            && key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     });
     Some(match split {
         Some((key, value)) => SearchTerm {

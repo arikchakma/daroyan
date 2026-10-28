@@ -92,9 +92,9 @@ pub(super) fn split_logfmt(text: &str) -> Option<Map<String, Value>> {
     while !rest.is_empty() {
         let (key, after) = rest.split_once('=')?;
         if key.is_empty()
-            || !key
-                .chars()
-                .all(|character| character.is_alphanumeric() || "_.-".contains(character))
+            || !key.chars().all(|character| {
+                character.is_alphanumeric() || matches!(character, '_' | '.' | '-')
+            })
         {
             return None;
         }
