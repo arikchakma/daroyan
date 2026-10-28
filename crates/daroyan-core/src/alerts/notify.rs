@@ -430,11 +430,12 @@ fn slack_section(text: String) -> Value {
 }
 
 fn build_slack_text(notice: &Notice) -> String {
-    let summary = notice.summary().to_string();
+    let title = escape_slack(&notice.title);
+    let summary = escape_slack(&notice.summary().to_string());
     if summary.is_empty() {
-        format!("{}{}", notice.tone.emoji(), notice.title)
+        format!("{}{title}", notice.tone.emoji())
     } else {
-        format!("{}{}: {summary}", notice.tone.emoji(), notice.title)
+        format!("{}{title}: {summary}", notice.tone.emoji())
     }
 }
 
@@ -685,6 +686,19 @@ fn describe_error(error: &reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escapes_the_slack_notification_text() {
+        let notice = Notice {
+            title: "Rule & co".to_string(),
+            body: "<!channel> <https://evil.test|Open>".to_string(),
+            ..make_notice(Details::default())
+        };
+        assert_eq!(
+            build_slack_text(&notice),
+            "🔴 Rule &amp; co: &lt;!channel&gt; &lt;https://evil.test|Open&gt;"
+        );
+    }
 
     #[test]
     fn summarizes_and_escapes() {
