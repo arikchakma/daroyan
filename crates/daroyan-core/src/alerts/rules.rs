@@ -180,6 +180,18 @@ pub fn format_clock(at: DateTime<Utc>, time_zone: Tz) -> String {
     if time_zone == Tz::UTC { format!("{clock} UTC") } else { clock }
 }
 
+pub fn format_moment(at: DateTime<Utc>, now: DateTime<Utc>, time_zone: Tz) -> String {
+    let local = at.with_timezone(&time_zone);
+    let today = now.with_timezone(&time_zone).date_naive();
+    let day = match (today - local.date_naive()).num_days() {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        _ => local.format("%b %-d").to_string(),
+    };
+    let zone = if time_zone == Tz::UTC { " UTC" } else { "" };
+    format!("{day} at {}{zone}", local.format("%-I:%M %p"))
+}
+
 fn read_clock(text: &str) -> Option<u32> {
     let (hours, minutes) = text.split_once(':')?;
     let hours: u32 = hours.parse().ok()?;

@@ -3,7 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use daroyan_core::alerts::backtest::backtest_rule;
 use daroyan_core::alerts::engine::{deliver_notice, parse_rule};
-use daroyan_core::alerts::notify::Notice;
+use daroyan_core::alerts::notify::{Details, Notice, Tone};
 use daroyan_core::alerts::rules::{
     Condition, RuleOptions, Scope, describe_condition, validate_options,
 };
@@ -423,6 +423,7 @@ async fn test_alert_rule(
     check_integrations(&state, &body.integration_ids).await?;
     let notice = Notice {
         event: "test",
+        tone: Tone::Note,
         title: format!("Test: {}", read_name(&body.name)?),
         body: format!(
             "This is a test. Real alerts for this rule look like this.\n{}",
@@ -430,6 +431,7 @@ async fn test_alert_rule(
         ),
         url: state.config.app_url.clone(),
         data: json!({}),
+        details: Details::default(),
     };
     let integrations = state.database.list_integrations().await?;
     let mut failures = Vec::new();

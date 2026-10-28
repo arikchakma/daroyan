@@ -9,7 +9,7 @@ use daroyan_core::alerts::connect::{
 };
 use daroyan_core::alerts::engine::deliver_notice;
 use daroyan_core::alerts::integrations::{IntegrationConfig, validate_integration};
-use daroyan_core::alerts::notify::{Notice, send_notice};
+use daroyan_core::alerts::notify::{Details, Notice, Tone, send_notice};
 use daroyan_core::db::entities::integrations::Model as Integration;
 use daroyan_core::db::ids::IntegrationId;
 use daroyan_core::db::queries::integrations::{IntegrationChanges, NewIntegration};
@@ -78,11 +78,13 @@ fn read_name(name: &str) -> Result<String> {
 fn make_test_notice(state: &AppState) -> Notice {
     Notice {
         event: "test",
+        tone: Tone::Note,
         title: "Test from Daroyan".to_string(),
         body: "This integration works. Alerts for its rules will arrive here."
             .to_string(),
         url: state.config.app_url.clone(),
         data: json!({}),
+        details: Details::default(),
     }
 }
 
@@ -530,10 +532,12 @@ async fn finish_slack_install(
     };
     let welcome = Notice {
         event: "test",
+        tone: Tone::Note,
         title: "Daroyan is connected".to_string(),
         body: format!("Alerts for the rules you pick will arrive in #{}.", channel.name),
         url: state.config.app_url.clone(),
         data: json!({}),
+        details: Details::default(),
     };
     send_notice(&config, &welcome).await.map_err(|error| {
         Error::new(

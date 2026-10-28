@@ -12,7 +12,8 @@ use crate::alerts::evaluate::{
     rate,
 };
 use crate::alerts::integrations::IntegrationConfig;
-use crate::alerts::notify::{Notice, send_notice};
+use crate::alerts::message::{AlertMessage, Moment};
+use crate::alerts::notify::{Details, Notice, Tone, send_notice};
 use crate::alerts::rules::{
     Condition, NoData, RuleOptions, Scope, Target, describe_rule, format_clock,
     format_duration, format_ms, read_log_severity, read_time_zone,
@@ -97,6 +98,7 @@ pub struct AlertEngine {
     sent: HashMap<String, Vec<DateTime<Utc>>>,
     limited: HashMap<String, DateTime<Utc>>,
     maintained: HashSet<String>,
+    labels: HashMap<String, Vec<String>>,
 }
 
 enum Slot {
@@ -162,6 +164,7 @@ impl AlertEngine {
             sent: HashMap::new(),
             limited: HashMap::new(),
             maintained: HashSet::new(),
+            labels: HashMap::new(),
         }
     }
 
@@ -380,6 +383,10 @@ impl AlertEngine {
                 .into_iter()
                 .collect();
         let facts: Vec<ServerFacts> = servers.iter().map(read_server_facts).collect();
+        self.labels = facts
+            .iter()
+            .map(|server| (server.server.id.clone(), server.labels.clone()))
+            .collect();
         let target_names: HashMap<String, String> = servers
             .iter()
             .map(|server| (server.id.clone(), server.name.clone()))
@@ -451,7 +458,6 @@ impl AlertEngine {
                                 &parsed,
                                 alert,
                                 &target.name,
-                                target.target,
                                 &reading,
                                 level,
                                 &integrations,
@@ -551,6 +557,41 @@ impl AlertEngine {
         }
     }
 
+    fn make_alert_notice(
+        &self,
+        rule: &AlertRule,
+        parsed: &ParsedRule,
+        alert: &Alert,
+        target_name: &str,
+        moment: Moment,
+        prefix: &str,
+        body: String,
+    ) -> Notice {
+        let target_id = get_target_id(alert);
+        let target = get_target(alert);
+        let message = AlertMessage {
+            rule,
+            condition: &parsed.condition,
+            options: &parsed.options,
+            alert,
+            target,
+            target_id: &target_id,
+            target_name,
+            labels: self.labels.get(&target_id).map_or(&[], Vec::as_slice),
+            app_url: self.app_url.as_deref(),
+            now: Utc::now(),
+        };
+        Notice {
+            event: if moment.is_resolved() { "alert.resolved" } else { "alert.firing" },
+            tone: moment.tone(&alert.severity),
+            title: Self::make_title(parsed, prefix, rule),
+            body,
+            url: self.get_target_url(target, &target_id),
+            data: describe_alert(rule, target, &target_id, target_name, alert),
+            details: message.details(moment),
+        }
+    }
+
     async fn fire_alert(
         &mut self,
         rule: &AlertRule,
@@ -583,18 +624,21 @@ impl AlertEngine {
             .mark_alert_rule_fired(&AlertRuleId::from(rule.id.as_str()), Utc::now())
             .await?;
         let prefix = if level == Level::Warning { "Warning" } else { "Critical" };
-        let notice = Notice {
-            event: "alert.firing",
-            title: Self::make_title(parsed, prefix, rule),
-            body: format!(
-                "{target_name} · {}: {}\n{}",
-                alert.subject,
-                alert.value,
-                self.describe(parsed, rule)
-            ),
-            url: self.get_target_url(target, target_id),
-            data: describe_alert(rule, target, target_id, target_name, &alert),
-        };
+        let body = format!(
+            "{target_name} · {}: {}\n{}",
+            alert.subject,
+            alert.value,
+            self.describe(parsed, rule)
+        );
+        let notice = self.make_alert_notice(
+            rule,
+            parsed,
+            &alert,
+            target_name,
+            Moment::Firing,
+            prefix,
+            body,
+        );
         self.notify(
             parsed.recipients(level),
             integrations,
@@ -632,7 +676,6 @@ impl AlertEngine {
         parsed: &ParsedRule,
         alert: &Alert,
         target_name: &str,
-        target: Target,
         reading: &Reading,
         level: Level,
         integrations: &[Integration],
@@ -651,19 +694,21 @@ impl AlertEngine {
             value: reading.label.clone(),
             ..alert.clone()
         };
-        let target_id = get_target_id(alert);
-        let notice = Notice {
-            event: "alert.firing",
-            title: Self::make_title(parsed, "Critical", rule),
-            body: format!(
-                "{target_name} · {}: {} (was a warning)\n{}",
-                alert.subject,
-                reading.label,
-                self.describe(parsed, rule)
-            ),
-            url: self.get_target_url(target, &target_id),
-            data: describe_alert(rule, target, &target_id, target_name, &escalated),
-        };
+        let body = format!(
+            "{target_name} · {}: {} (was a warning)\n{}",
+            alert.subject,
+            reading.label,
+            self.describe(parsed, rule)
+        );
+        let notice = self.make_alert_notice(
+            rule,
+            parsed,
+            &escalated,
+            target_name,
+            Moment::Escalated,
+            "Critical",
+            body,
+        );
         self.notify(parsed.recipients(level), integrations, &notice, rule, parsed, alert)
             .await
     }
@@ -696,24 +741,26 @@ impl AlertEngine {
             .await?;
         let level = Level::read(&alert.severity);
         let target_id = get_target_id(alert);
-        let target = get_target(alert);
         let target_name =
             names.get(&target_id).cloned().unwrap_or_else(|| target_id.clone());
         let lasted =
             u32::try_from((now - alert.started_at).num_seconds()).unwrap_or_default();
-        let notice = Notice {
-            event: "alert.firing",
-            title: Self::make_title(parsed, "Still firing", rule),
-            body: format!(
-                "{target_name} · {}: {} for {}\n{}",
-                alert.subject,
-                alert.value,
-                format_duration(lasted),
-                self.describe(parsed, rule)
-            ),
-            url: self.get_target_url(target, &target_id),
-            data: describe_alert(rule, target, &target_id, &target_name, alert),
-        };
+        let body = format!(
+            "{target_name} · {}: {} for {}\n{}",
+            alert.subject,
+            alert.value,
+            format_duration(lasted),
+            self.describe(parsed, rule)
+        );
+        let notice = self.make_alert_notice(
+            rule,
+            parsed,
+            alert,
+            &target_name,
+            Moment::Reminder { lasted_secs: lasted },
+            "Still firing",
+            body,
+        );
         self.notify(parsed.recipients(level), integrations, &notice, rule, parsed, alert)
             .await
     }
@@ -738,19 +785,20 @@ impl AlertEngine {
             status: "resolved".to_string(),
             ..alert.clone()
         };
-        let target_id = get_target_id(alert);
-        let target = get_target(alert);
-        let notice = Notice {
-            event: "alert.resolved",
-            title: Self::make_title(parsed, "Resolved", rule),
-            body: format!(
-                "{target_name} · {} is back to normal after {}",
-                alert.subject,
-                format_duration(lasted)
-            ),
-            url: self.get_target_url(target, &target_id),
-            data: describe_alert(rule, target, &target_id, target_name, &resolved),
-        };
+        let body = format!(
+            "{target_name} · {} is back to normal after {}",
+            alert.subject,
+            format_duration(lasted)
+        );
+        let notice = self.make_alert_notice(
+            rule,
+            parsed,
+            &resolved,
+            target_name,
+            Moment::Resolved { lasted_secs: lasted },
+            "Resolved",
+            body,
+        );
         self.notify(
             parsed.recipients(Level::read(&alert.severity)),
             integrations,
@@ -806,23 +854,25 @@ impl AlertEngine {
                     continue;
                 }
                 let target_id = get_target_id(alert);
-                let target = get_target(alert);
                 let target_name =
                     names.get(&target_id).cloned().unwrap_or_else(|| target_id.clone());
                 let lasted = u32::try_from((now - alert.started_at).num_seconds())
                     .unwrap_or_default();
-                let notice = Notice {
-                    event: "alert.firing",
-                    title: Self::make_title(&parsed, "Still firing", rule),
-                    body: format!(
-                        "{target_name} · {}: {} for {}\nThe mute ended and it is still firing.",
-                        alert.subject,
-                        alert.value,
-                        format_duration(lasted)
-                    ),
-                    url: self.get_target_url(target, &target_id),
-                    data: describe_alert(rule, target, &target_id, &target_name, alert),
-                };
+                let body = format!(
+                    "{target_name} · {}: {} for {}\nThe mute ended and it is still firing.",
+                    alert.subject,
+                    alert.value,
+                    format_duration(lasted)
+                );
+                let notice = self.make_alert_notice(
+                    rule,
+                    &parsed,
+                    alert,
+                    &target_name,
+                    Moment::MuteEnded { lasted_secs: lasted },
+                    "Still firing",
+                    body,
+                );
                 let level = Level::read(&alert.severity);
                 self.notify(
                     parsed.recipients(level),
@@ -897,6 +947,7 @@ impl AlertEngine {
                 let time_zone = read_time_zone(parsed.options.time_zone.as_deref());
                 let summary = Notice {
                     event: "alert.limited",
+                    tone: Tone::Warning,
                     title: Self::make_title(parsed, "Limit reached", rule),
                     body: format!(
                         "{limit} messages in the last hour, so this rule is quiet until {}\nSee every alert in Daroyan.",
@@ -909,6 +960,7 @@ impl AlertEngine {
                         "rule": { "id": rule.id, "name": rule.name },
                         "quiet_until": until.format(crate::time::ISO_FORMAT).to_string(),
                     }),
+                    details: Details::default(),
                 };
                 let log = DeliveryLog { rule_id: rule.id.clone(), alert_id: None };
                 notify_integrations(
