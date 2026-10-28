@@ -260,27 +260,17 @@ pub async fn declare_from_rule(
     app_url: Option<&str>,
     fire: RuleFire<'_>,
 ) -> Result<()> {
-    if !fire.rule.declare_incident {
+    let rule = fire.rule;
+    if !rule.declare_incident {
         return Ok(());
     }
-    declare_incident(database, app_url, fire, None).await.map(drop)
-}
-
-pub async fn declare_incident(
-    database: &Database,
-    app_url: Option<&str>,
-    fire: RuleFire<'_>,
-    declared_by: Option<&str>,
-) -> Result<Incident> {
-    let rule = fire.rule;
     let rule_item = RelatedItem { kind: "rule".to_string(), id: rule.id.clone() };
-    if let Some(open) =
-        database.list_open_incidents().await?.into_iter().find(|incident| {
-            incident.kind == KIND_INCIDENT
-                && read_json::<Vec<RelatedItem>>(&incident.related).contains(&rule_item)
-        })
-    {
-        return Ok(open);
+    let is_declared = database.list_open_incidents().await?.iter().any(|incident| {
+        incident.kind == KIND_INCIDENT
+            && read_json::<Vec<RelatedItem>>(&incident.related).contains(&rule_item)
+    });
+    if is_declared {
+        return Ok(());
     }
     let now = Utc::now();
     let components: Vec<AffectedComponent> = ["check", "cron"]
@@ -324,16 +314,10 @@ pub async fn declare_incident(
             },
         )
         .await?;
-    let message = match declared_by {
-        Some(name) => format!(
-            "{} fired on {}. {name} declared this incident from Slack.",
-            rule.name, fire.target_name
-        ),
-        None => format!(
-            "{} fired on {}. Daroyan declared this incident.",
-            rule.name, fire.target_name
-        ),
-    };
+    let message = format!(
+        "{} fired on {}. Daroyan declared this incident.",
+        rule.name, fire.target_name
+    );
     add_entry(
         database,
         &incident.id,
@@ -348,8 +332,7 @@ pub async fn declare_incident(
     )
     .await?;
     tracing::info!(incident_id = %incident.id, rule_id = %rule.id, "incident declared from a rule");
-    notify_incident(database, app_url, &incident, INVESTIGATING, &message).await?;
-    Ok(incident)
+    notify_incident(database, app_url, &incident, INVESTIGATING, &message).await
 }
 
 pub fn list_maintained_targets(incidents: &[Incident]) -> Vec<String> {

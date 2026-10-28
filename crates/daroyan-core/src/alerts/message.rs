@@ -3,7 +3,6 @@ use chrono_tz::Tz;
 use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
-use crate::alerts::actions::{DECLARE, MUTE_DAY, MUTE_HOUR, RESTART};
 use crate::alerts::evaluate::Level;
 use crate::alerts::facts::{
     AlertFacts, CertFacts, CheckFacts, DiskFacts, LogFacts, OfflineFacts, ProcessFacts,
@@ -72,7 +71,6 @@ pub struct AlertMessage<'a> {
     pub target_name: &'a str,
     pub labels: &'a [String],
     pub app_url: Option<&'a str>,
-    pub interactive: bool,
     pub now: DateTime<Utc>,
 }
 
@@ -278,11 +276,11 @@ impl AlertMessage<'_> {
                 .collect(),
         });
         let mut links = self.open_target();
-        if self.interactive && facts.controllable {
-            let restart = Link::new("Restart", self.alert_url().unwrap_or_default())
-                .primary()
-                .action(RESTART, &self.alert.id);
-            links = std::iter::once(restart)
+        if facts.controllable
+            && let Some(restart) =
+                self.target_link("Restart", "restart", &self.alert.subject)
+        {
+            links = std::iter::once(restart.primary())
                 .chain(
                     links
                         .into_iter()
@@ -592,14 +590,44 @@ impl AlertMessage<'_> {
         self.app_url.map(|url| url.trim_end_matches('/'))
     }
 
-    fn open_target(&self) -> Vec<Link> {
-        let Some(app_url) = self.app_url() else { return Vec::new() };
-        let (label, path) = match self.target {
-            Target::Server => ("Open server", "servers"),
-            Target::Check => ("Open check", "uptime"),
-            Target::Cron => ("Open cron", "crons"),
+    fn target_url(&self) -> Option<String> {
+        let path = match self.target {
+            Target::Server => "servers",
+            Target::Check => "uptime",
+            Target::Cron => "crons",
         };
-        vec![Link::new(label, format!("{app_url}/{path}/{}", self.target_id)).primary()]
+        Some(format!("{}/{path}/{}", self.app_url()?, self.target_id))
+    }
+
+    fn target_link(&self, label: &str, param: &str, value: &str) -> Option<Link> {
+        let url = Url::parse_with_params(&self.target_url()?, [(param, value)]).ok()?;
+        Some(Link::new(label, url.as_str()))
+    }
+
+    fn open_target(&self) -> Vec<Link> {
+        let label = match self.target {
+            Target::Server => "Open server",
+            Target::Check => "Open check",
+            Target::Cron => "Open cron",
+        };
+        self.target_url()
+            .map(|url| Link::new(label, url).primary())
+            .into_iter()
+            .collect()
+    }
+
+    fn action_links(&self) -> Vec<Link> {
+        let id = self.alert.id.as_str();
+        let mute = match self.condition {
+            Condition::Offline | Condition::ProcessStopped { .. } => None,
+            _ => self.target_link("Mute", "mute", id),
+        };
+        let declare = (Level::read(&self.alert.severity) == Level::Critical
+            && matches!(self.condition, Condition::Logs { .. } | Condition::UptimeDown))
+        .then(|| self.target_link("Declare incident", "declare", id))
+        .flatten()
+        .map(Link::danger);
+        mute.into_iter().chain(declare).collect()
     }
 
     fn logs_link(&self) -> Option<Link> {
@@ -623,32 +651,6 @@ impl AlertMessage<'_> {
         }
         let url = Url::parse_with_params(&format!("{app_url}/logs"), params).ok()?;
         Some(Link::new("Open logs", url.as_str()))
-    }
-
-    fn alert_url(&self) -> Option<String> {
-        self.app_url()
-            .map(|app_url| format!("{app_url}/alerts/{}", self.rule.id))
-    }
-
-    fn action_links(&self) -> Vec<Link> {
-        let Some(url) = self.alert_url().filter(|_| self.interactive) else {
-            return Vec::new();
-        };
-        let id = self.alert.id.as_str();
-        let mut links = Vec::new();
-        match self.condition {
-            Condition::Offline | Condition::ProcessStopped { .. } => {}
-            Condition::CertDays { .. } => {
-                links.push(Link::new("Mute 1 day", url.as_str()).action(MUTE_DAY, id));
-            }
-            _ => links.push(Link::new("Mute 1h", url.as_str()).action(MUTE_HOUR, id)),
-        }
-        if Level::read(&self.alert.severity) == Level::Critical
-            && matches!(self.condition, Condition::Logs { .. } | Condition::UptimeDown)
-        {
-            links.push(Link::new("Declare incident", url).danger().action(DECLARE, id));
-        }
-        links
     }
 
     fn firing_links(&self) -> Vec<Link> {
@@ -818,7 +820,6 @@ mod tests {
         facts: AlertFacts,
         target: Target,
         labels: Vec<String>,
-        interactive: bool,
     }
 
     impl Case {
@@ -831,7 +832,6 @@ mod tests {
                 facts,
                 target: Target::Server,
                 labels: vec!["production".to_string()],
-                interactive: false,
             }
         }
 
@@ -847,7 +847,6 @@ mod tests {
                 target_name: "Inboxjot Server",
                 labels: &self.labels,
                 app_url: Some("https://daroyan.test/"),
-                interactive: self.interactive,
                 now: at(9, 0),
             }
             .details(moment)
@@ -899,65 +898,13 @@ mod tests {
                 lines: vec!["11× HTTP export failed status: 404".to_string()],
             })
         );
-        assert_eq!(labels(&details.links), ["Open logs", "View alert"]);
+        assert_eq!(
+            labels(&details.links),
+            ["Open logs", "View alert", "Mute", "Declare incident"]
+        );
         assert_eq!(
             details.links[0].url,
             "https://daroyan.test/logs?server_id=server_1&range=1h&level=error&service=Inboxjot+API"
-        );
-    }
-
-    #[test]
-    fn adds_action_buttons_when_slack_buttons_are_set_up() {
-        let mut spike = Case::new(
-            logs_condition(),
-            make_alert("Inboxjot API", "11 error lines in 5m"),
-            AlertFacts::Logs(LogFacts::default()),
-        );
-        assert_eq!(
-            labels(&spike.details(Moment::Firing).links),
-            ["Open logs", "View alert"]
-        );
-        spike.interactive = true;
-        let links = spike.details(Moment::Firing).links;
-        assert_eq!(
-            labels(&links),
-            ["Open logs", "View alert", "Mute 1h", "Declare incident"]
-        );
-        assert_eq!(links[2].action.as_ref().unwrap().id, MUTE_HOUR);
-        assert_eq!(links[2].action.as_ref().unwrap().value, "alert_1");
-        assert_eq!(links[3].style, LinkStyle::Danger);
-        assert!(
-            spike
-                .details(Moment::Resolved { lasted_secs: 60 })
-                .links
-                .iter()
-                .all(|link| link.action.is_none())
-        );
-
-        let mut crashed = Case::new(
-            Condition::ProcessStopped { name: None },
-            make_alert("worker", "Stopped"),
-            AlertFacts::Process(ProcessFacts {
-                controllable: true,
-                ..ProcessFacts::default()
-            }),
-        );
-        crashed.interactive = true;
-        let links = crashed.details(Moment::Firing).links;
-        assert_eq!(labels(&links), ["Restart", "Open server", "View alert"]);
-        assert_eq!(links[0].style, LinkStyle::Primary);
-        assert_eq!(links[1].style, LinkStyle::Default);
-
-        let mut cert = Case::new(
-            Condition::CertDays { below: 14.0 },
-            make_alert("Certificate", "12 days left"),
-            AlertFacts::None,
-        );
-        cert.interactive = true;
-        cert.alert.severity = "warning".to_string();
-        assert_eq!(
-            labels(&cert.details(Moment::Firing).links),
-            ["Open server", "View alert", "Mute 1 day"]
         );
     }
 
@@ -1047,7 +994,10 @@ mod tests {
                 "server.js          0.1 cores   164 MB",
             ]
         );
-        assert_eq!(labels(&details.links), ["Open server", "View alert", "Runbook"]);
+        assert_eq!(
+            labels(&details.links),
+            ["Open server", "View alert", "Runbook", "Mute"]
+        );
     }
 
     fn crash(exit: ProcessExit) -> Details {
@@ -1093,7 +1043,33 @@ mod tests {
             details.snippet.unwrap().lines,
             ["08:53:00 ERROR failed to allocate 64 MB"]
         );
-        assert_eq!(labels(&details.links), ["Open server", "Open logs", "View alert"]);
+        assert_eq!(
+            labels(&details.links),
+            ["Restart", "Open server", "Open logs", "View alert"]
+        );
+        assert_eq!(
+            details.links[0].url,
+            "https://daroyan.test/servers/server_1?restart=inboxjot-api-blue"
+        );
+        assert_eq!(details.links[0].style, LinkStyle::Primary);
+        assert_eq!(details.links[1].style, LinkStyle::Default);
+    }
+
+    #[test]
+    fn links_mute_and_declare_to_the_target_page() {
+        let spike = Case::new(
+            logs_condition(),
+            make_alert("Inboxjot API", "11 error lines in 5m"),
+            AlertFacts::Logs(LogFacts::default()),
+        );
+        let links = spike.details(Moment::Firing).links;
+        assert_eq!(links[2].url, "https://daroyan.test/servers/server_1?mute=alert_1");
+        assert_eq!(links[3].url, "https://daroyan.test/servers/server_1?declare=alert_1");
+        assert_eq!(links[3].style, LinkStyle::Danger);
+        assert_eq!(
+            labels(&spike.details(Moment::Resolved { lasted_secs: 60 }).links),
+            ["Open server"]
+        );
     }
 
     #[test]
@@ -1181,7 +1157,10 @@ mod tests {
             ["DNS 12 ms · Connect 31 ms · TLS 48 ms · First byte timed out"]
         );
         assert_eq!(details.context.as_deref(), Some("Checked every 1 min"));
-        assert_eq!(labels(&details.links), ["Open check", "View alert"]);
+        assert_eq!(
+            labels(&details.links),
+            ["Open check", "View alert", "Mute", "Declare incident"]
+        );
     }
 
     #[test]

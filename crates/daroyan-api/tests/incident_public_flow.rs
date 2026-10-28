@@ -73,7 +73,6 @@ async fn publishes_incidents_and_maintenance_on_status_pages() {
         slack_api_url: "https://slack.com".to_string(),
         slack_client_id: None,
         slack_client_secret: None,
-        slack_signing_secret: None,
         discord_client_id: None,
         discord_client_secret: None,
         telegram_bot_token: None,

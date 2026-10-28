@@ -8,6 +8,7 @@ import { Icon } from '~/components/icons/icon';
 import { ChartLegend, getNiceMax, MetricChart } from '~/components/servers/metric-chart';
 import type { ChartSeries } from '~/components/servers/metric-chart';
 import { DetailCard, DetailEmpty, DetailSection } from '~/components/servers/detail-table';
+import { RestartProcessDialog } from '~/components/servers/restart-process-dialog';
 import { DataTable } from '~/components/ui/data-table';
 import { useCommandActions } from '~/hooks/use-command-actions';
 import { useFilesystemsTable } from '~/hooks/use-filesystems-table';
@@ -247,6 +248,7 @@ function ServerBody(props: ServerBodyProps) {
         )}
 
         <AlertBanners serverId={server.id} />
+        <RestartProcessDialog server={server} />
 
         {host && <MetricsSection serverId={server.id} host={host} report={report} />}
         {report && <ProcessesSection serverId={server.id} processes={report.processes} />}

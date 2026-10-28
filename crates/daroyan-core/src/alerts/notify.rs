@@ -159,13 +159,6 @@ pub struct Link {
     pub label: String,
     pub url: String,
     pub style: LinkStyle,
-    pub action: Option<LinkAction>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct LinkAction {
-    pub id: String,
-    pub value: String,
 }
 
 impl Link {
@@ -174,7 +167,6 @@ impl Link {
             label: label.into(),
             url: url.into(),
             style: LinkStyle::Default,
-            action: None,
         }
     }
 
@@ -186,14 +178,6 @@ impl Link {
     #[must_use]
     pub fn danger(self) -> Self {
         Self { style: LinkStyle::Danger, ..self }
-    }
-
-    #[must_use]
-    pub fn action(self, id: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            action: Some(LinkAction { id: id.into(), value: value.into() }),
-            ..self
-        }
     }
 }
 
@@ -313,41 +297,15 @@ pub async fn update_parent(
     } else {
         build_slack_body(notice)
     };
-    update_slack_message(api_url, bot_token, parent, &body).await?;
-    Ok(Some(body))
-}
-
-pub async fn update_slack_message(
-    api_url: &str,
-    bot_token: &str,
-    message: &ChatMessage,
-    body: &Value,
-) -> Result<(), String> {
     let mut request_body = body.clone();
-    request_body["channel"] = json!(message.channel_id);
-    request_body["ts"] = json!(message.message_id);
+    request_body["channel"] = json!(parent.channel_id);
+    request_body["ts"] = json!(parent.message_id);
     let request = CLIENT
         .post(format!("{}/api/chat.update", api_url.trim_end_matches('/')))
         .bearer_auth(bot_token)
         .json(&request_body);
-    execute(request).await.map(drop)
-}
-
-pub async fn read_slack(
-    api_url: &str,
-    bot_token: &str,
-    method: &str,
-    query: &[(&str, &str)],
-) -> Result<Value, String> {
-    let request = CLIENT
-        .post(format!("{}/api/{method}", api_url.trim_end_matches('/')))
-        .bearer_auth(bot_token)
-        .form(query);
-    Ok(execute(request).await?.unwrap_or(Value::Null))
-}
-
-pub async fn post_json(url: &str, body: &Value) -> Result<(), String> {
-    execute(CLIENT.post(url).json(body)).await.map(drop)
+    execute(request).await?;
+    Ok(Some(body))
 }
 
 async fn execute(request: reqwest::RequestBuilder) -> Result<Option<Value>, String> {
@@ -432,7 +390,9 @@ fn mark_resolved(original: &Value, notice: &Notice) -> Value {
         attachment["color"] = json!(format!("#{:06X}", notice.tone.color()));
         let summary = notice.summary().render(escape_slack, "*", "*");
         if let Some(blocks) = attachment["blocks"].as_array_mut() {
-            remove_actions(blocks, |button| button.get("value").is_some());
+            blocks
+                .retain(|block| block["type"] != "context" && block["type"] != "actions");
+            blocks.extend(slack_actions(notice));
             blocks.push(json!({
                 "type": "context",
                 "elements": [{ "type": "mrkdwn", "text": cut(&summary, SLACK_MAX_TEXT) }],
@@ -442,33 +402,27 @@ fn mark_resolved(original: &Value, notice: &Notice) -> Value {
     body
 }
 
-pub fn record_action(original: &Value, action_id: &str, note: &str) -> Value {
-    let mut body = original.clone();
-    if let Some(blocks) = body["attachments"]
-        .get_mut(0)
-        .and_then(|attachment| attachment["blocks"].as_array_mut())
-    {
-        remove_actions(blocks, |button| button["action_id"] == action_id);
-        blocks.push(json!({
-            "type": "context",
-            "elements": [{ "type": "mrkdwn", "text": cut(note, SLACK_MAX_TEXT) }],
-        }));
-    }
-    body
-}
-
-fn remove_actions(blocks: &mut Vec<Value>, is_removed: impl Fn(&Value) -> bool) {
-    for block in blocks.iter_mut().filter(|block| block["type"] == "actions") {
-        if let Some(elements) = block["elements"].as_array_mut() {
-            elements.retain(|button| !is_removed(button));
-        }
-    }
-    blocks.retain(|block| {
-        block["type"] != "actions"
-            || block["elements"]
-                .as_array()
-                .is_some_and(|elements| !elements.is_empty())
-    });
+fn slack_actions(notice: &Notice) -> Option<Value> {
+    let buttons: Vec<Value> = notice
+        .links()
+        .iter()
+        .enumerate()
+        .map(|(index, link)| {
+            let mut button = json!({
+                "type": "button",
+                "action_id": format!("link_{index}"),
+                "text": { "type": "plain_text", "text": cut(&link.label, SLACK_MAX_BUTTON) },
+                "url": link.url,
+            });
+            match link.style {
+                LinkStyle::Primary => button["style"] = json!("primary"),
+                LinkStyle::Danger => button["style"] = json!("danger"),
+                LinkStyle::Default => {}
+            }
+            button
+        })
+        .collect();
+    (!buttons.is_empty()).then(|| json!({ "type": "actions", "elements": buttons }))
 }
 
 fn slack_section(text: String) -> Value {
@@ -518,36 +472,7 @@ fn build_slack_body(notice: &Notice) -> Value {
     if !details.note.is_empty() {
         blocks.push(section(details.note.render(escape_slack, "*", "*")));
     }
-    let buttons: Vec<Value> = notice
-        .links()
-        .iter()
-        .enumerate()
-        .map(|(index, link)| {
-            let mut button = json!({
-                "type": "button",
-                "text": { "type": "plain_text", "text": cut(&link.label, SLACK_MAX_BUTTON) },
-            });
-            match &link.action {
-                Some(action) => {
-                    button["action_id"] = json!(action.id);
-                    button["value"] = json!(action.value);
-                }
-                None => {
-                    button["action_id"] = json!(format!("link_{index}"));
-                    button["url"] = json!(link.url);
-                }
-            }
-            match link.style {
-                LinkStyle::Primary => button["style"] = json!("primary"),
-                LinkStyle::Danger => button["style"] = json!("danger"),
-                LinkStyle::Default => {}
-            }
-            button
-        })
-        .collect();
-    if !buttons.is_empty() {
-        blocks.push(json!({ "type": "actions", "elements": buttons }));
-    }
+    blocks.extend(slack_actions(notice));
     if let Some(context) = &details.context {
         blocks.push(json!({
             "type": "context",
@@ -595,7 +520,6 @@ fn build_discord_message(notice: &Notice) -> Value {
     let links = notice
         .links()
         .iter()
-        .filter(|link| link.action.is_none())
         .map(|link| format!("[{}]({})", escape_markdown(&link.label), link.url))
         .collect::<Vec<_>>()
         .join(" · ");
@@ -665,7 +589,6 @@ fn build_telegram_message(
     let links = notice
         .links()
         .iter()
-        .filter(|link| link.action.is_none())
         .map(|link| {
             format!(
                 "<a href=\"{}\">{}</a>",
@@ -863,59 +786,6 @@ mod tests {
     }
 
     #[test]
-    fn renders_action_buttons_only_in_slack() {
-        let details = Details {
-            links: vec![
-                Link::new("Open logs", "https://daroyan.test/logs").primary(),
-                Link::new("Mute 1h", "https://daroyan.test/alerts/rule_1")
-                    .action("mute_hour", "alt_1"),
-            ],
-            ..make_details()
-        };
-        let notice = make_notice(details);
-        let slack = build_slack_message("C1", &notice, None);
-        let buttons = slack["attachments"][0]["blocks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|block| block["type"] == "actions")
-            .unwrap()["elements"]
-            .clone();
-        assert_eq!(buttons[1]["action_id"], "mute_hour");
-        assert_eq!(buttons[1]["value"], "alt_1");
-        assert_eq!(buttons[1].get("url"), None);
-        assert_eq!(buttons[0]["url"], "https://daroyan.test/logs");
-        let discord = build_discord_message(&notice);
-        assert!(!discord.to_string().contains("Mute 1h"));
-        let telegram = build_telegram_message("42", &notice, None);
-        assert!(!telegram["text"].as_str().unwrap().contains("Mute 1h"));
-
-        let clicked =
-            record_action(&slack, "mute_hour", "🔕 <@U1> muted this for 1 hour.");
-        let blocks = clicked["attachments"][0]["blocks"].as_array().unwrap();
-        let remaining: Vec<&Value> = blocks
-            .iter()
-            .filter(|block| block["type"] == "actions")
-            .flat_map(|block| block["elements"].as_array().unwrap())
-            .collect();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(
-            blocks.last().unwrap()["elements"][0]["text"],
-            "🔕 <@U1> muted this for 1 hour."
-        );
-
-        let resolved = mark_resolved(
-            &build_slack_body(&notice),
-            &Notice {
-                tone: Tone::Resolved,
-                ..make_notice(Details::default())
-            },
-        );
-        assert!(!resolved.to_string().contains("mute_hour"));
-        assert!(resolved.to_string().contains("Open logs"));
-    }
-
-    #[test]
     fn marks_the_parent_resolved() {
         let original = build_slack_body(&make_notice(make_details()));
         let resolved = Notice {
@@ -941,10 +811,7 @@ mod tests {
         assert_eq!(attachment["color"], "#1F8A4C");
         let blocks = attachment["blocks"].as_array().unwrap();
         assert_eq!(blocks[0], original["attachments"][0]["blocks"][0]);
-        let contexts: Vec<&Value> =
-            blocks.iter().filter(|block| block["type"] == "context").collect();
-        assert_eq!(contexts.len(), 2);
-        assert_eq!(contexts[0]["elements"][0]["text"], "Checked every 60 s");
+        assert_eq!(blocks.iter().filter(|block| block["type"] == "context").count(), 1);
         assert_eq!(
             blocks.last().unwrap()["elements"][0]["text"],
             "Back to normal after *51 min*."

@@ -37,7 +37,6 @@ async fn main() -> anyhow::Result<()> {
         state.agents.clone(),
         state.analytics.clone(),
         state.config.app_url.clone(),
-        state.config.slack_signing_secret.is_some(),
     );
     let uptime_runner = spawn_uptime_runner(state.uptime.clone());
     let cron_runner = spawn_cron_runner(state.crons.clone());

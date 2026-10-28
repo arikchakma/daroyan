@@ -10,6 +10,7 @@ import type { MuteLength, MuteTarget } from '~/components/alerts/mute-dialog';
 import { Icon } from '~/components/icons/icon';
 import { DeclareIncidentSheet } from '~/components/incidents/declare-incident-sheet';
 import type { DeclareDefaults } from '~/components/incidents/declare-incident-sheet';
+import { useLinkAction } from '~/hooks/use-link-action';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Menu } from '~/components/ui/menu';
@@ -42,7 +43,7 @@ type AlertBannersProps = {
 export function AlertBanners(props: AlertBannersProps) {
   const { serverId, checkId, cronId } = props;
 
-  const { data: firing = [] } = useQuery(listAlertsOptions('firing'));
+  const { data: firing = [], isSuccess: isFiringLoaded } = useQuery(listAlertsOptions('firing'));
   const { data: mutes = [] } = useQuery(listAlertMutesOptions());
   const { data: rules = [] } = useQuery(listAlertRulesOptions());
   const [muting, setMuting] = useState<{ alert: Schemas['Alert']; isWholeRule: boolean } | undefined>();
@@ -63,6 +64,21 @@ export function AlertBanners(props: AlertBannersProps) {
       (checkId && alert.check_id === checkId) ||
       (cronId && alert.cron_id === cronId)
   );
+  const openFromLink = (alertId: string, open: (alert: Schemas['Alert']) => void) => {
+    const alert = alerts.find((item) => item.id === alertId);
+    if (alert) {
+      open(alert);
+    } else {
+      toast.info('This alert is no longer firing.');
+    }
+  };
+  useLinkAction('mute', isFiringLoaded, (alertId) =>
+    openFromLink(alertId, (alert) => setMuting({ alert, isWholeRule: false }))
+  );
+  useLinkAction('declare', isFiringLoaded, (alertId) =>
+    openFromLink(alertId, (alert) => setDeclaring(toDeclareDefaults(alert)))
+  );
+
   if (alerts.length === 0) {
     return null;
   }
