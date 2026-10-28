@@ -2,6 +2,7 @@ pub mod connections;
 pub mod disk;
 pub mod host;
 pub mod network;
+pub mod top;
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 

@@ -23,6 +23,7 @@ pub struct ProcessWatch {
     gave_up: HashSet<String>,
     held: HeldProcesses,
     commands: bool,
+    families: HashMap<String, HashSet<Pid>>,
 }
 
 impl ProcessWatch {
@@ -63,6 +64,7 @@ impl ProcessWatch {
             gave_up: HashSet::new(),
             held,
             commands,
+            families: HashMap::new(),
         }
     }
 
@@ -96,6 +98,10 @@ impl ProcessWatch {
     ) -> ProcessState {
         let matches = self.find_matches(check, system, cgroups);
         let family = collect_family(system, &matches);
+        self.families.insert(
+            check.name.clone(),
+            family.iter().map(|process| process.pid()).collect(),
+        );
         let started_at = matches.iter().map(|process| process.start_time()).min();
         let is_running = !matches.is_empty();
         let was_running =
@@ -146,6 +152,10 @@ impl ProcessWatch {
             write_speed: per_sec(disk.1, elapsed_secs),
             controllable: self.commands && controller.is_controllable(),
         }
+    }
+
+    pub fn families(&self) -> &HashMap<String, HashSet<Pid>> {
+        &self.families
     }
 
     fn find_matches<'a>(

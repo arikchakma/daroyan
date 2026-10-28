@@ -12,6 +12,7 @@ use crate::args::StartArgs;
 use crate::check::port::check_ports;
 use crate::check::process::ProcessWatch;
 use crate::collect::host::collect_host;
+use crate::collect::top::find_top;
 use crate::collect::{Collector, now_millis};
 use crate::command::HeldProcesses;
 use crate::config::{Config, load_config};
@@ -74,14 +75,16 @@ fn collect_reports(
         collector.refresh();
 
         let host = collect_host(&config.server, &collector.system, &collector.networks);
+        let watched = processes.check_processes(
+            &collector.system,
+            collector.elapsed_secs,
+            &mut events,
+        );
         let report = Report {
             host: (last_host.as_ref() != Some(&host)).then(|| host.clone()),
             state: collector.collect_state(config),
-            processes: processes.check_processes(
-                &collector.system,
-                collector.elapsed_secs,
-                &mut events,
-            ),
+            top: find_top(&collector.system, processes.families()),
+            processes: watched,
             ports: check_ports(&config.ports),
             events: std::mem::take(&mut events),
         };

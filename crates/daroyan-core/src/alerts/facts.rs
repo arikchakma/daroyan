@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use daroyan_protocol::host::Host;
+use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
 use crate::alerts::message::Moment;
@@ -51,6 +52,7 @@ pub struct UsageFacts {
     pub cores: u32,
     pub mem_used: u64,
     pub mem_total: u64,
+    pub top: Vec<TopProcess>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -170,6 +172,7 @@ impl FactSources<'_> {
                     cores: host.cpu_cores,
                     mem_used: report.state.mem_used,
                     mem_total: host.mem_total,
+                    top: report.top,
                 })
             }
             Condition::ProcessStopped { .. } => {

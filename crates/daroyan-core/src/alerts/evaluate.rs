@@ -176,6 +176,7 @@ mod tests {
                 open: false,
                 latency_ms: None,
             }],
+            top: Vec::new(),
         }
     }
 

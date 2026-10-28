@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
+use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
 use crate::alerts::evaluate::Level;
@@ -18,6 +19,7 @@ use crate::db::entities::alerts::Model as Alert;
 use crate::servers::status::get_percent;
 
 const MAX_SNIPPET_LINE: usize = 200;
+const TOP_PROCESSES: usize = 3;
 const BYTE_UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +160,33 @@ impl AlertMessage<'_> {
             secs => format!(" for {}", format_span(u64::from(secs))),
         };
         let memory = get_percent(facts.mem_used, facts.mem_total);
+        let mut top: Vec<&TopProcess> = facts.top.iter().collect();
+        if matches!(self.condition, Condition::Memory { .. }) {
+            top.sort_by_key(|item| std::cmp::Reverse(item.mem_used));
+        } else {
+            top.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
+        }
+        let width = top
+            .iter()
+            .take(TOP_PROCESSES)
+            .map(|item| item.name.chars().count())
+            .max()
+            .unwrap_or(0);
+        let snippet = (!top.is_empty()).then(|| Snippet {
+            label: Some("Top processes".to_string()),
+            lines: top
+                .iter()
+                .take(TOP_PROCESSES)
+                .map(|item| {
+                    format!(
+                        "{:<width$}  {:>5} cores  {:>7}",
+                        item.name,
+                        format!("{:.1}", item.cpu / 100.0),
+                        format_bytes(item.mem_used)
+                    )
+                })
+                .collect(),
+        });
         Details {
             summary: Text::from(format!("{} at ", alert.subject))
                 .bold(alert.value.as_str())
@@ -177,6 +206,7 @@ impl AlertMessage<'_> {
                 ),
                 self.started_field(),
             ],
+            snippet,
             links: self.open_target(),
             ..Details::default()
         }
@@ -854,6 +884,32 @@ mod tests {
                 cores: 3,
                 mem_used: 1_181_116_006,
                 mem_total: 3_972_844_748,
+                top: vec![
+                    TopProcess {
+                        name: "postgres".to_string(),
+                        count: 9,
+                        cpu: 18.0,
+                        mem_used: 1_288_490_189,
+                    },
+                    TopProcess {
+                        name: "inboxjot-worker".to_string(),
+                        count: 3,
+                        cpu: 213.0,
+                        mem_used: 851_443_712,
+                    },
+                    TopProcess {
+                        name: "server.js".to_string(),
+                        count: 1,
+                        cpu: 5.0,
+                        mem_used: 171_966_464,
+                    },
+                    TopProcess {
+                        name: "sshd".to_string(),
+                        count: 2,
+                        cpu: 0.0,
+                        mem_used: 9_000_000,
+                    },
+                ],
             }),
         );
         case.rule = make_rule(600);
@@ -865,6 +921,16 @@ mod tests {
         );
         assert_eq!(details.fields[1], Field::new("Load", "4.2 on 3 cores"));
         assert_eq!(details.fields[2], Field::new("Memory", "30% · 1.1 of 3.7 GB"));
+        let snippet = details.snippet.clone().unwrap();
+        assert_eq!(snippet.label.as_deref(), Some("Top processes"));
+        assert_eq!(
+            snippet.lines,
+            [
+                "inboxjot-worker    2.1 cores   812 MB",
+                "postgres           0.2 cores   1.2 GB",
+                "server.js          0.1 cores   164 MB",
+            ]
+        );
         assert_eq!(labels(&details.links), ["Open server", "View alert", "Runbook"]);
     }
 

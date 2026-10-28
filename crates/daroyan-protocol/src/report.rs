@@ -10,6 +10,17 @@ pub struct Report {
     pub processes: Vec<ProcessState>,
     pub ports: Vec<PortState>,
     pub events: Vec<Event>,
+    #[serde(default)]
+    pub top: Vec<TopProcess>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct TopProcess {
+    pub name: String,
+    pub count: u32,
+    pub cpu: f32,
+    pub mem_used: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

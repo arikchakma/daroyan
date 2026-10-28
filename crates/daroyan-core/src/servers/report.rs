@@ -1,4 +1,4 @@
-use daroyan_protocol::report::{PortState, ProcessState, Report, State};
+use daroyan_protocol::report::{PortState, ProcessState, Report, State, TopProcess};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -13,6 +13,8 @@ pub struct LastReport {
     pub state: State,
     pub processes: Vec<ProcessState>,
     pub ports: Vec<PortState>,
+    #[serde(default)]
+    pub top: Vec<TopProcess>,
 }
 
 pub async fn save_report(
@@ -28,6 +30,7 @@ pub async fn save_report(
         state: report.state,
         processes: report.processes,
         ports: report.ports,
+        top: report.top,
     };
     database
         .update_server_report(
