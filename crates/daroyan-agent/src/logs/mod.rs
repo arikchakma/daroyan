@@ -194,12 +194,8 @@ fn resolve_format(source: &str, name: Option<&str>) -> LogFormat {
     let Some(name) = name else {
         return LogFormat::Auto;
     };
-    LogFormat::from_name(name).unwrap_or_else(|| {
-        let known: Vec<&str> = LogFormat::ALL.iter().map(|format| format.as_str()).collect();
-        warn!(
-            "{source} has format {name:?}, which is not known, so its lines are read with auto. Use one of: {}",
-            known.join(", ")
-        );
+    name.parse().unwrap_or_else(|error| {
+        warn!("{source}: {error}. Its lines are read with auto");
         LogFormat::Auto
     })
 }
@@ -311,9 +307,7 @@ pub fn collect_logs(config: &Config, batches: &Sender<LogBatch>) {
 
 #[cfg(test)]
 mod tests {
-    use daroyan_protocol::log::LogStream;
-
-    use daroyan_protocol::log::LogFormat;
+    use daroyan_protocol::log::{LogFormat, LogStream};
 
     use super::{RawLine, join_continuations, resolve_format, take_ready_lines};
 

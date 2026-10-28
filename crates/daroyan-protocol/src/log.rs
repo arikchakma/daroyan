@@ -1,3 +1,6 @@
+use std::fmt;
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -119,10 +122,6 @@ impl LogFormat {
         }
     }
 
-    pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|format| format.as_str() == name)
-    }
-
     pub fn is_auto(&self) -> bool {
         *self == Self::Auto
     }
@@ -133,9 +132,38 @@ impl<'de> Deserialize<'de> for LogFormat {
         deserializer: D,
     ) -> Result<Self, D::Error> {
         let name = String::deserialize(deserializer)?;
-        Ok(Self::from_name(&name).unwrap_or_default())
+        Ok(name.parse().unwrap_or_default())
     }
 }
+
+impl FromStr for LogFormat {
+    type Err = UnknownLogFormat;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|format| format.as_str() == name)
+            .ok_or_else(|| UnknownLogFormat(name.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownLogFormat(pub String);
+
+impl fmt::Display for UnknownLogFormat {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let known: Vec<&str> =
+            LogFormat::ALL.iter().map(|format| format.as_str()).collect();
+        write!(
+            formatter,
+            "unknown log format {:?}, use one of: {}",
+            self.0,
+            known.join(", ")
+        )
+    }
+}
+
+impl std::error::Error for UnknownLogFormat {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -159,7 +187,7 @@ impl LogStream {
 
 #[cfg(test)]
 mod tests {
-    use super::LogFormat;
+    use super::{LogFormat, UnknownLogFormat};
 
     #[test]
     fn names_round_trip_and_unknown_reads_as_auto() {
@@ -167,12 +195,15 @@ mod tests {
             let json = serde_json::to_string(&format).unwrap();
             assert_eq!(json, format!("\"{}\"", format.as_str()));
             assert_eq!(serde_json::from_str::<LogFormat>(&json).unwrap(), format);
-            assert_eq!(LogFormat::from_name(format.as_str()), Some(format));
+            assert_eq!(format.as_str().parse(), Ok(format));
         }
         assert_eq!(
             serde_json::from_str::<LogFormat>("\"syslog-ng\"").unwrap(),
             LogFormat::Auto
         );
-        assert_eq!(LogFormat::from_name("ngnix"), None);
+        assert_eq!(
+            "ngnix".parse::<LogFormat>(),
+            Err(UnknownLogFormat("ngnix".to_string()))
+        );
     }
 }
