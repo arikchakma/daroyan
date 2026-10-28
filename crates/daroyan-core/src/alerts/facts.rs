@@ -10,7 +10,7 @@ use crate::analytics::log_lines::{
     LogMatch, LogRun, list_last_lines, list_top_messages, summarize_log_run,
 };
 use crate::analytics::server_events::{ProcessExit, find_last_exit};
-use crate::analytics::server_states::find_disk_used_before;
+use crate::analytics::server_states::{DiskTrend, fit_disk_trend};
 use crate::analytics::uptime_results::{
     ResultItem, find_last_up, list_cert_expiries, list_recent_results,
 };
@@ -21,7 +21,10 @@ use crate::error::Result;
 use crate::servers::report::LastReport;
 use crate::uptime::probe::STATUS_DOWN;
 
-const DAY_MS: i64 = 86_400_000;
+const TREND_WINDOW_MS: i64 = 6 * 3_600_000;
+const MIN_TREND_MS: i64 = 3_600_000;
+const PSEUDO_FILESYSTEMS: [&str; 6] =
+    ["tmpfs", "devtmpfs", "overlay", "squashfs", "proc", "sysfs"];
 const TOP_MESSAGES: u32 = 3;
 const LAST_LINES: u32 = 3;
 const LAST_LINES_WINDOW_MS: i64 = 3_600_000;
@@ -89,12 +92,12 @@ pub struct CheckResult {
     pub ttfb_ms: Option<u32>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DiskFacts {
     pub mount: String,
     pub used: u64,
     pub total: u64,
-    pub growth_per_day: Option<i64>,
+    pub trend: Option<DiskTrend>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -211,22 +214,23 @@ impl FactSources<'_> {
                 else {
                     return Ok(AlertFacts::None);
                 };
-                let all_used: u64 =
-                    report.state.disks.iter().map(|disk| disk.disk_used).sum();
-                let day_ago = find_disk_used_before(
-                    self.analytics,
-                    server.id.clone(),
-                    now_ms - DAY_MS,
-                )
-                .await?;
+                let trend = if PSEUDO_FILESYSTEMS.contains(&disk.filesystem.as_str()) {
+                    None
+                } else {
+                    fit_disk_trend(
+                        self.analytics,
+                        server.id.clone(),
+                        disk.mount.clone(),
+                        now_ms - TREND_WINDOW_MS,
+                    )
+                    .await?
+                    .filter(|trend| trend.window_ms >= MIN_TREND_MS)
+                };
                 AlertFacts::Disk(DiskFacts {
                     mount: disk.mount.clone(),
                     used: disk.disk_used,
                     total: disk.disk_total,
-                    growth_per_day: day_ago.map(|before| {
-                        i64::try_from(all_used).unwrap_or(i64::MAX)
-                            - i64::try_from(before).unwrap_or(i64::MAX)
-                    }),
+                    trend,
                 })
             }
             Condition::Offline => AlertFacts::Offline(OfflineFacts {
@@ -302,6 +306,8 @@ mod tests {
 
     use super::*;
 
+    const MIGRATION_DISKS: &str =
+        include_str!("../../../daroyan-migration/duckdb/0009_disk_states.sql");
     const MIGRATIONS: [&str; 5] = [
         include_str!("../../../daroyan-migration/duckdb/0001_server_states.sql"),
         include_str!("../../../daroyan-migration/duckdb/0002_log_lines.sql"),
@@ -409,9 +415,13 @@ mod tests {
             "INSERT INTO server_events VALUES ('srv_1', ?, 'process_exited', '{\"name\":\"worker\",\"code\":137}')",
             [ms(8, 59)],
         )?;
-        let state = "INSERT INTO server_states VALUES ('srv_1', ?, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 100, ?, 0, 0, 0, 0, 0, 0)";
-        conn.execute(state, duckdb::params![ms(8, 0) - 86_400_000, 40])?;
-        conn.execute(state, duckdb::params![ms(8, 30), 90])?;
+        conn.execute_batch(MIGRATION_DISKS)?;
+        let disk = "INSERT INTO disk_states VALUES ('srv_1', ?, ?, ?, 100, ?)";
+        for (hour, used) in [(4, 30), (5, 50), (6, 70), (7, 90)] {
+            conn.execute(disk, duckdb::params![ms(hour, 0), "/", "ext4", used])?;
+            conn.execute(disk, duckdb::params![ms(hour, 0), "/run", "tmpfs", used])?;
+        }
+        conn.execute(disk, duckdb::params![ms(1, 0), "/", "ext4", 0])?;
         let result = "INSERT INTO uptime_results (check_id, checked_at, status, code, response_ms, error, cert_expires_at, dns_ms, connect_ms, tls_ms, ttfb_ms) VALUES ('chk_1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         let expiry = Utc
             .with_ymd_and_hms(2026, 11, 9, 23, 59, 0)
@@ -529,7 +539,7 @@ mod tests {
                 mount: "/".to_string(),
                 used: 90,
                 total: 100,
-                growth_per_day: Some(50),
+                trend: Some(DiskTrend { bytes_per_hour: 20.0, window_ms: 3 * 3_600_000 }),
             })
         );
         let AlertFacts::Check(down) =

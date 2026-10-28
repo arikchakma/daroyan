@@ -358,21 +358,29 @@ impl AlertMessage<'_> {
         let used = get_percent(facts.used, facts.total);
         let free = facts.total.saturating_sub(facts.used);
         let mut fields = vec![self.target_field()];
-        if let Some(growth) = facts.growth_per_day {
-            let growth_text = if growth > 0 {
-                format!("+{} in the last 24 hours", format_bytes(growth.unsigned_abs()))
-            } else {
-                "No growth in the last 24 hours".to_string()
-            };
-            fields.push(Field::new("Growth", growth_text));
-            if growth > 0 {
-                let days = free as f64 / growth as f64;
+        if let Some(trend) = facts.trend {
+            let window =
+                format_span(u64::try_from(trend.window_ms / 1000).unwrap_or_default());
+            if trend.bytes_per_hour >= 1.0 {
+                fields.push(Field::new(
+                    "Growth",
+                    format!(
+                        "+{}/hour over the last {window}",
+                        format_bytes(trend.bytes_per_hour as u64)
+                    ),
+                ));
+                let hours = free as f64 / trend.bytes_per_hour;
                 fields.push(Field::new(
                     "Full in",
                     format!(
                         "About {} at this rate",
-                        format_span((days * 86_400.0) as u64)
+                        format_span((hours * 3600.0) as u64)
                     ),
+                ));
+            } else {
+                fields.push(Field::new(
+                    "Growth",
+                    format!("Not growing over the last {window}"),
                 ));
             }
         }
@@ -717,6 +725,7 @@ mod tests {
     use crate::alerts::facts::{CheckCount, CheckResult, LogLine};
     use crate::analytics::log_lines::LogRun;
     use crate::analytics::server_events::ProcessExit;
+    use crate::analytics::server_states::DiskTrend;
 
     fn at(hour: u32, minute: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 28, hour, minute, 0).unwrap()
@@ -1117,7 +1126,10 @@ mod tests {
                 mount: "/".to_string(),
                 used: 65 * GB,
                 total: 75 * GB,
-                growth_per_day: Some(5 * i64::try_from(GB).unwrap()),
+                trend: Some(DiskTrend {
+                    bytes_per_hour: GB as f64,
+                    window_ms: 6 * 3_600_000,
+                }),
             }),
         );
         let details = case.details(Moment::Firing);
@@ -1125,8 +1137,14 @@ mod tests {
             details.summary.to_string(),
             "The disk at / is 87% full: 65 of 75 GB. 10 GB are free."
         );
-        assert_eq!(details.fields[1], Field::new("Growth", "+5 GB in the last 24 hours"));
-        assert_eq!(details.fields[2], Field::new("Full in", "About 2 days at this rate"));
+        assert_eq!(
+            details.fields[1],
+            Field::new("Growth", "+1 GB/hour over the last 6 hours")
+        );
+        assert_eq!(
+            details.fields[2],
+            Field::new("Full in", "About 10 hours at this rate")
+        );
     }
 
     #[test]

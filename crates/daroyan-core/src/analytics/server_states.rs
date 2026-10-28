@@ -1,6 +1,6 @@
 use chrono::Utc;
 use daroyan_protocol::report::State;
-use duckdb::{Connection, OptionalExt, params};
+use duckdb::{Connection, params};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -91,6 +91,81 @@ impl StateRow {
                 .fold(0, u64::saturating_add),
         }
     }
+}
+
+pub struct DiskRow {
+    server_id: String,
+    taken_at: i64,
+    mount: String,
+    filesystem: String,
+    disk_total: u64,
+    disk_used: u64,
+}
+
+pub fn to_disk_rows(server_id: &str, state: &State) -> Vec<DiskRow> {
+    let taken_at = clamp_future_ms(
+        i64::try_from(state.taken_at).unwrap_or(i64::MAX),
+        Utc::now().timestamp_millis(),
+    );
+    state
+        .disks
+        .iter()
+        .map(|disk| DiskRow {
+            server_id: server_id.to_string(),
+            taken_at,
+            mount: disk.mount.clone(),
+            filesystem: disk.filesystem.clone(),
+            disk_total: disk.disk_total,
+            disk_used: disk.disk_used,
+        })
+        .collect()
+}
+
+pub fn append_disks(conn: &Connection, rows: &[DiskRow]) -> duckdb::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut appender = conn.appender("disk_states")?;
+    for row in rows {
+        appender.append_row(params![
+            row.server_id,
+            row.taken_at,
+            row.mount,
+            row.filesystem,
+            row.disk_total,
+            row.disk_used,
+        ])?;
+    }
+    appender.flush()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DiskTrend {
+    pub bytes_per_hour: f64,
+    pub window_ms: i64,
+}
+
+pub async fn fit_disk_trend(
+    analytics: &Analytics,
+    server_id: String,
+    mount: String,
+    since: i64,
+) -> Result<Option<DiskTrend>> {
+    analytics
+        .read(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT regr_slope(disk_used, taken_at), count(*), max(taken_at) - min(taken_at) \
+                 FROM disk_states WHERE server_id = ? AND mount = ? AND taken_at >= ?",
+            )?;
+            let (slope, count, window_ms): (Option<f64>, u64, Option<i64>) = statement
+                .query_row(params![server_id, mount, since], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?;
+            Ok(slope.zip(window_ms).filter(|_| count >= 2).map(|(slope, window_ms)| {
+                DiskTrend { bytes_per_hour: slope * 3_600_000.0, window_ms }
+            }))
+        })
+        .await
 }
 
 pub fn append_states(conn: &Connection, rows: &[StateRow]) -> duckdb::Result<()> {
@@ -197,24 +272,6 @@ pub async fn list_fleet_cpu(
                     Ok(TrendPoint { at: row.get(0)?, value: row.get(1)? })
                 })?
                 .collect()
-        })
-        .await
-}
-
-pub async fn find_disk_used_before(
-    analytics: &Analytics,
-    server_id: String,
-    before: i64,
-) -> Result<Option<u64>> {
-    analytics
-        .read(move |conn| {
-            let mut statement = conn.prepare(
-                "SELECT disk_used FROM server_states \
-                 WHERE server_id = ? AND taken_at <= ? ORDER BY taken_at DESC LIMIT 1",
-            )?;
-            statement
-                .query_row(params![server_id, before], |row| row.get(0))
-                .optional()
         })
         .await
 }
