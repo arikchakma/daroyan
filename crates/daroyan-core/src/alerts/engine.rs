@@ -13,7 +13,7 @@ use crate::alerts::evaluate::{
 };
 use crate::alerts::integrations::IntegrationConfig;
 use crate::alerts::message::{AlertMessage, Moment};
-use crate::alerts::notify::{Details, Notice, Tone, send_notice};
+use crate::alerts::notify::{ChatMessage, Details, Notice, Tone, send_notice};
 use crate::alerts::rules::{
     Condition, NoData, RuleOptions, Scope, Target, describe_rule, format_clock,
     format_duration, format_ms, read_log_severity, read_time_zone,
@@ -924,6 +924,7 @@ impl AlertEngine {
         let log = DeliveryLog {
             rule_id: rule.id.clone(),
             alert_id: Some(alert.id.clone()),
+            in_thread: notice.event == "alert.resolved",
         };
         let Some(limit) = parsed.options.message_limit else {
             notify_integrations(&self.database, recipients, integrations, notice, &log);
@@ -962,7 +963,11 @@ impl AlertEngine {
                     }),
                     details: Details::default(),
                 };
-                let log = DeliveryLog { rule_id: rule.id.clone(), alert_id: None };
+                let log = DeliveryLog {
+                    rule_id: rule.id.clone(),
+                    alert_id: None,
+                    in_thread: false,
+                };
                 notify_integrations(
                     &self.database,
                     recipients,
@@ -980,6 +985,7 @@ impl AlertEngine {
 pub struct DeliveryLog {
     pub rule_id: String,
     pub alert_id: Option<String>,
+    pub in_thread: bool,
 }
 
 pub fn notify_integrations(
@@ -1012,15 +1018,23 @@ pub async fn deliver_notice(
     notice: &Notice,
     log: Option<DeliveryLog>,
 ) -> Result<(), String> {
+    let id = IntegrationId::from(integration.id.as_str());
+    let thread = match &log {
+        Some(DeliveryLog { alert_id: Some(alert_id), in_thread: true, .. }) => {
+            find_thread(database, &AlertId::from(alert_id.as_str()), &id).await
+        }
+        _ => None,
+    };
     let outcome =
         match serde_json::from_value::<IntegrationConfig>(integration.config.clone()) {
-            Ok(config) => send_notice(&config, notice).await,
+            Ok(config) => send_notice(&config, notice, thread.as_ref()).await,
             Err(_) => {
                 Err("The integration settings are unreadable. Edit and save it again"
                     .to_string())
             }
         };
     if let Some(log) = log {
+        let posted = outcome.as_ref().ok().cloned().flatten();
         let delivery = NewAlertDelivery {
             id: new_id(Prefix::AlertDelivery),
             rule_id: log.rule_id,
@@ -1030,18 +1044,37 @@ pub async fn deliver_notice(
             message: notice.summarize(),
             error: outcome.clone().err(),
             sent_at: Utc::now(),
+            chat_channel_id: posted.as_ref().map(|posted| posted.channel_id.clone()),
+            chat_message_id: posted.map(|posted| posted.message_id),
         };
         if let Err(error) = database.create_alert_delivery(delivery).await {
             tracing::error!(integration_id = %integration.id, error = %error, "log a delivery");
         }
     }
-    let id = IntegrationId::from(integration.id.as_str());
     if let Err(error) =
         database.record_integration_delivery(&id, outcome.clone().err()).await
     {
         tracing::error!(integration_id = %integration.id, error = %error, "record a delivery");
     }
-    outcome
+    outcome.map(|_| ())
+}
+
+async fn find_thread(
+    database: &Database,
+    alert_id: &AlertId,
+    integration_id: &IntegrationId,
+) -> Option<ChatMessage> {
+    let delivery = database
+        .find_alert_thread(alert_id, integration_id)
+        .await
+        .inspect_err(|error| {
+            tracing::error!(alert_id = %alert_id.as_str(), error = %error, "find the alert thread");
+        })
+        .ok()??;
+    Some(ChatMessage {
+        channel_id: delivery.chat_channel_id?,
+        message_id: delivery.chat_message_id?,
+    })
 }
 
 fn read_server_facts(server: &Server) -> ServerFacts<'_> {

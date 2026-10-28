@@ -197,6 +197,7 @@ async fn create_alert_mute(
         let log = DeliveryLog {
             rule_id: rule.id.clone(),
             alert_id: covered.first().map(|alert| alert.id.clone()),
+            in_thread: false,
         };
         notify_integrations(
             &state.database,

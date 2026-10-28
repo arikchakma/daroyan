@@ -23,6 +23,10 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub error: Option<String>,
     pub sent_at: DateTimeUtc,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub chat_channel_id: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub chat_message_id: Option<String>,
     #[sea_orm(
         belongs_to,
         from = "rule_id",

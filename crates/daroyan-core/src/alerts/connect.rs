@@ -219,7 +219,7 @@ async fn save_telegram_start(
         data: Value::Null,
         details: Details::default(),
     };
-    if let Err(error) = send_notice(&config, &notice).await {
+    if let Err(error) = send_notice(&config, &notice, None).await {
         tracing::warn!(error = %error, "send the telegram welcome");
     }
     Ok(())

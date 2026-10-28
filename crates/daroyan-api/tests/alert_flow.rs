@@ -98,6 +98,23 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
         );
         axum::serve(hook_listener, app).await
     });
+    let slack_posts = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let slack_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let slack_url = format!("http://{}", slack_listener.local_addr().unwrap());
+    let slack_store = Arc::clone(&slack_posts);
+    tokio::spawn(async move {
+        let app = Router::new().route(
+            "/api/chat.postMessage",
+            post(move |Json(body): Json<Value>| async move {
+                let mut posts = slack_store.lock().unwrap();
+                posts.push(body);
+                let ts = format!("1730000000.{:06}", posts.len());
+                Json(json!({ "ok": true, "channel": "C1", "ts": ts }))
+            }),
+        );
+        axum::serve(slack_listener, app).await
+    });
+    let slack_count = || slack_posts.lock().unwrap().len();
     let events = || -> Vec<String> {
         received
             .lock()
@@ -159,6 +176,18 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     assert_eq!(tested["last_status"], "ok");
     assert_eq!(events(), ["test"]);
 
+    let slack: Value = http.post(format!("{base}/v1/integrations"))
+        .json(&json!({ "name": "#ops", "config": {
+            "kind": "slack", "api_url": slack_url, "bot_token": "xoxb-test", "channel_id": "C1", "channel_name": "ops"
+        } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let slack_id = slack["id"].as_str().unwrap().to_string();
+
     let rule: Value = http
         .post(format!("{base}/v1/alert-rules"))
         .json(&json!({
@@ -166,7 +195,7 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
             "condition": { "kind": "cpu", "above": 30.0 },
             "for_secs": 60,
             "scope": { "kind": "label", "label": "production" },
-            "integration_ids": [integration_id]
+            "integration_ids": [integration_id, slack_id]
         }))
         .send()
         .await
@@ -223,7 +252,7 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     assert_eq!(firing[0]["target_name"], "worker-1");
     assert_eq!(firing[0]["subject"], "CPU");
     assert_eq!(firing[0]["value"], "34%");
-    wait_until(|| events().len() == 2).await;
+    wait_until(|| events().len() == 2 && slack_count() == 1).await;
     let rule_id = rule["id"].as_str().unwrap();
     let deliveries: Vec<Value> = http
         .get(format!("{base}/v1/alert-rules/{rule_id}/deliveries"))
@@ -233,9 +262,11 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
         .json()
         .await
         .unwrap();
-    assert_eq!(deliveries.len(), 1);
-    assert_eq!(deliveries[0]["status"], "sent");
-    assert_eq!(deliveries[0]["message"], "Critical: High CPU · worker-1 · CPU: 34%");
+    assert_eq!(deliveries.len(), 2);
+    for delivery in &deliveries {
+        assert_eq!(delivery["status"], "sent");
+        assert_eq!(delivery["message"], "Critical: High CPU · worker-1 · CPU: 34%");
+    }
     let backtest: Value = http
         .post(format!("{base}/v1/alert-rules/backtest"))
         .json(&json!({
@@ -276,8 +307,20 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
         .unwrap();
     assert!(list_alerts(&http, &base, "firing").await.is_empty());
     assert_eq!(list_alerts(&http, &base, "resolved").await.len(), 1);
-    wait_until(|| events().len() == 3).await;
+    wait_until(|| events().len() == 3 && slack_count() == 2).await;
     assert_eq!(events(), ["test", "alert.firing", "alert.resolved"]);
+    let posts = slack_posts.lock().unwrap().clone();
+    assert_eq!(posts[0].get("thread_ts"), None);
+    assert_eq!(
+        posts[0]["attachments"][0]["blocks"][0]["text"]["text"],
+        "*🔴 Critical: High CPU*"
+    );
+    assert_eq!(posts[1]["thread_ts"], "1730000000.000001");
+    assert_eq!(posts[1]["reply_broadcast"], true);
+    assert_eq!(
+        posts[1]["attachments"][0]["blocks"][0]["text"]["text"],
+        "*✅ Resolved: High CPU*"
+    );
 
     let log_rule: Value = http
         .post(format!("{base}/v1/alert-rules"))

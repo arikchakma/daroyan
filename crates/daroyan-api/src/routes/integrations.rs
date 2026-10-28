@@ -203,7 +203,7 @@ async fn test_integration_config(
     Json(body): Json<TestIntegrationBody>,
 ) -> Result<StatusCode> {
     validate_integration(&body.config)?;
-    send_notice(&body.config, &make_test_notice(&state))
+    send_notice(&body.config, &make_test_notice(&state), None)
         .await
         .map_err(|error| Error::new(ErrorName::ValidationError, error))?;
     Ok(StatusCode::NO_CONTENT)
@@ -539,7 +539,7 @@ async fn finish_slack_install(
         data: json!({}),
         details: Details::default(),
     };
-    send_notice(&config, &welcome).await.map_err(|error| {
+    send_notice(&config, &welcome, None).await.map_err(|error| {
         Error::new(
             ErrorName::ValidationError,
             format!("Slack refused the message ({error})"),
