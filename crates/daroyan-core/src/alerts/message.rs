@@ -3,7 +3,7 @@ use chrono_tz::Tz;
 use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
-use crate::alerts::evaluate::Level;
+use crate::alerts::evaluate::{Level, NO_DATA};
 use crate::alerts::facts::{
     AlertFacts, CertFacts, CheckFacts, DiskFacts, LogFacts, OfflineFacts, ProcessFacts,
     UsageFacts,
@@ -80,6 +80,7 @@ impl AlertMessage<'_> {
             (Moment::Resolved { lasted_secs }, facts) => {
                 self.resolved(lasted_secs, facts)
             }
+            _ if self.alert.subject == NO_DATA => self.no_data(),
             (_, AlertFacts::Logs(facts)) => self.logs(facts),
             (_, AlertFacts::Usage(facts)) => self.usage(facts),
             (_, AlertFacts::Process(facts)) => self.process(facts),
@@ -116,6 +117,15 @@ impl AlertMessage<'_> {
             ],
             links: self.open_target(),
             ..Details::default()
+        }
+    }
+
+    fn no_data(&self) -> Details {
+        Details {
+            summary: Text::default().bold(self.target_name).plain(
+                " sent no data for this rule, so Daroyan cannot tell if it is healthy.",
+            ),
+            ..self.generic()
         }
     }
 
@@ -457,17 +467,23 @@ impl AlertMessage<'_> {
         let Some(expires_at) = facts.expires_at else { return self.generic() };
         let time_zone = self.time_zone();
         let days = (expires_at - self.now).num_days();
-        let left = match days {
-            ..=0 => "less than a day".to_string(),
-            1 => "1 day".to_string(),
-            _ => format!("{days} days"),
+        let plural = |count: i64| {
+            if count == 1 { "1 day".to_string() } else { format!("{count} days") }
+        };
+        let (verb, span) = match days {
+            _ if expires_at <= self.now => match -days {
+                0 => ("expired ", "today".to_string()),
+                ago => ("expired ", format!("{} ago", plural(ago))),
+            },
+            0 => ("expires in ", "less than a day".to_string()),
+            left => ("expires in ", plural(left)),
         };
         let local = expires_at.with_timezone(&time_zone);
         Details {
             summary: Text::from("The certificate for ")
                 .bold(facts.domain.as_str())
-                .plain(" expires in ")
-                .bold(left)
+                .plain(format!(" {verb}"))
+                .bold(span)
                 .plain(format!(", on {}.", local.format("%b %-d"))),
             fields: vec![
                 self.target_field(),
@@ -1260,6 +1276,30 @@ mod tests {
             "The certificate for app.inboxjot.com expires in 12 days, on Nov 9."
         );
         assert_eq!(details.fields[1], Field::new("Expires", "Nov 9 at 11:59 PM UTC"));
+
+        case.facts = AlertFacts::Cert(CertFacts {
+            domain: "app.inboxjot.com".to_string(),
+            expires_at: Some(Utc.with_ymd_and_hms(2026, 10, 25, 8, 0, 0).unwrap()),
+        });
+        assert_eq!(
+            case.details(Moment::Firing).summary.to_string(),
+            "The certificate for app.inboxjot.com expired 3 days ago, on Oct 25."
+        );
+    }
+
+    #[test]
+    fn says_when_a_target_sent_no_data() {
+        let case = Case::new(
+            Condition::Cpu { above: 90.0 },
+            make_alert(NO_DATA, NO_DATA),
+            AlertFacts::None,
+        );
+        let details = case.details(Moment::Firing);
+        assert_eq!(
+            details.summary.to_string(),
+            "Inboxjot Server sent no data for this rule, so Daroyan cannot tell if it is healthy."
+        );
+        assert_eq!(labels(&details.links), ["Open server", "View alert", "Mute"]);
     }
 
     #[test]

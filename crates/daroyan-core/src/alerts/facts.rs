@@ -28,6 +28,7 @@ const PSEUDO_FILESYSTEMS: [&str; 6] =
 const TOP_MESSAGES: u32 = 3;
 const LAST_LINES: u32 = 3;
 const LAST_LINES_WINDOW_MS: i64 = 3_600_000;
+const EXIT_SLACK_MS: i64 = 5 * 60_000;
 const RECENT_RESULTS: u32 = 20;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -185,6 +186,7 @@ impl FactSources<'_> {
                     self.analytics,
                     server.id.clone(),
                     alert.subject.clone(),
+                    alert.started_at.timestamp_millis() - EXIT_SLACK_MS,
                 )
                 .await?;
                 let last_lines = list_last_lines(
@@ -421,6 +423,10 @@ mod tests {
             "INSERT INTO server_events VALUES ('srv_1', ?, 'process_exited', '{\"name\":\"worker\",\"code\":137}')",
             [ms(8, 59)],
         )?;
+        conn.execute(
+            "INSERT INTO server_events VALUES ('srv_1', ?, 'process_exited', '{\"name\":\"api\",\"oom\":true}')",
+            [ms(7, 0)],
+        )?;
         conn.execute_batch(MIGRATION_DISKS)?;
         let disk = "INSERT INTO disk_states VALUES ('srv_1', ?, ?, ?, 100, ?)";
         for (hour, used) in [(4, 30), (5, 50), (6, 70), (7, 90)] {
@@ -539,6 +545,12 @@ mod tests {
         assert_eq!(process.exit.unwrap().code, Some(137));
         assert_eq!(process.last_lines.len(), 1);
         assert_eq!(process.last_lines[0].message, "memory at 3.6 GB");
+        let AlertFacts::Process(stale) =
+            gather(Condition::ProcessStopped { name: None }, "api", Moment::Firing).await
+        else {
+            panic!("expected process facts");
+        };
+        assert_eq!(stale.exit, None);
         assert_eq!(
             gather(Condition::Disk { above: 85.0 }, "/", Moment::Firing).await,
             AlertFacts::Disk(DiskFacts {

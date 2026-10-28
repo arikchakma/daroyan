@@ -47,8 +47,11 @@ impl DockerEvents {
         events
     }
 
-    pub fn list_actions(&self, container_id: &str) -> Vec<DockerAction> {
-        lock(&self.actions).get(container_id).cloned().unwrap_or_default()
+    pub fn list_last_run(&self, container_id: &str) -> Vec<DockerAction> {
+        let actions = lock(&self.actions);
+        let Some(list) = actions.get(container_id) else { return Vec::new() };
+        let start = list.iter().rposition(|item| item.action == "start");
+        list[start.map_or(0, |index| index + 1)..].to_vec()
     }
 
     fn follow(&self) {
@@ -143,30 +146,51 @@ mod tests {
         record(&stopped, "kill", None);
         record(&stopped, "die", Some("143"));
         record(&stopped, "stop", None);
-        let actions = stopped.list_actions("c1");
+        let actions = stopped.list_last_run("c1");
         assert!(was_stopped(&actions));
         assert!(!was_oom(&actions));
         assert_eq!(read_exit_code(&actions), Some(143));
 
         let crashed = DockerEvents::default();
         record(&crashed, "die", Some("1"));
-        assert!(!was_stopped(&crashed.list_actions("c1")));
+        assert!(!was_stopped(&crashed.list_last_run("c1")));
 
         let oom = DockerEvents::default();
         record(&oom, "oom", None);
         record(&oom, "kill", None);
         record(&oom, "die", Some("137"));
-        let actions = oom.list_actions("c1");
+        let actions = oom.list_last_run("c1");
         assert!(was_oom(&actions));
         assert!(!was_stopped(&actions));
+    }
+
+    #[test]
+    fn forgets_actions_from_an_earlier_run() {
+        let restarted = DockerEvents::default();
+        record(&restarted, "kill", None);
+        record(&restarted, "die", Some("143"));
+        record(&restarted, "stop", None);
+        record(&restarted, "start", None);
+        record(&restarted, "restart", None);
+        record(&restarted, "die", Some("1"));
+        let actions = restarted.list_last_run("c1");
+        assert!(!was_stopped(&actions));
+        assert_eq!(read_exit_code(&actions), Some(1));
+
+        let recovered = DockerEvents::default();
+        record(&recovered, "oom", None);
+        record(&recovered, "die", Some("137"));
+        record(&recovered, "start", None);
+        record(&recovered, "die", Some("1"));
+        assert!(!was_oom(&recovered.list_last_run("c1")));
     }
 
     #[test]
     fn keeps_the_action_name_before_a_colon() {
         let events = DockerEvents::default();
         record(&events, "exec_start: sh", None);
-        assert_eq!(events.list_actions("c1")[0].action, "exec_start");
+        assert_eq!(events.list_last_run("c1")[0].action, "exec_start");
         events.record("not json", Instant::now());
-        assert_eq!(events.list_actions("c1").len(), 1);
+        assert_eq!(events.list_last_run("c1").len(), 1);
     }
 }

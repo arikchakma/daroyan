@@ -21,6 +21,8 @@ const DISCORD_MAX_TITLE: usize = 256;
 const DISCORD_MAX_DESCRIPTION: usize = 4096;
 const DISCORD_MAX_FIELD: usize = 1024;
 const DISCORD_MAX_FIELDS: usize = 25;
+const DISCORD_MAX_FOOTER: usize = 2048;
+const DISCORD_MAX_TOTAL: usize = 6000;
 const TELEGRAM_MAX_SNIPPET: usize = 2500;
 const MAX_LINE: usize = 300;
 
@@ -100,6 +102,53 @@ impl Text {
                 }
             })
             .collect()
+    }
+
+    // Cuts before escaping, one character at a time, so the cut never splits
+    // an entity or leaves a bold marker open.
+    fn render_within(
+        &self,
+        escape: impl Fn(&str) -> String,
+        open: &str,
+        close: &str,
+        max: usize,
+    ) -> String {
+        let full = self.render(&escape, open, close);
+        if full.chars().count() <= max {
+            return full;
+        }
+        let budget = max.saturating_sub(1);
+        let mut rendered = String::new();
+        let mut used = 0;
+        for span in &self.0 {
+            let (open, close) = if span.bold && !span.text.trim().is_empty() {
+                (open, close)
+            } else {
+                ("", "")
+            };
+            let markers = open.chars().count() + close.chars().count();
+            let mut body = String::new();
+            let mut is_cut = false;
+            for character in span.text.chars() {
+                let escaped = escape(character.encode_utf8(&mut [0; 4]));
+                let length = escaped.chars().count();
+                if used + markers + length > budget {
+                    is_cut = true;
+                    break;
+                }
+                used += length;
+                body.push_str(&escaped);
+            }
+            if !body.is_empty() {
+                used += markers;
+                rendered.push_str(&format!("{open}{body}{close}"));
+            }
+            if is_cut {
+                break;
+            }
+        }
+        rendered.push('…');
+        rendered
     }
 }
 
@@ -388,14 +437,15 @@ fn mark_resolved(original: &Value, notice: &Notice) -> Value {
     body["blocks"] = json!([slack_section(title)]);
     if let Some(attachment) = body["attachments"].get_mut(0) {
         attachment["color"] = json!(format!("#{:06X}", notice.tone.color()));
-        let summary = notice.summary().render(escape_slack, "*", "*");
+        let summary =
+            notice.summary().render_within(escape_slack, "*", "*", SLACK_MAX_TEXT);
         if let Some(blocks) = attachment["blocks"].as_array_mut() {
             blocks
                 .retain(|block| block["type"] != "context" && block["type"] != "actions");
             blocks.extend(slack_actions(notice));
             blocks.push(json!({
                 "type": "context",
-                "elements": [{ "type": "mrkdwn", "text": cut(&summary, SLACK_MAX_TEXT) }],
+                "elements": [{ "type": "mrkdwn", "text": summary }],
             }));
         }
     }
@@ -447,18 +497,21 @@ fn build_slack_body(notice: &Notice) -> Value {
     let mut blocks = Vec::new();
     let summary = notice.summary();
     if !summary.is_empty() {
-        blocks.push(section(summary.render(escape_slack, "*", "*")));
+        blocks.push(section(summary.render_within(
+            escape_slack,
+            "*",
+            "*",
+            SLACK_MAX_TEXT,
+        )));
     }
     for fields in details.fields.chunks(SLACK_MAX_FIELDS) {
         let fields: Vec<Value> = fields
             .iter()
             .map(|field| {
-                let text = format!(
-                    "*{}*\n{}",
-                    escape_slack(&field.label),
-                    escape_slack(&field.value)
-                );
-                json!({ "type": "mrkdwn", "text": cut(&text, SLACK_MAX_FIELD) })
+                let label = cut_escaped(&field.label, escape_slack, SLACK_MAX_FIELD / 4);
+                let room = SLACK_MAX_FIELD - label.chars().count() - 3;
+                let value = cut_escaped(&field.value, escape_slack, room);
+                json!({ "type": "mrkdwn", "text": format!("*{label}*\n{value}") })
             })
             .collect();
         blocks.push(json!({ "type": "section", "fields": fields }));
@@ -471,13 +524,18 @@ fn build_slack_body(notice: &Notice) -> Value {
         blocks.push(section(format!("```{code}```")));
     }
     if !details.note.is_empty() {
-        blocks.push(section(details.note.render(escape_slack, "*", "*")));
+        blocks.push(section(details.note.render_within(
+            escape_slack,
+            "*",
+            "*",
+            SLACK_MAX_TEXT,
+        )));
     }
     blocks.extend(slack_actions(notice));
     if let Some(context) = &details.context {
         blocks.push(json!({
             "type": "context",
-            "elements": [{ "type": "mrkdwn", "text": cut(&escape_slack(context), SLACK_MAX_TEXT) }],
+            "elements": [{ "type": "mrkdwn", "text": cut_escaped(context, escape_slack, SLACK_MAX_TEXT) }],
         }));
     }
     blocks.truncate(SLACK_MAX_BLOCKS - 1);
@@ -505,7 +563,7 @@ fn build_discord_message(notice: &Notice) -> Value {
         .map(|field| {
             json!({
                 "name": cut(&field.label, DISCORD_MAX_TITLE),
-                "value": cut(&escape_markdown(&field.value), DISCORD_MAX_FIELD),
+                "value": cut_escaped(&field.value, escape_markdown, DISCORD_MAX_FIELD),
                 "inline": true,
             })
         })
@@ -524,7 +582,8 @@ fn build_discord_message(notice: &Notice) -> Value {
         .map(|link| format!("[{}]({})", escape_markdown(&link.label), link.url))
         .collect::<Vec<_>>()
         .join(" · ");
-    let after = [details.note.render(escape_markdown, "**", "**"), links]
+    let room = DISCORD_MAX_FIELD.saturating_sub(links.chars().count() + 1);
+    let after = [details.note.render_within(escape_markdown, "**", "**", room), links]
         .into_iter()
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
@@ -537,14 +596,40 @@ fn build_discord_message(notice: &Notice) -> Value {
         }));
     }
     fields.truncate(DISCORD_MAX_FIELDS);
+    let title =
+        cut(&format!("{}{}", notice.tone.emoji(), notice.title), DISCORD_MAX_TITLE);
+    let footer = details
+        .context
+        .as_deref()
+        .map(|context| cut(context, DISCORD_MAX_FOOTER));
+    let length = |text: &str| text.chars().count();
+    let field_length = |field: &Value| {
+        length(field["name"].as_str().unwrap_or_default())
+            + length(field["value"].as_str().unwrap_or_default())
+    };
+    let mut used = length(&title) + footer.as_deref().map_or(0, length);
+    fields.retain(|field| {
+        let next = used + field_length(field);
+        let fits = next <= DISCORD_MAX_TOTAL;
+        if fits {
+            used = next;
+        }
+        fits
+    });
+    let description = notice.summary().render_within(
+        escape_markdown,
+        "**",
+        "**",
+        DISCORD_MAX_DESCRIPTION.min(DISCORD_MAX_TOTAL.saturating_sub(used)),
+    );
     let mut embed = json!({
-        "title": cut(&format!("{}{}", notice.tone.emoji(), notice.title), DISCORD_MAX_TITLE),
-        "description": cut(&notice.summary().render(escape_markdown, "**", "**"), DISCORD_MAX_DESCRIPTION),
+        "title": title,
+        "description": description,
         "color": notice.tone.color(),
         "fields": fields,
     });
-    if let Some(context) = &details.context {
-        embed["footer"] = json!({ "text": cut(context, DISCORD_MAX_DESCRIPTION) });
+    if let Some(footer) = footer {
+        embed["footer"] = json!({ "text": footer });
     }
     json!({ "embeds": [embed] })
 }
@@ -639,6 +724,10 @@ fn format_code(lines: &[String], escape: impl Fn(&str) -> String, max: usize) ->
     code
 }
 
+fn cut_escaped(text: &str, escape: impl Fn(&str) -> String, max: usize) -> String {
+    Text::from(text).render_within(escape, "", "", max)
+}
+
 fn cut(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
@@ -686,6 +775,47 @@ fn describe_error(error: &reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cuts_before_escaping() {
+        let text = Text::from("Tom & Jerry ").bold("<b>loud</b>");
+        assert_eq!(
+            text.render_within(escape_html, "<b>", "</b>", 100),
+            "Tom &amp; Jerry <b>&lt;b&gt;loud&lt;/b&gt;</b>"
+        );
+        assert_eq!(text.render_within(escape_html, "<b>", "</b>", 10), "Tom &amp;…");
+        assert_eq!(text.render_within(escape_html, "<b>", "</b>", 8), "Tom …");
+        assert_eq!(
+            text.render_within(escape_html, "<b>", "</b>", 30),
+            "Tom &amp; Jerry <b>&lt;b</b>…"
+        );
+        assert_eq!(cut_escaped("a&b", escape_slack, 4), "a…");
+    }
+
+    #[test]
+    fn keeps_a_discord_embed_under_the_total_limit() {
+        let mut details = make_details();
+        details.summary = Text::from("x".repeat(5000));
+        details.fields = (0..8)
+            .map(|index| Field::new(format!("Field {index}"), "y".repeat(2000)))
+            .collect();
+        details.context = Some("z".repeat(3000));
+        let message = build_discord_message(&make_notice(details));
+        let embed = &message["embeds"][0];
+        let length =
+            |value: &Value| value.as_str().map_or(0, |text| text.chars().count());
+        let total = length(&embed["title"])
+            + length(&embed["description"])
+            + length(&embed["footer"]["text"])
+            + embed["fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|field| length(&field["name"]) + length(&field["value"]))
+                .sum::<usize>();
+        assert!(total <= DISCORD_MAX_TOTAL, "{total}");
+        assert_eq!(length(&embed["footer"]["text"]), DISCORD_MAX_FOOTER);
+    }
 
     #[test]
     fn escapes_the_slack_notification_text() {

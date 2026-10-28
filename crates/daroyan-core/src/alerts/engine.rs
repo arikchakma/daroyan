@@ -9,8 +9,8 @@ use tokio::task::JoinHandle;
 use crate::agents::Agents;
 use crate::alerts::deploys::{DEPLOY_WINDOW_SECS, DeployNote, DeployWatch};
 use crate::alerts::evaluate::{
-    Level, Reading, ServerSnapshot, find_readings, format_percent, is_past, make_reading,
-    rate,
+    Level, NO_DATA, Reading, ServerSnapshot, find_readings, format_percent, is_past,
+    make_reading, rate,
 };
 use crate::alerts::facts::{AlertFacts, CheckCount, FactSources};
 use crate::alerts::integrations::IntegrationConfig;
@@ -453,7 +453,7 @@ impl AlertEngine {
                     (None, NoData::Keep) => continue,
                     (None, NoData::Resolve) => (Vec::new(), false),
                     (None, NoData::Alert) => {
-                        (vec![make_reading("No data", 0.0, "No data".to_string())], true)
+                        (vec![make_reading(NO_DATA, 0.0, NO_DATA.to_string())], true)
                     }
                 };
                 evaluated.insert(pair);
@@ -619,6 +619,13 @@ impl AlertEngine {
         moment: Moment,
         now: DateTime<Utc>,
     ) -> AlertFacts {
+        let is_unused = alert.subject == NO_DATA
+            || (moment.is_resolved()
+                && !matches!(parsed.condition, Condition::Logs { .. }))
+            || self.is_silenced(&alert.rule_id, parsed, alert, now);
+        if is_unused {
+            return AlertFacts::None;
+        }
         let server = alert.server_id.as_ref().and_then(|id| self.servers.get(id));
         let sources = FactSources {
             analytics: &self.analytics,
@@ -922,6 +929,18 @@ impl AlertEngine {
         self.mutes.iter().any(|mute| mute.covers(rule_id, &target_id))
     }
 
+    fn is_silenced(
+        &self,
+        rule_id: &str,
+        parsed: &ParsedRule,
+        alert: &Alert,
+        now: DateTime<Utc>,
+    ) -> bool {
+        self.is_muted(rule_id, alert)
+            || parsed.options.is_quiet(now)
+            || self.maintained.contains(&get_target_id(alert))
+    }
+
     async fn end_mutes(
         &mut self,
         rules: &[AlertRule],
@@ -1027,7 +1046,23 @@ impl AlertEngine {
                     }
                     _ => false,
                 })
-                .filter(|(_, parsed)| parsed.scope.includes(&server_id, &server.labels))
+                .filter(|(rule, parsed)| {
+                    parsed.scope.includes(&server_id, &server.labels)
+                        && !parsed.options.is_quiet(now)
+                        && !self
+                            .mutes
+                            .iter()
+                            .any(|mute| mute.covers(&rule.id, &server_id))
+                })
+                .collect();
+            let watching: Vec<(&AlertRule, ParsedRule)> = watching
+                .into_iter()
+                .filter(|(rule, parsed)| {
+                    parsed
+                        .options
+                        .message_limit
+                        .is_none_or(|limit| self.try_slot(&rule.id, limit, now))
+                })
                 .collect();
             let Some((first, _)) = watching.first() else { continue };
             let mut recipients: Vec<String> = Vec::new();
@@ -1056,18 +1091,27 @@ impl AlertEngine {
         }
     }
 
-    fn take_slot(&mut self, rule_id: &str, limit: u32, now: DateTime<Utc>) -> Slot {
+    fn try_slot(&mut self, rule_id: &str, limit: u32, now: DateTime<Utc>) -> bool {
         let sent = self.sent.entry(rule_id.to_string()).or_default();
         sent.retain(|at| (now - *at).num_seconds() < LIMIT_WINDOW_SECS);
-        if sent.len() < usize::try_from(limit).unwrap_or(usize::MAX) {
+        let is_free = sent.len() < usize::try_from(limit).unwrap_or(usize::MAX);
+        if is_free {
             sent.push(now);
+        }
+        is_free
+    }
+
+    fn take_slot(&mut self, rule_id: &str, limit: u32, now: DateTime<Utc>) -> Slot {
+        if self.try_slot(rule_id, limit, now) {
             return Slot::Send;
         }
         if self.limited.get(rule_id).is_some_and(|until| *until > now) {
             return Slot::Drop;
         }
-        let until = sent
-            .first()
+        let until = self
+            .sent
+            .get(rule_id)
+            .and_then(|sent| sent.first())
             .map_or(now, |at| *at + chrono::Duration::seconds(LIMIT_WINDOW_SECS));
         self.limited.insert(rule_id.to_string(), until);
         Slot::Summary(until)
@@ -1084,10 +1128,7 @@ impl AlertEngine {
         reply: Option<Reply>,
     ) -> Result<()> {
         let now = Utc::now();
-        if self.is_muted(&rule.id, alert)
-            || parsed.options.is_quiet(now)
-            || self.maintained.contains(&get_target_id(alert))
-        {
+        if self.is_silenced(&rule.id, parsed, alert, now) {
             return Ok(());
         }
         let log = DeliveryLog {
@@ -1240,7 +1281,8 @@ pub async fn deliver_notice(
         }
     }
     if let Some(log) = log {
-        let posted = outcome.as_ref().ok().cloned().flatten();
+        let starts_thread = reply.is_none() && notice.event == "alert.firing";
+        let posted = outcome.as_ref().ok().cloned().flatten().filter(|_| starts_thread);
         let delivery = NewAlertDelivery {
             id: new_id(Prefix::AlertDelivery),
             rule_id: log.rule_id,

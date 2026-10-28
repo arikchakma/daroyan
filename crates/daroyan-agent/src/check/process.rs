@@ -138,7 +138,7 @@ impl ProcessWatch {
                 .docker
                 .as_ref()
                 .zip(self.last_containers.get(&check.name))
-                .map(|(docker, last)| docker.list_actions(&last.id))
+                .map(|(docker, last)| docker.list_last_run(&last.id))
                 .unwrap_or_default();
             exit.oom |= was_oom(&actions);
             exit.code = exit.code.or_else(|| read_exit_code(&actions));

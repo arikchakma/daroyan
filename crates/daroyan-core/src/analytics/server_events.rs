@@ -94,16 +94,17 @@ pub async fn find_last_exit(
     analytics: &Analytics,
     server_id: String,
     name: String,
+    since_ms: i64,
 ) -> Result<Option<ProcessExit>> {
     analytics
         .read(move |conn| {
             let mut statement = conn.prepare(
                 "SELECT CAST(data AS VARCHAR) FROM server_events \
                  WHERE server_id = ? AND kind = 'process_exited' AND json_extract_string(data, '$.name') = ? \
-                 ORDER BY occurred_at DESC LIMIT 1",
+                 AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT 1",
             )?;
             let data: Option<String> = statement
-                .query_row(params![server_id, name], |row| row.get(0))
+                .query_row(params![server_id, name, since_ms], |row| row.get(0))
                 .optional()?;
             Ok(data.and_then(|data| serde_json::from_str(&data).ok()))
         })

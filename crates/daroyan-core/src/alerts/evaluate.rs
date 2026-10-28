@@ -126,6 +126,8 @@ pub fn find_readings(
     Some(readings)
 }
 
+pub const NO_DATA: &str = "No data";
+
 pub fn make_reading(subject: &str, value: f64, label: String) -> Reading {
     Reading { subject: subject.to_string(), value, label }
 }

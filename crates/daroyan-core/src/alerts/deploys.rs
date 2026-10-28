@@ -111,13 +111,13 @@ impl DeployNote<'_> {
         let longest =
             self.replacements.iter().map(|item| item.gap_secs).max().unwrap_or(0);
         let count = self.replacements.len();
-        let (noun, running) = match count {
-            1 => ("The container", "It is running.".to_string()),
-            2 => ("The containers", "Both are running.".to_string()),
-            _ => ("The containers", format!("All {count} are running.")),
+        let (noun, verb, running) = match count {
+            1 => ("The container", "was", "It is running.".to_string()),
+            2 => ("The containers", "were", "Both are running.".to_string()),
+            _ => ("The containers", "were", format!("All {count} are running.")),
         };
         let summary = if longest == 0 {
-            Text::from(format!("{noun} were replaced. {running}"))
+            Text::from(format!("{noun} {verb} replaced. {running}"))
         } else {
             Text::from(format!("{noun} stopped and started again within "))
                 .bold(format_span(longest))
@@ -340,14 +340,14 @@ mod tests {
             ),
         ];
         let labels = vec!["production".to_string()];
-        let notice = DeployNote {
+        let note = DeployNote {
             server_id: "srv_1",
             server_name: "Inboxjot Server",
             labels: &labels,
             replacements: &replacements,
             app_url: Some("https://daroyan.test"),
-        }
-        .notice();
+        };
+        let notice = note.notice();
         assert_eq!(
             notice.title,
             "🚀 Deployed: Inboxjot API, Inboxjot Worker and Inboxjot SMTP"
@@ -370,5 +370,11 @@ mod tests {
             Some("Inboxjot Server · production · No alert was opened.")
         );
         assert_eq!(notice.details.links[0].url, "https://daroyan.test/servers/srv_1");
+
+        let single = DeployNote { replacements: &replacements[2..], ..note }.notice();
+        assert_eq!(
+            single.details.summary.to_string(),
+            "The container was replaced. It is running."
+        );
     }
 }
