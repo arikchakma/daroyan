@@ -1,6 +1,6 @@
 use chrono::Utc;
 use daroyan_protocol::report::State;
-use duckdb::{Connection, params};
+use duckdb::{Connection, OptionalExt, params};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -197,6 +197,24 @@ pub async fn list_fleet_cpu(
                     Ok(TrendPoint { at: row.get(0)?, value: row.get(1)? })
                 })?
                 .collect()
+        })
+        .await
+}
+
+pub async fn find_disk_used_before(
+    analytics: &Analytics,
+    server_id: String,
+    before: i64,
+) -> Result<Option<u64>> {
+    analytics
+        .read(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT disk_used FROM server_states \
+                 WHERE server_id = ? AND taken_at <= ? ORDER BY taken_at DESC LIMIT 1",
+            )?;
+            statement
+                .query_row(params![server_id, before], |row| row.get(0))
+                .optional()
         })
         .await
 }

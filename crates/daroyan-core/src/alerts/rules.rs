@@ -236,7 +236,7 @@ pub fn read_log_severity(level: &str) -> Option<u8> {
     }
 }
 
-fn describe_log_level(level: &str) -> &str {
+pub fn describe_log_level(level: &str) -> &str {
     match level {
         "warn" => "warning",
         other => other,

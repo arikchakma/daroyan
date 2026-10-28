@@ -365,6 +365,36 @@ pub async fn list_recent_results(
         .await
 }
 
+pub async fn find_last_up(
+    analytics: &Analytics,
+    check_id: String,
+) -> Result<Option<ResultItem>> {
+    analytics
+        .read(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT checked_at, status, code, response_ms, error, dns_ms, connect_ms, tls_ms, ttfb_ms \
+                 FROM uptime_results \
+                 WHERE check_id = ? AND status = 'up' ORDER BY checked_at DESC LIMIT 1",
+            )?;
+            statement
+                .query_row(params![check_id], |row| {
+                    Ok(ResultItem {
+                        at: row.get(0)?,
+                        status: row.get(1)?,
+                        code: row.get(2)?,
+                        response_ms: row.get(3)?,
+                        error: row.get(4)?,
+                        dns_ms: row.get(5)?,
+                        connect_ms: row.get(6)?,
+                        tls_ms: row.get(7)?,
+                        ttfb_ms: row.get(8)?,
+                    })
+                })
+                .optional()
+        })
+        .await
+}
+
 pub async fn delete_check_results(analytics: &Analytics, check_id: String) -> Result<()> {
     analytics
         .write(move |conn| {

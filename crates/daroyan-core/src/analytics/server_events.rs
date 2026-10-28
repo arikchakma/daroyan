@@ -1,6 +1,6 @@
 use chrono::Utc;
 use daroyan_protocol::report::Event;
-use duckdb::{Connection, params};
+use duckdb::{Connection, OptionalExt, params};
 use serde::Serialize;
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -75,6 +75,29 @@ pub async fn list_recent_events(
                     })
                 })?
                 .collect()
+        })
+        .await
+}
+
+pub async fn find_exit_code(
+    analytics: &Analytics,
+    server_id: String,
+    name: String,
+) -> Result<Option<i32>> {
+    analytics
+        .read(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT CAST(data AS VARCHAR) FROM server_events \
+                 WHERE server_id = ? AND kind = 'process_exited' AND json_extract_string(data, '$.name') = ? \
+                 ORDER BY occurred_at DESC LIMIT 1",
+            )?;
+            let data: Option<String> = statement
+                .query_row(params![server_id, name], |row| row.get(0))
+                .optional()?;
+            Ok(data
+                .and_then(|data| serde_json::from_str::<Value>(&data).ok())
+                .and_then(|data| data["code"].as_i64())
+                .and_then(|code| i32::try_from(code).ok()))
         })
         .await
 }

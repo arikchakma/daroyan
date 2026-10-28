@@ -401,6 +401,93 @@ pub async fn list_busy_windows(
         .await
 }
 
+pub async fn list_top_messages(
+    analytics: &Analytics,
+    server_id: String,
+    matcher: LogMatch,
+    since: i64,
+    limit: u32,
+) -> Result<Vec<(String, u64)>> {
+    analytics
+        .read(move |conn| {
+            let mut sql = String::from(
+                "SELECT message, count(*) AS found FROM log_lines WHERE server_id = ? AND logged_at >= ?",
+            );
+            let mut values = vec![SqlValue::Text(server_id), SqlValue::BigInt(since)];
+            push_match(&mut sql, &mut values, &matcher);
+            sql.push_str(" GROUP BY message ORDER BY found DESC, max(logged_at) DESC LIMIT ?");
+            values.push(SqlValue::UInt(limit));
+            let mut statement = conn.prepare(&sql)?;
+            statement
+                .query_map(params_from_iter(values), |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect()
+        })
+        .await
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LogRun {
+    pub total: u64,
+    pub peak: u64,
+    pub last_at: Option<i64>,
+}
+
+pub async fn summarize_log_run(
+    analytics: &Analytics,
+    server_id: String,
+    matcher: LogMatch,
+    since: i64,
+    window_ms: i64,
+) -> Result<LogRun> {
+    analytics
+        .read(move |conn| {
+            let mut sql = String::from(
+                "WITH matched AS (SELECT logged_at FROM log_lines WHERE server_id = ? AND logged_at >= ?",
+            );
+            let mut values = vec![SqlValue::Text(server_id), SqlValue::BigInt(since)];
+            push_match(&mut sql, &mut values, &matcher);
+            sql.push_str(
+                ") SELECT count(*), max(logged_at), \
+                 (SELECT max(found) FROM (SELECT count(*) AS found FROM matched GROUP BY logged_at // ?)) \
+                 FROM matched",
+            );
+            values.push(SqlValue::BigInt(window_ms));
+            conn.query_row(&sql, params_from_iter(values), |row| {
+                Ok(LogRun {
+                    total: row.get(0)?,
+                    last_at: row.get(1)?,
+                    peak: row.get::<_, Option<u64>>(2)?.unwrap_or_default(),
+                })
+            })
+        })
+        .await
+}
+
+pub async fn list_last_lines(
+    analytics: &Analytics,
+    server_id: String,
+    service: String,
+    since: i64,
+    limit: u32,
+) -> Result<Vec<(i64, u8, String)>> {
+    analytics
+        .read(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT logged_at, severity, message FROM log_lines \
+                 WHERE server_id = ? AND service = ? AND logged_at >= ? \
+                 ORDER BY logged_at DESC LIMIT ?",
+            )?;
+            let mut lines: Vec<(i64, u8, String)> = statement
+                .query_map(params![server_id, service, since, limit], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?
+                .collect::<duckdb::Result<_>>()?;
+            lines.reverse();
+            Ok(lines)
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use daroyan_protocol::log::{LogBatch, LogLine, LogStream, SEVERITY_ERROR};

@@ -11,6 +11,7 @@ use crate::alerts::evaluate::{
     Level, Reading, ServerSnapshot, find_readings, format_percent, is_past, make_reading,
     rate,
 };
+use crate::alerts::facts::{AlertFacts, CheckCount, FactSources};
 use crate::alerts::integrations::IntegrationConfig;
 use crate::alerts::message::{AlertMessage, Moment};
 use crate::alerts::notify::{ChatMessage, Details, Notice, Tone, send_notice};
@@ -99,6 +100,9 @@ pub struct AlertEngine {
     limited: HashMap<String, DateTime<Utc>>,
     maintained: HashSet<String>,
     labels: HashMap<String, Vec<String>>,
+    servers: HashMap<String, Server>,
+    checks: HashMap<String, UptimeCheck>,
+    down: HashSet<String>,
 }
 
 enum Slot {
@@ -165,6 +169,9 @@ impl AlertEngine {
             limited: HashMap::new(),
             maintained: HashSet::new(),
             labels: HashMap::new(),
+            servers: HashMap::new(),
+            checks: HashMap::new(),
+            down: HashSet::new(),
         }
     }
 
@@ -387,6 +394,13 @@ impl AlertEngine {
             .iter()
             .map(|server| (server.server.id.clone(), server.labels.clone()))
             .collect();
+        self.servers = servers
+            .iter()
+            .map(|server| (server.id.clone(), server.clone()))
+            .collect();
+        self.checks =
+            checks.iter().map(|check| (check.id.clone(), check.clone())).collect();
+        self.down = down.keys().cloned().collect();
         let target_names: HashMap<String, String> = servers
             .iter()
             .map(|server| (server.id.clone(), server.name.clone()))
@@ -557,7 +571,52 @@ impl AlertEngine {
         }
     }
 
-    fn make_alert_notice(
+    fn count_server_checks(&self, server: &Server) -> Option<CheckCount> {
+        let host: Host = serde_json::from_value(server.host.clone()).ok()?;
+        let names: Vec<&str> = std::iter::once(host.hostname.as_str())
+            .chain(host.private_ip.as_deref())
+            .collect();
+        let checks: Vec<&UptimeCheck> = self
+            .checks
+            .values()
+            .filter(|check| !check.paused)
+            .filter(|check| {
+                reqwest::Url::parse(&check.target)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_string))
+                    .is_some_and(|host| names.contains(&host.as_str()))
+            })
+            .collect();
+        Some(CheckCount {
+            passing: checks.iter().filter(|check| !self.down.contains(&check.id)).count(),
+            total: checks.len(),
+        })
+    }
+
+    async fn gather_facts(
+        &self,
+        parsed: &ParsedRule,
+        alert: &Alert,
+        moment: Moment,
+        now: DateTime<Utc>,
+    ) -> AlertFacts {
+        let server = alert.server_id.as_ref().and_then(|id| self.servers.get(id));
+        let sources = FactSources {
+            analytics: &self.analytics,
+            server,
+            check: alert.check_id.as_ref().and_then(|id| self.checks.get(id)),
+            server_checks: server.and_then(|server| self.count_server_checks(server)),
+        };
+        sources
+            .gather(&parsed.condition, alert, moment, now)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(alert_id = %alert.id, error = ?error, "gather alert facts");
+                AlertFacts::None
+            })
+    }
+
+    async fn make_alert_notice(
         &self,
         rule: &AlertRule,
         parsed: &ParsedRule,
@@ -569,17 +628,20 @@ impl AlertEngine {
     ) -> Notice {
         let target_id = get_target_id(alert);
         let target = get_target(alert);
+        let now = Utc::now();
+        let facts = self.gather_facts(parsed, alert, moment, now).await;
         let message = AlertMessage {
             rule,
             condition: &parsed.condition,
             options: &parsed.options,
             alert,
+            facts: &facts,
             target,
             target_id: &target_id,
             target_name,
             labels: self.labels.get(&target_id).map_or(&[], Vec::as_slice),
             app_url: self.app_url.as_deref(),
-            now: Utc::now(),
+            now,
         };
         Notice {
             event: if moment.is_resolved() { "alert.resolved" } else { "alert.firing" },
@@ -630,15 +692,17 @@ impl AlertEngine {
             alert.value,
             self.describe(parsed, rule)
         );
-        let notice = self.make_alert_notice(
-            rule,
-            parsed,
-            &alert,
-            target_name,
-            Moment::Firing,
-            prefix,
-            body,
-        );
+        let notice = self
+            .make_alert_notice(
+                rule,
+                parsed,
+                &alert,
+                target_name,
+                Moment::Firing,
+                prefix,
+                body,
+            )
+            .await;
         self.notify(
             parsed.recipients(level),
             integrations,
@@ -700,15 +764,17 @@ impl AlertEngine {
             reading.label,
             self.describe(parsed, rule)
         );
-        let notice = self.make_alert_notice(
-            rule,
-            parsed,
-            &escalated,
-            target_name,
-            Moment::Escalated,
-            "Critical",
-            body,
-        );
+        let notice = self
+            .make_alert_notice(
+                rule,
+                parsed,
+                &escalated,
+                target_name,
+                Moment::Escalated,
+                "Critical",
+                body,
+            )
+            .await;
         self.notify(parsed.recipients(level), integrations, &notice, rule, parsed, alert)
             .await
     }
@@ -752,15 +818,17 @@ impl AlertEngine {
             format_duration(lasted),
             self.describe(parsed, rule)
         );
-        let notice = self.make_alert_notice(
-            rule,
-            parsed,
-            alert,
-            &target_name,
-            Moment::Reminder { lasted_secs: lasted },
-            "Still firing",
-            body,
-        );
+        let notice = self
+            .make_alert_notice(
+                rule,
+                parsed,
+                alert,
+                &target_name,
+                Moment::Reminder { lasted_secs: lasted },
+                "Still firing",
+                body,
+            )
+            .await;
         self.notify(parsed.recipients(level), integrations, &notice, rule, parsed, alert)
             .await
     }
@@ -790,15 +858,17 @@ impl AlertEngine {
             alert.subject,
             format_duration(lasted)
         );
-        let notice = self.make_alert_notice(
-            rule,
-            parsed,
-            &resolved,
-            target_name,
-            Moment::Resolved { lasted_secs: lasted },
-            "Resolved",
-            body,
-        );
+        let notice = self
+            .make_alert_notice(
+                rule,
+                parsed,
+                &resolved,
+                target_name,
+                Moment::Resolved { lasted_secs: lasted },
+                "Resolved",
+                body,
+            )
+            .await;
         self.notify(
             parsed.recipients(Level::read(&alert.severity)),
             integrations,
@@ -864,15 +934,17 @@ impl AlertEngine {
                     alert.value,
                     format_duration(lasted)
                 );
-                let notice = self.make_alert_notice(
-                    rule,
-                    &parsed,
-                    alert,
-                    &target_name,
-                    Moment::MuteEnded { lasted_secs: lasted },
-                    "Still firing",
-                    body,
-                );
+                let notice = self
+                    .make_alert_notice(
+                        rule,
+                        &parsed,
+                        alert,
+                        &target_name,
+                        Moment::MuteEnded { lasted_secs: lasted },
+                        "Still firing",
+                        body,
+                    )
+                    .await;
                 let level = Level::read(&alert.severity);
                 self.notify(
                     parsed.recipients(level),
