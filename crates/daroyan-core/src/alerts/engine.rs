@@ -107,6 +107,7 @@ pub struct AlertEngine {
     checks: HashMap<String, UptimeCheck>,
     down: HashSet<String>,
     deploys: DeployWatch,
+    interactive: bool,
 }
 
 enum Slot {
@@ -120,8 +121,10 @@ pub fn spawn_alert_engine(
     agents: Agents,
     analytics: Analytics,
     app_url: Option<String>,
+    interactive: bool,
 ) -> JoinHandle<()> {
-    let mut engine = AlertEngine::new(database, agents, analytics, app_url);
+    let mut engine =
+        AlertEngine::new(database, agents, analytics, app_url).interactive(interactive);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(TICK);
         loop {
@@ -177,7 +180,13 @@ impl AlertEngine {
             checks: HashMap::new(),
             down: HashSet::new(),
             deploys: DeployWatch::default(),
+            interactive: false,
         }
+    }
+
+    #[must_use]
+    pub fn interactive(self, interactive: bool) -> Self {
+        Self { interactive, ..self }
     }
 
     async fn count_logs(
@@ -660,6 +669,7 @@ impl AlertEngine {
             target_name,
             labels: self.labels.get(&target_id).map_or(&[], Vec::as_slice),
             app_url: self.app_url.as_deref(),
+            interactive: self.interactive,
             now,
         };
         Notice {

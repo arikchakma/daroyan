@@ -3,12 +3,13 @@ use chrono_tz::Tz;
 use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
+use crate::alerts::actions::{DECLARE, MUTE_DAY, MUTE_HOUR, RESTART};
 use crate::alerts::evaluate::Level;
 use crate::alerts::facts::{
     AlertFacts, CertFacts, CheckFacts, DiskFacts, LogFacts, OfflineFacts, ProcessFacts,
     UsageFacts,
 };
-use crate::alerts::notify::{Details, Field, Link, Snippet, Text, Tone};
+use crate::alerts::notify::{Details, Field, Link, LinkStyle, Snippet, Text, Tone};
 use crate::alerts::rules::{
     Condition, RuleOptions, Target, describe_log_level, describe_rule, format_moment,
     format_ms, read_time_zone,
@@ -71,6 +72,7 @@ pub struct AlertMessage<'a> {
     pub target_name: &'a str,
     pub labels: &'a [String],
     pub app_url: Option<&'a str>,
+    pub interactive: bool,
     pub now: DateTime<Utc>,
 }
 
@@ -94,6 +96,7 @@ impl AlertMessage<'_> {
         }
         if !moment.is_resolved() {
             details.links.extend(self.firing_links());
+            details.links.extend(self.action_links());
         }
         details
     }
@@ -275,6 +278,18 @@ impl AlertMessage<'_> {
                 .collect(),
         });
         let mut links = self.open_target();
+        if self.interactive && facts.controllable {
+            let restart = Link::new("Restart", self.alert_url().unwrap_or_default())
+                .primary()
+                .action(RESTART, &self.alert.id);
+            links = std::iter::once(restart)
+                .chain(
+                    links
+                        .into_iter()
+                        .map(|link| Link { style: LinkStyle::Default, ..link }),
+                )
+                .collect();
+        }
         if snippet.is_some() {
             links.extend(self.logs_link());
         }
@@ -610,6 +625,32 @@ impl AlertMessage<'_> {
         Some(Link::new("Open logs", url.as_str()))
     }
 
+    fn alert_url(&self) -> Option<String> {
+        self.app_url()
+            .map(|app_url| format!("{app_url}/alerts/{}", self.rule.id))
+    }
+
+    fn action_links(&self) -> Vec<Link> {
+        let Some(url) = self.alert_url().filter(|_| self.interactive) else {
+            return Vec::new();
+        };
+        let id = self.alert.id.as_str();
+        let mut links = Vec::new();
+        match self.condition {
+            Condition::Offline | Condition::ProcessStopped { .. } => {}
+            Condition::CertDays { .. } => {
+                links.push(Link::new("Mute 1 day", url.as_str()).action(MUTE_DAY, id));
+            }
+            _ => links.push(Link::new("Mute 1h", url.as_str()).action(MUTE_HOUR, id)),
+        }
+        if Level::read(&self.alert.severity) == Level::Critical
+            && matches!(self.condition, Condition::Logs { .. } | Condition::UptimeDown)
+        {
+            links.push(Link::new("Declare incident", url).danger().action(DECLARE, id));
+        }
+        links
+    }
+
     fn firing_links(&self) -> Vec<Link> {
         let Some(app_url) = self.app_url() else { return Vec::new() };
         let view = Link::new("View alert", format!("{app_url}/alerts/{}", self.rule.id));
@@ -777,6 +818,7 @@ mod tests {
         facts: AlertFacts,
         target: Target,
         labels: Vec<String>,
+        interactive: bool,
     }
 
     impl Case {
@@ -789,6 +831,7 @@ mod tests {
                 facts,
                 target: Target::Server,
                 labels: vec!["production".to_string()],
+                interactive: false,
             }
         }
 
@@ -804,6 +847,7 @@ mod tests {
                 target_name: "Inboxjot Server",
                 labels: &self.labels,
                 app_url: Some("https://daroyan.test/"),
+                interactive: self.interactive,
                 now: at(9, 0),
             }
             .details(moment)
@@ -859,6 +903,61 @@ mod tests {
         assert_eq!(
             details.links[0].url,
             "https://daroyan.test/logs?server_id=server_1&range=1h&level=error&service=Inboxjot+API"
+        );
+    }
+
+    #[test]
+    fn adds_action_buttons_when_slack_buttons_are_set_up() {
+        let mut spike = Case::new(
+            logs_condition(),
+            make_alert("Inboxjot API", "11 error lines in 5m"),
+            AlertFacts::Logs(LogFacts::default()),
+        );
+        assert_eq!(
+            labels(&spike.details(Moment::Firing).links),
+            ["Open logs", "View alert"]
+        );
+        spike.interactive = true;
+        let links = spike.details(Moment::Firing).links;
+        assert_eq!(
+            labels(&links),
+            ["Open logs", "View alert", "Mute 1h", "Declare incident"]
+        );
+        assert_eq!(links[2].action.as_ref().unwrap().id, MUTE_HOUR);
+        assert_eq!(links[2].action.as_ref().unwrap().value, "alert_1");
+        assert_eq!(links[3].style, LinkStyle::Danger);
+        assert!(
+            spike
+                .details(Moment::Resolved { lasted_secs: 60 })
+                .links
+                .iter()
+                .all(|link| link.action.is_none())
+        );
+
+        let mut crashed = Case::new(
+            Condition::ProcessStopped { name: None },
+            make_alert("worker", "Stopped"),
+            AlertFacts::Process(ProcessFacts {
+                controllable: true,
+                ..ProcessFacts::default()
+            }),
+        );
+        crashed.interactive = true;
+        let links = crashed.details(Moment::Firing).links;
+        assert_eq!(labels(&links), ["Restart", "Open server", "View alert"]);
+        assert_eq!(links[0].style, LinkStyle::Primary);
+        assert_eq!(links[1].style, LinkStyle::Default);
+
+        let mut cert = Case::new(
+            Condition::CertDays { below: 14.0 },
+            make_alert("Certificate", "12 days left"),
+            AlertFacts::None,
+        );
+        cert.interactive = true;
+        cert.alert.severity = "warning".to_string();
+        assert_eq!(
+            labels(&cert.details(Moment::Firing).links),
+            ["Open server", "View alert", "Mute 1 day"]
         );
     }
 
@@ -962,6 +1061,7 @@ mod tests {
                     severity: 17,
                     message: "failed to allocate 64 MB".to_string(),
                 }],
+                controllable: true,
             }),
         )
         .details(Moment::Firing)

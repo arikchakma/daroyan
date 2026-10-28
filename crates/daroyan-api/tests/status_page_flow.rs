@@ -47,6 +47,7 @@ async fn publishes_monitor_status_on_a_public_page() {
         slack_api_url: "https://slack.com".to_string(),
         slack_client_id: None,
         slack_client_secret: None,
+        slack_signing_secret: None,
         discord_client_id: None,
         discord_client_secret: None,
         telegram_bot_token: None,

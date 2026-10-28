@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod backtest;
 pub mod connect;
 pub mod deploys;

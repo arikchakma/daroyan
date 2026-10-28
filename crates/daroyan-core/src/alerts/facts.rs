@@ -62,6 +62,7 @@ pub struct UsageFacts {
 pub struct ProcessFacts {
     pub exit: Option<ProcessExit>,
     pub last_lines: Vec<LogLine>,
+    pub controllable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,7 +204,12 @@ impl FactSources<'_> {
                     })
                 })
                 .collect();
-                AlertFacts::Process(ProcessFacts { exit, last_lines })
+                let controllable = self.report().is_some_and(|report| {
+                    report.processes.iter().any(|process| {
+                        process.name == alert.subject && process.controllable
+                    })
+                });
+                AlertFacts::Process(ProcessFacts { exit, last_lines, controllable })
             }
             Condition::Disk { .. } => {
                 let (Some(server), Some(report)) = (self.server, self.report()) else {

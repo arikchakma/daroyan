@@ -75,6 +75,18 @@ impl Database {
             .map(drop)
     }
 
+    pub async fn find_delivery_by_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+    ) -> Result<Option<Model>, DbErr> {
+        Entity::find()
+            .filter(Column::ChatChannelId.eq(channel_id))
+            .filter(Column::ChatMessageId.eq(message_id))
+            .one(&self.conn)
+            .await
+    }
+
     pub async fn find_alert_thread(
         &self,
         alert_id: &AlertId,

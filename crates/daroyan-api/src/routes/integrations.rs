@@ -1,7 +1,10 @@
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Redirect;
+use chrono::Utc;
+use daroyan_core::alerts::actions::{ActionContext, Interaction, verify_signature};
 use daroyan_core::alerts::connect::{
     ConnectStatus, Connected, Provider, SlackInstall, build_authorize_url,
     build_slack_manifest_url, exchange_discord_code, exchange_slack_code,
@@ -40,6 +43,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(finish_discord))
         .routes(routes!(list_slack_install_channels))
         .routes(routes!(finish_slack_install))
+        .routes(routes!(receive_slack_action))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -353,6 +357,59 @@ async fn read_telegram_connect(
         ),
     };
     Ok(Json(TelegramStatusView { is_connected: integration.is_some(), integration }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/integrations/slack/interactions",
+    request_body(content = String, content_type = "application/x-www-form-urlencoded"),
+    responses((status = 200), (status = 401), (status = 404))
+)]
+async fn receive_slack_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode> {
+    let Some(secret) = state.config.slack_signing_secret.as_deref() else {
+        return Err(Error::new(
+            ErrorName::NotFound,
+            "Slack buttons are not set up on the API",
+        ));
+    };
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+    };
+    if !verify_signature(
+        secret,
+        header("x-slack-request-timestamp"),
+        &body,
+        header("x-slack-signature"),
+        Utc::now(),
+    ) {
+        return Err(Error::new(
+            ErrorName::Unauthorized,
+            "The Slack signature does not match",
+        ));
+    }
+    let interaction = form_urlencoded::parse(&body)
+        .find(|(key, _)| key == "payload")
+        .and_then(|(_, payload)| serde_json::from_str::<Interaction>(&payload).ok())
+        .ok_or_else(|| {
+            Error::new(ErrorName::ValidationError, "Send a Slack interaction payload")
+        })?;
+    tokio::spawn(async move {
+        ActionContext {
+            database: &state.database,
+            agents: &state.agents,
+            config: &state.config,
+        }
+        .handle(interaction)
+        .await;
+    });
+    Ok(StatusCode::OK)
 }
 
 #[utoipa::path(

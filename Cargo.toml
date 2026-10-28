@@ -35,6 +35,7 @@ rand = "0.9"
 sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-sqlite", "with-chrono", "with-json"] }
 sea-orm-migration = { version = "2.0.4", default-features = false, features = ["runtime-tokio-rustls", "sqlx-sqlite", "with-chrono", "with-json"] }
 sha2 = "0.10.9"
+hmac = "0.12.1"
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["compression-br", "compression-gzip", "decompression-gzip", "fs", "trace"] }
 tracing = "0.1"

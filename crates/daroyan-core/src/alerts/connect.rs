@@ -19,7 +19,8 @@ use crate::id::{Prefix, new_id};
 const STATE_TTL: Duration = Duration::from_secs(600);
 const STATE_LENGTH: usize = 24;
 const TIMEOUT: Duration = Duration::from_secs(15);
-const SLACK_SCOPES: &str = "chat:write,chat:write.public,channels:read";
+const SLACK_SCOPES: &str =
+    "chat:write,chat:write.public,channels:read,users:read,users:read.email";
 const SLACK_CHANNEL_LIMIT: &str = "500";
 const DISCORD_SCOPES: &str = "webhook.incoming";
 
@@ -292,6 +293,10 @@ pub fn build_slack_manifest_url(config: &Config) -> Result<String> {
             "scopes": { "bot": SLACK_SCOPES.split(',').collect::<Vec<_>>() },
         },
         "settings": {
+            "interactivity": {
+                "is_enabled": true,
+                "request_url": format!("{}/v1/integrations/slack/interactions", config.app_url.as_deref().unwrap_or_default().trim_end_matches('/')),
+            },
             "org_deploy_enabled": false,
             "socket_mode_enabled": false,
             "token_rotation_enabled": false,
