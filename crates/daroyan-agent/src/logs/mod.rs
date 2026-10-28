@@ -98,8 +98,13 @@ fn is_continuation(text: &str, format: LogFormat) -> bool {
         && text
             .strip_prefix('#')
             .and_then(|rest| rest.split_once(' '))
-            .is_some_and(|(number, _)| {
-                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            .is_some_and(|(number, frame)| {
+                !number.is_empty()
+                    && number.bytes().all(|byte| byte.is_ascii_digit())
+                    && (frame.starts_with('/')
+                        || frame.starts_with("{main}")
+                        || frame.starts_with("[internal function]")
+                        || frame.contains(".php("))
             });
     text.starts_with(' ')
         || text.starts_with('\t')
@@ -121,9 +126,7 @@ fn continues_block(previous: &str, text: &str, format: LogFormat) -> bool {
     let last = previous.lines().last().unwrap_or_default();
     let reads_mysql = matches!(format, LogFormat::Auto | LogFormat::Mysql);
     let reads_python = matches!(format, LogFormat::Auto | LogFormat::Python);
-    if reads_mysql
-        && (first.starts_with("# Time: ") || first.starts_with("# User@Host: "))
-    {
+    if reads_mysql && starts_slow_query(first) {
         let is_done = last.ends_with(';')
             && !last.starts_with("SET timestamp=")
             && !last.starts_with("use ");
@@ -133,14 +136,27 @@ fn continues_block(previous: &str, text: &str, format: LogFormat) -> bool {
         return false;
     }
     let text = text.trim_end();
+    let last_written = previous
+        .lines()
+        .rev()
+        .map(str::trim_end)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let after_chain = CHAINED_EXCEPTIONS.contains(&last_written);
     if text.is_empty() {
-        return is_exception_line(last.trim_end());
+        return after_chain || is_exception_line(last_written);
     }
-    let after_chain = CHAINED_EXCEPTIONS.contains(&last);
     let after_frame = last.starts_with(' ') || last.starts_with('\t');
     CHAINED_EXCEPTIONS.contains(&text)
         || (after_chain && text == TRACEBACK)
         || (after_frame && is_exception_line(text))
+}
+
+fn starts_slow_query(line: &str) -> bool {
+    let is_mysql_time = line.strip_prefix("# Time: ").is_some_and(|time| {
+        time.len() >= 4 && time.bytes().take(4).all(|byte| byte.is_ascii_digit())
+    });
+    is_mysql_time || line.starts_with("# User@Host: ")
 }
 
 fn is_exception_line(text: &str) -> bool {
@@ -350,6 +366,7 @@ mod tests {
             "ConnectionRefusedError: [Errno 111] Connection refused",
             "",
             "During handling of the above exception, another exception occurred:",
+            "",
             "Traceback (most recent call last):",
             "  File \"/app/worker.py\", line 14, in run",
             "    raise JobFailed()",
@@ -381,6 +398,21 @@ mod tests {
         );
         assert_eq!(joined.len(), 2);
         assert!(joined[0].text.ends_with("#1 {main}\n\"}"));
+    }
+
+    #[test]
+    fn leaves_lookalike_lines_alone() {
+        let lines = [
+            "# Time: 12ms build step",
+            "GET /health 200 1ms",
+            "#1 [internal] load build definition",
+            "#2 [internal] load .dockerignore",
+        ];
+        let joined = join_continuations(
+            lines.iter().map(|text| raw(LogStream::Stdout, text)).collect(),
+            LogFormat::Auto,
+        );
+        assert_eq!(joined.len(), 4);
     }
 
     #[test]

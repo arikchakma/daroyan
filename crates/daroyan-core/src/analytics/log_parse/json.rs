@@ -61,11 +61,8 @@ pub(super) fn read_time_value(value: &Value) -> Option<i64> {
     }
 }
 
-pub(super) fn read_fields(mut fields: Map<String, Value>, fallback: &str) -> ParsedLine {
-    let severity = LEVEL_KEYS
-        .iter()
-        .find_map(|key| fields.remove(*key).as_ref().and_then(read_level_value));
-    let at = TIME_KEYS
+pub fn take_json_time(fields: &mut Map<String, Value>) -> Option<i64> {
+    TIME_KEYS
         .iter()
         .find_map(|key| fields.remove(*key).as_ref().and_then(read_time_value))
         .or_else(|| {
@@ -73,7 +70,14 @@ pub(super) fn read_fields(mut fields: Map<String, Value>, fallback: &str) -> Par
                 .get("t")
                 .filter(|value| value.is_object())
                 .and_then(read_time_value)
-        });
+        })
+}
+
+pub(super) fn read_fields(mut fields: Map<String, Value>, fallback: &str) -> ParsedLine {
+    let severity = LEVEL_KEYS
+        .iter()
+        .find_map(|key| fields.remove(*key).as_ref().and_then(read_level_value));
+    let at = take_json_time(&mut fields);
     let mut severity = severity;
     let mut message = MESSAGE_KEYS
         .iter()

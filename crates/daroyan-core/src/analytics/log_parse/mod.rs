@@ -17,7 +17,7 @@ use database::{read_mysql, read_mysql_slow_query, read_postgres_duration};
 use http::{
     read_apache_error, read_haproxy, read_nginx_access, read_quoted_request, read_request,
 };
-pub use json::normalize_json_line;
+pub use json::{normalize_json_line, take_json_time};
 use json::{read_fields, split_logfmt};
 use php::{read_laravel, read_php_error, read_php_fpm};
 use prefix::{strip_prefixes, take_bracket_date};
@@ -35,7 +35,7 @@ const METHODS: [&str; 7] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OP
 const MONTHS: [&str; 12] =
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ParsedLine {
     pub at: Option<i64>,
     pub severity: Option<u8>,
@@ -129,11 +129,15 @@ fn read_with(
     text: &str,
     parsed: &mut ParsedLine,
 ) -> Option<(String, LogFormat)> {
+    let before = parsed.clone();
     readers.iter().find_map(|(formats, reader)| {
         if !format.is_auto() && !formats.contains(&format) {
             return None;
         }
-        let message = reader(text, parsed)?;
+        let Some(message) = reader(text, parsed) else {
+            parsed.clone_from(&before);
+            return None;
+        };
         let found = match formats {
             [only] => *only,
             _ => LogFormat::Auto,
@@ -548,5 +552,22 @@ mod tests {
                 .contains_key("user")
         );
         assert_eq!(parse_text_line(ssh, LogFormat::System).attributes["user"], "root");
+    }
+
+    #[test]
+    fn reads_requests_after_level_words() {
+        let python = parse("INFO: 93.184.216.34 GET /v1/links 500 2.1s");
+        assert_eq!(python.severity, Some(17));
+        assert_eq!(python.attributes["http.status"], 500);
+        let kafka = parse("[2026-10-28 01:50:02,123] ERROR GET /x 503 4ms");
+        assert_eq!(kafka.attributes["url.path"], "/x");
+        assert_eq!(kafka.attributes["http.status"], 503);
+    }
+
+    #[test]
+    fn drops_what_a_failed_reader_set() {
+        let parsed = parse_text_line("ERROR:not a python line", LogFormat::Python);
+        assert_eq!(parsed.severity, None);
+        assert_eq!(parsed.attributes["log.parse_failed"], true);
     }
 }

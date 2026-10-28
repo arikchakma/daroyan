@@ -1,6 +1,8 @@
 use serde_json::Value;
 
-use super::http::{raise_for_status, read_duration_ms, read_quoted_request};
+use super::http::{
+    raise_for_status, read_duration_ms, read_quoted_request, read_request,
+};
 use super::{METHODS, ParsedLine, SEVERITY_ERROR, is_digits, read_level_word};
 
 const PYTHON_LEVELS: [&str; 5] = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
@@ -97,7 +99,7 @@ pub(super) fn read_python(text: &str, parsed: &mut ParsedLine) -> Option<String>
             parsed.attributes.insert("client.ip".into(), Value::from(client));
             return Some(message);
         }
-        return Some(rest.to_string());
+        return read_request(rest, parsed).or_else(|| Some(rest.to_string()));
     }
     let (logger, message) = rest.split_once(':')?;
     if logger.contains(char::is_whitespace) {
@@ -180,7 +182,7 @@ pub(super) fn read_level_and_logger(
         insert_logger(parsed, logger);
         return Some(before.to_string());
     }
-    Some(message.to_string())
+    read_request(message, parsed).or_else(|| Some(message.to_string()))
 }
 
 pub(super) fn read_elasticsearch(text: &str, parsed: &mut ParsedLine) -> Option<String> {
