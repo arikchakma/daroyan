@@ -427,7 +427,7 @@ mod tests {
             source: Source::Process("*sleep 3007.25*".to_string()),
             user: None,
             restart: None,
-            logs: false,
+            logs: None,
         };
         let mut watch = ProcessWatch::new(vec![check], false, HeldProcesses::default());
         let spawn =
