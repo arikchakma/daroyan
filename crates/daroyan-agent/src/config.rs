@@ -55,7 +55,20 @@ pub struct ProcessCheck {
     pub source: Source,
     pub user: Option<String>,
     pub restart: Option<Restart>,
-    pub logs: bool,
+    pub logs: Option<LogSettings>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LogSettings {
+    pub format: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawLogs {
+    Enabled(bool),
+    Settings(LogSettings),
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -63,6 +76,7 @@ pub struct ProcessCheck {
 pub struct FileLog {
     pub name: String,
     pub path: PathBuf,
+    pub format: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -74,8 +88,7 @@ struct RawProcessCheck {
     process: Option<String>,
     user: Option<String>,
     restart: Option<Restart>,
-    #[serde(default)]
-    logs: bool,
+    logs: Option<RawLogs>,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
@@ -151,7 +164,12 @@ impl TryFrom<RawProcessCheck> for ProcessCheck {
                 "{value} has restart, but a process entry is watch-only. Use systemd or docker to restart it"
             ));
         }
-        if matches!(source, Source::Process(_)) && raw.logs {
+        let logs = match raw.logs {
+            None | Some(RawLogs::Enabled(false)) => None,
+            Some(RawLogs::Enabled(true)) => Some(LogSettings::default()),
+            Some(RawLogs::Settings(settings)) => Some(settings),
+        };
+        if matches!(source, Source::Process(_)) && logs.is_some() {
             return Err(format!(
                 "{value} has logs, but a process entry has no fixed output. Use systemd or docker to read its logs"
             ));
@@ -166,7 +184,7 @@ impl TryFrom<RawProcessCheck> for ProcessCheck {
             source,
             user: raw.user,
             restart: raw.restart,
-            logs: raw.logs,
+            logs,
         })
     }
 }
@@ -341,7 +359,23 @@ mod tests {
             "processes:\n  - docker: api-*\n    logs: true\nfiles:\n  - name: Caddy access\n    path: /var/log/caddy/access.log\nagent:\n  log_budget: 2MB\n",
         )
         .unwrap();
-        assert!(config.processes[0].logs);
+        assert_eq!(config.processes[0].logs, Some(LogSettings::default()));
+        let formats = parse_config(
+            "processes:\n  - systemd: nginx\n    logs:\n      format: nginx\n  - docker: web\n    logs: false\nfiles:\n  - name: App\n    path: /var/log/app.log\n    format: laravel\n",
+        )
+        .unwrap();
+        assert_eq!(
+            formats.processes[0].logs.as_ref().unwrap().format.as_deref(),
+            Some("nginx")
+        );
+        assert_eq!(formats.processes[1].logs, None);
+        assert_eq!(formats.files[0].format.as_deref(), Some("laravel"));
+        assert!(
+            parse_config(
+                "processes:\n  - systemd: nginx\n    logs:\n      fromat: nginx\n"
+            )
+            .is_err()
+        );
         assert_eq!(config.files[0].name, "Caddy access");
         assert_eq!(config.agent.log_budget, 2 * 1024 * 1024);
         assert_eq!(parse_config("").unwrap().agent.log_budget, 1024 * 1024);

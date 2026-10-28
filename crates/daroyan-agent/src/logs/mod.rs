@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use daroyan_protocol::log::{LogBatch, LogLine};
+use daroyan_protocol::log::{LogBatch, LogFormat, LogLine};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
@@ -22,10 +22,16 @@ const INTERVAL: Duration = Duration::from_secs(2);
 const BUDGET_WINDOW: Duration = Duration::from_secs(60);
 const LINE_OVERHEAD: u64 = 64;
 
-enum LogSource {
-    Docker { name: String, pattern: String },
-    Journal { name: String, unit: String },
-    File { name: String, path: PathBuf },
+struct LogSource {
+    name: String,
+    format: LogFormat,
+    kind: SourceKind,
+}
+
+enum SourceKind {
+    Docker { pattern: String },
+    Journal { unit: String },
+    File { path: PathBuf },
 }
 
 #[derive(Serialize, Deserialize, Default, PartialEq, Clone)]
@@ -81,26 +87,84 @@ impl Budget {
 
 const MAX_JOINED_BYTES: usize = 16 * 1024;
 
-fn is_continuation(text: &str) -> bool {
+fn is_continuation(text: &str, format: LogFormat) -> bool {
     let is_more = text
         .strip_prefix("... ")
         .and_then(|rest| rest.strip_suffix(" more"))
         .is_some_and(|count| count.bytes().all(|byte| byte.is_ascii_digit()));
+    let reads_php =
+        matches!(format, LogFormat::Auto | LogFormat::Php | LogFormat::Laravel);
+    let is_php_frame = reads_php
+        && text
+            .strip_prefix('#')
+            .and_then(|rest| rest.split_once(' '))
+            .is_some_and(|(number, _)| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            });
     text.starts_with(' ')
         || text.starts_with('\t')
         || text.starts_with("Caused by: ")
         || is_more
+        || is_php_frame
+        || (reads_php
+            && matches!(text.trim_end(), "[stacktrace]" | "Stack trace:" | "\"}"))
 }
 
-fn join_continuations(lines: Vec<RawLine>) -> Vec<RawLine> {
+const TRACEBACK: &str = "Traceback (most recent call last):";
+const CHAINED_EXCEPTIONS: [&str; 2] = [
+    "During handling of the above exception, another exception occurred:",
+    "The above exception was the direct cause of the following exception:",
+];
+
+fn continues_block(previous: &str, text: &str, format: LogFormat) -> bool {
+    let first = previous.lines().next().unwrap_or_default();
+    let last = previous.lines().last().unwrap_or_default();
+    let reads_mysql = matches!(format, LogFormat::Auto | LogFormat::Mysql);
+    let reads_python = matches!(format, LogFormat::Auto | LogFormat::Python);
+    if reads_mysql
+        && (first.starts_with("# Time: ") || first.starts_with("# User@Host: "))
+    {
+        let is_done = last.ends_with(';')
+            && !last.starts_with("SET timestamp=")
+            && !last.starts_with("use ");
+        return !is_done && !text.starts_with("# Time: ");
+    }
+    if !reads_python || !previous.contains(TRACEBACK) {
+        return false;
+    }
+    let text = text.trim_end();
+    if text.is_empty() {
+        return is_exception_line(last.trim_end());
+    }
+    let after_chain = CHAINED_EXCEPTIONS.contains(&last);
+    let after_frame = last.starts_with(' ') || last.starts_with('\t');
+    CHAINED_EXCEPTIONS.contains(&text)
+        || (after_chain && text == TRACEBACK)
+        || (after_frame && is_exception_line(text))
+}
+
+fn is_exception_line(text: &str) -> bool {
+    let name = text.split(':').next().unwrap_or_default();
+    let is_name = !name.is_empty()
+        && name.starts_with(|character: char| character.is_ascii_alphabetic())
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || "._".contains(character)
+        });
+    let is_class = name.rsplit('.').next().is_some_and(|class| {
+        class.starts_with(|character: char| character.is_ascii_uppercase())
+    });
+    is_name && (text.contains(": ") || is_class)
+}
+
+fn join_continuations(lines: Vec<RawLine>, format: LogFormat) -> Vec<RawLine> {
     let mut joined: Vec<RawLine> = Vec::with_capacity(lines.len());
     for line in lines {
         if let Some(previous) = joined
             .iter_mut()
             .rev()
             .find(|previous| previous.stream == line.stream)
-            && is_continuation(&line.text)
-            && !line.text.trim().is_empty()
+            && ((!line.text.trim().is_empty() && is_continuation(&line.text, format))
+                || continues_block(&previous.text, &line.text, format))
             && previous.text.len() + line.text.len() < MAX_JOINED_BYTES
         {
             previous.text.push('\n');
@@ -112,32 +176,53 @@ fn join_continuations(lines: Vec<RawLine>) -> Vec<RawLine> {
     joined
 }
 
-fn take_ready_lines(held: &mut Option<RawLine>, read: Vec<RawLine>) -> Vec<RawLine> {
+fn take_ready_lines(
+    held: &mut Option<RawLine>,
+    read: Vec<RawLine>,
+    format: LogFormat,
+) -> Vec<RawLine> {
     if read.is_empty() {
         return held.take().into_iter().collect();
     }
-    let mut lines = join_continuations(held.take().into_iter().chain(read).collect());
+    let mut lines =
+        join_continuations(held.take().into_iter().chain(read).collect(), format);
     *held = lines.pop();
     lines
 }
 
+fn resolve_format(source: &str, name: Option<&str>) -> LogFormat {
+    let Some(name) = name else {
+        return LogFormat::Auto;
+    };
+    LogFormat::from_name(name).unwrap_or_else(|| {
+        let known: Vec<&str> = LogFormat::ALL.iter().map(|format| format.as_str()).collect();
+        warn!(
+            "{source} has format {name:?}, which is not known, so its lines are read with auto. Use one of: {}",
+            known.join(", ")
+        );
+        LogFormat::Auto
+    })
+}
+
 fn list_sources(config: &Config) -> Vec<LogSource> {
-    let processes = config.processes.iter().filter(|check| check.logs).filter_map(
-        |check| match &check.source {
-            Source::Docker(pattern) => Some(LogSource::Docker {
-                name: check.name.clone(),
-                pattern: pattern.clone(),
-            }),
-            Source::Systemd(unit) => {
-                Some(LogSource::Journal { name: check.name.clone(), unit: unit.clone() })
-            }
-            Source::Process(_) => None,
-        },
-    );
-    let files = config
-        .files
-        .iter()
-        .map(|file| LogSource::File { name: file.name.clone(), path: file.path.clone() });
+    let processes = config.processes.iter().filter_map(|check| {
+        let settings = check.logs.as_ref()?;
+        let kind = match &check.source {
+            Source::Docker(pattern) => SourceKind::Docker { pattern: pattern.clone() },
+            Source::Systemd(unit) => SourceKind::Journal { unit: unit.clone() },
+            Source::Process(_) => return None,
+        };
+        Some(LogSource {
+            name: check.name.clone(),
+            format: resolve_format(&check.name, settings.format.as_deref()),
+            kind,
+        })
+    });
+    let files = config.files.iter().map(|file| LogSource {
+        name: file.name.clone(),
+        format: resolve_format(&file.name, file.format.as_deref()),
+        kind: SourceKind::File { path: file.path.clone() },
+    });
     processes.chain(files).collect()
 }
 
@@ -145,9 +230,9 @@ fn read_source(
     source: &LogSource,
     positions: &mut Positions,
     now: Duration,
-) -> (String, Vec<RawLine>) {
-    match source {
-        LogSource::Docker { name, pattern } => {
+) -> Vec<RawLine> {
+    match &source.kind {
+        SourceKind::Docker { pattern } => {
             let mut containers = positions.docker.get(pattern).cloned();
             let lines = docker::read_docker(
                 pattern,
@@ -157,17 +242,17 @@ fn read_source(
             if let Some(containers) = containers {
                 positions.docker.insert(pattern.clone(), containers);
             }
-            (name.clone(), lines)
+            lines
         }
-        LogSource::Journal { name, unit } => {
+        SourceKind::Journal { unit } => {
             let mut cursor = positions.journal.get(unit).cloned();
             let lines = journal::read_journal(unit, &mut cursor, now.as_secs());
             if let Some(cursor) = cursor {
                 positions.journal.insert(unit.clone(), cursor);
             }
-            (name.clone(), lines)
+            lines
         }
-        LogSource::File { name, path } => {
+        SourceKind::File { path } => {
             let key = path.to_string_lossy().into_owned();
             let mut position = positions.files.get(&key).copied();
             let lines = file::read_file(
@@ -178,7 +263,7 @@ fn read_source(
             if let Some(position) = position {
                 positions.files.insert(key, position);
             }
-            (name.clone(), lines)
+            lines
         }
     }
 }
@@ -203,9 +288,9 @@ pub fn collect_logs(config: &Config, batches: &Sender<LogBatch>) {
         let mut lines = Vec::new();
         let mut dropped = 0;
         for (index, source) in sources.iter().enumerate() {
-            let (name, raw_lines) = read_source(source, &mut positions, now);
-            for raw in take_ready_lines(&mut held[index], raw_lines) {
-                let line = to_log_line(&name, raw);
+            let raw_lines = read_source(source, &mut positions, now);
+            for raw in take_ready_lines(&mut held[index], raw_lines, source.format) {
+                let line = to_log_line(&source.name, source.format, raw);
                 if budget.allow(&line) {
                     lines.push(line);
                 } else {
@@ -228,7 +313,9 @@ pub fn collect_logs(config: &Config, batches: &Sender<LogBatch>) {
 mod tests {
     use daroyan_protocol::log::LogStream;
 
-    use super::{RawLine, join_continuations, take_ready_lines};
+    use daroyan_protocol::log::LogFormat;
+
+    use super::{RawLine, join_continuations, resolve_format, take_ready_lines};
 
     fn raw(stream: LogStream, text: &str) -> RawLine {
         RawLine {
@@ -240,28 +327,116 @@ mod tests {
     }
 
     #[test]
+    fn joins_mysql_slow_query_blocks() {
+        let lines = [
+            "# Time: 2026-10-28T01:50:02.123456Z",
+            "# User@Host: app[app] @ localhost []  Id:     8",
+            "# Query_time: 2.502010  Lock_time: 0.000123 Rows_sent: 1  Rows_examined: 500000",
+            "SET timestamp=1793152202;",
+            "SELECT * FROM links",
+            "WHERE owner_id = 42;",
+            "# Time: 2026-10-28T01:50:09.000000Z",
+            "# User@Host: app[app] @ localhost []  Id:     9",
+        ];
+        let joined = join_continuations(
+            lines.iter().map(|text| raw(LogStream::Stdout, text)).collect(),
+            LogFormat::Auto,
+        );
+        assert_eq!(joined.len(), 2);
+        assert!(joined[0].text.ends_with("WHERE owner_id = 42;"));
+        assert!(joined[1].text.starts_with("# Time: 2026-10-28T01:50:09"));
+    }
+
+    #[test]
+    fn joins_python_tracebacks_with_their_exception() {
+        let lines = [
+            "Traceback (most recent call last):",
+            "  File \"/app/worker.py\", line 12, in run",
+            "    connect()",
+            "ConnectionRefusedError: [Errno 111] Connection refused",
+            "",
+            "During handling of the above exception, another exception occurred:",
+            "Traceback (most recent call last):",
+            "  File \"/app/worker.py\", line 14, in run",
+            "    raise JobFailed()",
+            "app.errors.JobFailed",
+            "INFO:root:next job",
+        ];
+        let joined = join_continuations(
+            lines.iter().map(|text| raw(LogStream::Stderr, text)).collect(),
+            LogFormat::Auto,
+        );
+        assert_eq!(joined.len(), 2);
+        assert!(joined[0].text.ends_with("app.errors.JobFailed"));
+        assert_eq!(joined[1].text, "INFO:root:next job");
+    }
+
+    #[test]
+    fn joins_php_stack_traces() {
+        let lines = [
+            "[2026-10-28 01:50:02] production.ERROR: boom {\"exception\":\"[object] (Exception(code: 0): boom at /app.php:3)",
+            "[stacktrace]",
+            "#0 /var/www/app.php(12): run()",
+            "#1 {main}",
+            "\"} ",
+            "[2026-10-28 01:50:03] production.INFO: next",
+        ];
+        let joined = join_continuations(
+            lines.iter().map(|text| raw(LogStream::Stdout, text)).collect(),
+            LogFormat::Auto,
+        );
+        assert_eq!(joined.len(), 2);
+        assert!(joined[0].text.ends_with("#1 {main}\n\"}"));
+    }
+
+    #[test]
     fn joins_stack_trace_lines() {
-        let joined = join_continuations(vec![
-            raw(LogStream::Stderr, "Error: read ECONNRESET"),
-            raw(LogStream::Stdout, "GET /v1/links 200 3ms"),
-            raw(LogStream::Stderr, "    at TLSSocket.onClose (node:_tls_wrap:1097:12)"),
-            raw(LogStream::Stderr, "    at node:net:337:12"),
-            raw(LogStream::Stdout, "GET /health 200 1ms"),
-            raw(LogStream::Stdout, "  indented but first of its stream"),
-        ]);
-        let java = join_continuations(vec![
-            raw(LogStream::Stderr, "java.lang.IllegalStateException: pool exhausted"),
-            raw(LogStream::Stderr, "\tat com.example.Foo.bar(Foo.java:42)"),
-            raw(LogStream::Stderr, "Caused by: java.net.SocketException: reset"),
-            raw(LogStream::Stderr, "\tat java.net.Socket.read(Socket.java:10)"),
-            raw(LogStream::Stderr, "... 12 more"),
-            raw(LogStream::Stderr, "2024-01-15 INFO next entry"),
-        ]);
+        let joined = join_continuations(
+            vec![
+                raw(LogStream::Stderr, "Error: read ECONNRESET"),
+                raw(LogStream::Stdout, "GET /v1/links 200 3ms"),
+                raw(
+                    LogStream::Stderr,
+                    "    at TLSSocket.onClose (node:_tls_wrap:1097:12)",
+                ),
+                raw(LogStream::Stderr, "    at node:net:337:12"),
+                raw(LogStream::Stdout, "GET /health 200 1ms"),
+                raw(LogStream::Stdout, "  indented but first of its stream"),
+            ],
+            LogFormat::Auto,
+        );
+        let java = join_continuations(
+            vec![
+                raw(LogStream::Stderr, "java.lang.IllegalStateException: pool exhausted"),
+                raw(LogStream::Stderr, "\tat com.example.Foo.bar(Foo.java:42)"),
+                raw(LogStream::Stderr, "Caused by: java.net.SocketException: reset"),
+                raw(LogStream::Stderr, "\tat java.net.Socket.read(Socket.java:10)"),
+                raw(LogStream::Stderr, "... 12 more"),
+                raw(LogStream::Stderr, "2024-01-15 INFO next entry"),
+            ],
+            LogFormat::Auto,
+        );
         assert_eq!(java.len(), 2);
         assert_eq!(java[0].text.lines().count(), 5);
         assert_eq!(joined.len(), 3);
         assert_eq!(joined[0].text.lines().count(), 3);
         assert_eq!(joined[2].text.lines().count(), 2);
+    }
+
+    #[test]
+    fn joins_only_for_the_configured_format() {
+        let lines = || {
+            vec![
+                raw(LogStream::Stderr, "Traceback (most recent call last):"),
+                raw(LogStream::Stderr, "  File \"app.py\", line 3, in <module>"),
+                raw(LogStream::Stderr, "ValueError: bad"),
+            ]
+        };
+        assert_eq!(join_continuations(lines(), LogFormat::Python).len(), 1);
+        assert_eq!(join_continuations(lines(), LogFormat::Nginx).len(), 2);
+        assert_eq!(resolve_format("App", Some("php-fpm")), LogFormat::PhpFpm);
+        assert_eq!(resolve_format("App", Some("ngnix")), LogFormat::Auto);
+        assert_eq!(resolve_format("App", None), LogFormat::Auto);
     }
 
     #[test]
@@ -273,6 +448,7 @@ mod tests {
                 raw(LogStream::Stdout, "GET /health 200 1ms"),
                 raw(LogStream::Stderr, "Error: read ECONNRESET"),
             ],
+            LogFormat::Auto,
         );
         assert_eq!(first.len(), 1);
         let second = take_ready_lines(
@@ -281,10 +457,11 @@ mod tests {
                 raw(LogStream::Stderr, "    at TLSSocket.onClose"),
                 raw(LogStream::Stdout, "GET /v1/links 200 3ms"),
             ],
+            LogFormat::Auto,
         );
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].text.lines().count(), 2);
-        let flushed = take_ready_lines(&mut held, Vec::new());
+        let flushed = take_ready_lines(&mut held, Vec::new(), LogFormat::Auto);
         assert_eq!(flushed[0].text, "GET /v1/links 200 3ms");
         assert!(held.is_none());
     }

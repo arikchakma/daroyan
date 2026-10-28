@@ -276,6 +276,7 @@ mod tests {
             trace_id: None,
             span_id: None,
             raw: None,
+            format: daroyan_protocol::log::LogFormat::Auto,
         };
         LogBatch { lines: vec![line; count], dropped }
     }

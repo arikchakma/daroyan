@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::analytics::log_parse::{normalize_json_attributes, parse_text_line};
+use crate::analytics::log_parse::{normalize_json_line, parse_text_line};
 use crate::analytics::{Analytics, clamp_future_ms};
 use crate::error::Result;
 
@@ -50,13 +50,23 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
             let mut at = i64::try_from(line.at).unwrap_or(now_ms);
             let original = line.raw.take().unwrap_or_else(|| line.message.clone());
             if line.attributes.is_empty() {
-                let parsed = parse_text_line(&line.message);
+                let parsed = parse_text_line(&line.message, line.format);
                 at = parsed.at.unwrap_or(at);
                 line.severity = parsed.severity.unwrap_or(line.severity);
                 line.message = parsed.message;
                 line.attributes = parsed.attributes;
             } else {
-                normalize_json_attributes(&mut line.attributes);
+                let mut severity = Some(line.severity);
+                normalize_json_line(
+                    &mut line.attributes,
+                    &mut line.message,
+                    &mut severity,
+                );
+                line.severity = severity.unwrap_or(line.severity);
+                if !line.format.is_auto() {
+                    line.attributes
+                        .insert("log.format".into(), line.format.as_str().into());
+                }
             }
             LogRow {
                 server_id: server_id.to_string(),
@@ -403,7 +413,9 @@ pub async fn list_busy_windows(
 
 #[cfg(test)]
 mod tests {
-    use daroyan_protocol::log::{LogBatch, LogLine, LogStream, SEVERITY_ERROR};
+    use daroyan_protocol::log::{
+        LogBatch, LogFormat, LogLine, LogStream, SEVERITY_ERROR,
+    };
 
     use super::{LogFilter, LogQuery, SearchTerm, list_logs, read_level, to_log_rows};
     use crate::analytics::Analytics;
@@ -419,6 +431,7 @@ mod tests {
             trace_id: None,
             span_id: None,
             raw: None,
+            format: LogFormat::Auto,
         }
     }
 

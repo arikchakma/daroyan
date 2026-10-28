@@ -160,7 +160,7 @@ mod tests {
             source,
             user: None,
             restart: None,
-            logs: false,
+            logs: None,
         }
     }
 
