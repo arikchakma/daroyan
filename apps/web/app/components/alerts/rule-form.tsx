@@ -8,14 +8,17 @@ import { IntegrationDialog } from '~/components/alerts/integration-dialog';
 import { getIntegrationLabel } from '~/components/alerts/integration-logo';
 import { DEFAULT_QUIET_WINDOW, getBrowserTimeZone, QuietHoursField } from '~/components/alerts/quiet-hours-field';
 import { Icon } from '~/components/icons/icon';
+import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Checkbox } from '~/components/ui/checkbox';
+import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { FieldRow } from '~/components/ui/field-row';
 import { Input } from '~/components/ui/input';
 import { PageBar } from '~/components/ui/page-bar';
 import { SaveBar } from '~/components/ui/save-bar';
 import { Select } from '~/components/ui/select';
 import { Switch } from '~/components/ui/switch';
+import { useIsAdmin } from '~/hooks/use-is-admin';
 import { apiClient } from '~/lib/api-client';
 import { request } from '~/lib/http';
 import { queryClient } from '~/lib/query-client';
@@ -23,6 +26,8 @@ import { toast } from '~/lib/toast';
 import {
   backtestAlertRuleOptions,
   createAlertRuleOptions,
+  deleteAlertRuleOptions,
+  listAlertsOptions,
   listIntegrationsOptions,
   testAlertRuleOptions,
   updateAlertRuleOptions,
@@ -34,7 +39,6 @@ import { listUptimeChecksOptions } from '~/queries/uptime';
 import type { Aggregation, ConditionKind, NoData, NotifyLevel, Scope } from '~/utils/alerts';
 import {
   AGGREGATION_OPTIONS,
-  CONDITION_OPTIONS,
   FOR_OPTIONS,
   getUnit,
   hasAggregation,
@@ -56,7 +60,6 @@ import {
   readThreshold,
   REMIND_OPTIONS,
   RESOLVE_OPTIONS,
-  SEVERITY_LABEL_OPTIONS,
   WINDOW_OPTIONS,
 } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
@@ -107,6 +110,25 @@ const DEFAULT_THRESHOLDS: Partial<Record<ConditionKind, string>> = {
   logs: '10',
 };
 
+const RECENT_MS = 30 * 86_400_000;
+
+const CONDITION_LABELS: Record<ConditionKind, string> = {
+  cpu: 'CPU above a limit',
+  memory: 'Memory above a limit',
+  disk: 'Disk above a limit',
+  load: 'Load above a limit',
+  offline: 'Server offline',
+  process_stopped: 'Process stopped',
+  port_closed: 'Port closed',
+  uptime_down: 'Check is down',
+  response_time: 'Response time above a limit',
+  first_byte: 'First byte above a limit',
+  cert_days: 'Certificate expires soon',
+  cron_missed: 'Cron missed a run',
+  cron_failed: 'Cron failed',
+  logs: 'Log lines match',
+};
+
 export type RuleDraft = {
   name: string;
   condition: Schemas['Condition'];
@@ -152,30 +174,60 @@ function readTargetNoun(kind: ConditionKind) {
   return isCronKind(kind) ? 'cron' : 'server';
 }
 
+function hasWarning(kind: ConditionKind) {
+  return hasThreshold(kind) && kind !== 'logs';
+}
+
+function formatAmount(value: number, unit: string) {
+  if (unit === '%') {
+    return `${value}%`;
+  }
+  return unit ? `${value} ${unit}` : `${value}`;
+}
+
+function formatSpan(seconds: number) {
+  return WINDOW_OPTIONS.find((option) => option.value === seconds)?.label ?? `${Math.round(seconds / 60)} minutes`;
+}
+
+function getRecoveryPresets(kind: ConditionKind, limit: number | null) {
+  if (limit === null || !Number.isFinite(limit) || limit <= 0) {
+    return [];
+  }
+  if (kind === 'cert_days') {
+    return [limit + 7, limit + 14];
+  }
+  if (getUnit(kind) === '%') {
+    return [limit - 5, limit - 10].filter((value) => value > 0);
+  }
+  return [Math.round(limit * 0.8), Math.round(limit * 0.5)].filter((value) => value > 0 && value !== limit);
+}
+
 function RuleFormBody(props: RuleFormBodyProps) {
   const { rule, draft, onDiscard } = props;
 
   const formRef = useRef<HTMLFormElement>(null);
   const navigate = useNavigate();
+  const isAdmin = useIsAdmin();
   const { data: servers } = useQuery(listServersOptions());
   const { data: checks } = useQuery(listUptimeChecksOptions());
   const { data: crons } = useQuery({ queryKey: ['crons'], queryFn: () => request(apiClient.GET('/v1/crons')) });
   const { data: integrations } = useQuery(listIntegrationsOptions());
   const { data: logSources } = useQuery(logSourcesOptions());
+  const { data: history = [] } = useQuery({ ...listAlertsOptions('all', rule?.id), enabled: !!rule });
   const saved = rule?.options;
   const initial = rule?.condition ?? draft?.condition;
 
   const [name, setName] = useState(rule?.name ?? draft?.name ?? '');
   const [runbookUrl, setRunbookUrl] = useState(saved?.runbook_url ?? '');
-  const [severityLabel, setSeverityLabel] = useState(saved?.severity_label ?? 'none');
   const [kind, setKind] = useState<ConditionKind>(initial?.kind ?? 'cpu');
   const [critical, setCritical] = useState(
     initial ? (readThreshold(initial)?.toString() ?? '') : (DEFAULT_THRESHOLDS.cpu ?? '')
   );
   const [warning, setWarning] = useState(saved?.warning?.toString() ?? '');
+  const [isWarningOpen, setIsWarningOpen] = useState(saved?.warning != null);
   const [recovery, setRecovery] = useState(saved?.resolve_at?.toString() ?? '');
   const [aggregation, setAggregation] = useState<Aggregation>(saved?.aggregation ?? 'avg');
-  const [windowSecs, setWindowSecs] = useState(saved?.window_secs ?? 0);
+  const [windowSecs, setWindowSecs] = useState(saved?.window_secs ?? (rule ? 0 : 300));
   const [forSecs, setForSecs] = useState(rule?.for_secs ?? draft?.forSecs ?? 300);
   const [resolveForSecs, setResolveForSecs] = useState(saved?.resolve_for_secs ?? 0);
   const [noData, setNoData] = useState<NoData>(saved?.no_data ?? 'keep');
@@ -184,9 +236,6 @@ function RuleFormBody(props: RuleFormBodyProps) {
   );
   const [messageLimit, setMessageLimit] = useState(saved?.message_limit?.toString() ?? 'off');
   const [quietHours, setQuietHours] = useState(saved?.quiet_hours ?? []);
-  const [isNoiseOpen, setIsNoiseOpen] = useState(
-    (saved?.no_data ?? 'keep') !== 'keep' || !!saved?.message_limit || (saved?.quiet_hours ?? []).length > 0
-  );
   const [timeZone, setTimeZone] = useState(saved?.time_zone ?? getBrowserTimeZone());
   const [subjectName, setSubjectName] = useState(initial ? (readSubjectName(initial) ?? '') : '');
   const savedLog = readLogCondition(initial);
@@ -213,14 +262,15 @@ function RuleFormBody(props: RuleFormBodyProps) {
         )
       : undefined
   );
+  const [shownIntegrationIds, setShownIntegrationIds] = useState<string[]>([]);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [declareIncident, setDeclareIncident] = useState(rule?.declare_incident ?? false);
   const [declareSeverity, setDeclareSeverity] = useState(rule?.declare_severity ?? 'major');
   const [declareShown, setDeclareShown] = useState(
     rule && rule.declare_hidden_page_ids.length > 0 ? 'hidden' : 'shown'
   );
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const { data: statusPages = [] } = useQuery(listStatusPagesOptions());
-  const declareIncidentId = useId();
 
   const noun = readTargetNoun(kind);
   const unit = getUnit(kind);
@@ -301,14 +351,14 @@ function RuleFormBody(props: RuleFormBodyProps) {
   const options: Schemas['RuleOptions'] = {
     aggregation,
     window_secs: hasAggregation(kind) ? windowSecs : 0,
-    warning: hasThreshold(kind) && kind !== 'logs' ? warningValue : null,
+    warning: hasWarning(kind) ? warningValue : null,
     resolve_at: hasThreshold(kind) ? recoveryValue : null,
     resolve_for_secs: resolveForSecs,
     no_data: noun === 'cron' ? 'keep' : noData,
     remind_every_secs: remindEvery,
     remind_times: remindTimes ?? 0,
     runbook_url: runbookUrl.trim() || null,
-    severity_label: severityLabel === 'none' ? null : severityLabel,
+    severity_label: saved?.severity_label ?? null,
     warning_integration_ids: warningIntegrationIds,
     message_limit: messageLimit === 'off' ? null : Number(messageLimit),
     quiet_hours: quietHours,
@@ -322,6 +372,14 @@ function RuleFormBody(props: RuleFormBodyProps) {
     enabled: !!condition && !!scope,
     placeholderData: keepPreviousData,
   });
+  const { data: savedBacktest } = useQuery({
+    ...backtestAlertRuleOptions({
+      condition: rule?.condition ?? { kind: 'offline' },
+      for_secs: rule?.for_secs,
+      scope: rule?.scope ?? { kind: 'all' },
+    }),
+    enabled: !!rule,
+  });
 
   const onSaved = (saved: Schemas['AlertRule']) => {
     queryClient.invalidateQueries({ queryKey: ['alert-rules'] });
@@ -330,6 +388,24 @@ function RuleFormBody(props: RuleFormBodyProps) {
   };
   const create = useMutation({ ...createAlertRuleOptions(), onSuccess: onSaved, meta: { errorMessage: 'The rule could not be created' } });
   const update = useMutation({ ...updateAlertRuleOptions(), onSuccess: onSaved, meta: { errorMessage: 'The rule could not be saved' } });
+  const toggle = useMutation({
+    ...updateAlertRuleOptions(),
+    meta: { errorMessage: 'The rule could not be updated' },
+    onSuccess: (saved) => {
+      queryClient.invalidateQueries({ queryKey: ['alert-rules'] });
+      toast.success(saved.enabled ? 'Alerts are on' : 'Alerts are off');
+    },
+  });
+  const remove = useMutation({
+    ...deleteAlertRuleOptions(),
+    meta: { errorMessage: 'The rule could not be deleted' },
+    onSuccess: () => {
+      navigate('/alerts');
+      queryClient.invalidateQueries({ queryKey: ['alert-rules', 'list'] });
+      queryClient.invalidateQueries({ queryKey: ['alerts'] });
+      toast.success(`Deleted ${rule?.name}`);
+    },
+  });
   const test = useMutation({
     ...testAlertRuleOptions(),
     meta: { errorMessage: 'The test alert could not be sent' },
@@ -358,6 +434,19 @@ function RuleFormBody(props: RuleFormBodyProps) {
   const isSaving = create.isPending || update.isPending;
   const backTo = rule ? `/alerts/${rule.id}` : '/alerts';
 
+  const changed = {
+    resolve: (hasThreshold(kind) && recovery !== '') || resolveForSecs !== 0,
+    noData: noun !== 'cron' && noData !== 'keep',
+    remind: remind !== 'off',
+    messageLimit: messageLimit !== 'off',
+    quietHours: quietHours.length > 0,
+    incident: declareIncident,
+    runbook: runbookUrl.trim() !== '',
+  };
+  const changedCount = Object.values(changed).filter(Boolean).length;
+  const marksChanges = !!rule && changedCount > 0;
+  const [isMoreOpen, setIsMoreOpen] = useState(changedCount > 0);
+
   const save = () => {
     if (!condition || !scope) {
       return;
@@ -378,6 +467,7 @@ function RuleFormBody(props: RuleFormBodyProps) {
     setKind(next);
     setCritical(DEFAULT_THRESHOLDS[next] ?? '');
     setWarning('');
+    setIsWarningOpen(false);
     setRecovery('');
     setAggregation(next === 'response_time' || next === 'first_byte' ? 'p95' : 'avg');
   };
@@ -387,37 +477,130 @@ function RuleFormBody(props: RuleFormBodyProps) {
     setName(template.name);
     setCritical(template.critical ?? '');
     setWarning(template.warning ?? '');
+    setIsWarningOpen(!!template.warning);
     setAggregation(template.aggregation ?? 'avg');
     setWindowSecs(template.windowSecs ?? 0);
     setSubjectName('');
     setForSecs(template.forSecs);
   };
 
+  const resetMoreOptions = () => {
+    setRecovery('');
+    setResolveForSecs(0);
+    setNoData('keep');
+    setRemind('off');
+    setMessageLimit('off');
+    setQuietHours([]);
+    setDeclareIncident(false);
+    setRunbookUrl('');
+  };
+
   const matched = targets.filter((target) =>
     scopeKind === 'all' ? true : scopeKind === 'label' ? target.labels.includes(label) : pickedIds.includes(target.id)
   );
   const direction = kind === 'cert_days' ? 'Below' : 'Above';
-  const describeCompare = () => {
-    if (kind === 'logs') {
-      return 'Fires when the count of matching lines reaches the critical limit.';
-    }
-    const metric = CONDITION_OPTIONS.find((option) => option.kind === kind)?.label.toLowerCase() ?? 'value';
-    if (!hasAggregation(kind) || windowSecs === 0) {
-      return `The latest ${metric} is compared with these.`;
-    }
-    const reduce = AGGREGATION_OPTIONS.find((option) => option.value === aggregation)?.label ?? '';
-    const window = WINDOW_OPTIONS.find((option) => option.value === windowSecs)?.label ?? '';
-    return `The ${reduce === 'p95' ? reduce : reduce.toLowerCase()} ${metric} over the last ${window} is compared with these.`;
-  };
-  const scopeItems = [
-    { value: 'all', label: `All ${noun}s` },
-    ...(noun === 'server' ? [{ value: 'label', label: 'With label' }] : []),
-    { value: 'picked', label: `Picked ${noun}s` },
+  const nouns = `${noun[0]!.toUpperCase()}${noun.slice(1)}s`;
+  const scopeItems: { value: ScopeKind; label: string }[] = [
+    { value: 'all', label: `All ${nouns}` },
+    ...(noun === 'server' ? [{ value: 'label' as const, label: 'With Label' }] : []),
+    { value: 'picked', label: `Picked ${nouns}` },
   ];
+
+  const windows = [...new Set([...WINDOW_OPTIONS.map((option) => option.value), windowSecs])]
+    .filter((secs) => secs > 0)
+    .sort((a, b) => a - b);
+  const measureGroups = [
+    [{ value: 'latest', label: 'Latest reading' }],
+    ...AGGREGATION_OPTIONS.map((option) =>
+      windows.map((secs) => ({ value: `${option.value}:${secs}`, label: `${option.label} over ${formatSpan(secs)}` }))
+    ),
+  ];
+  const measureValue = windowSecs === 0 ? 'latest' : `${aggregation}:${windowSecs}`;
+  const changeMeasure = (value: string | null) => {
+    if (!value || value === 'latest') {
+      setWindowSecs(0);
+      return;
+    }
+    const [nextAggregation, nextWindow] = value.split(':');
+    setAggregation(nextAggregation as Aggregation);
+    setWindowSecs(Number(nextWindow));
+  };
+
+  const recoveryVerb = kind === 'cert_days' ? 'Over' : 'Under';
+  const limitText = criticalValue !== null && isCriticalValid ? formatAmount(criticalValue, unit) : 'the limit';
+  const recoveryChoices = [
+    ...new Set([...getRecoveryPresets(kind, criticalValue), ...(recoveryValue !== null ? [recoveryValue] : [])]),
+  ];
+  const describeRecovery = (value: number | null) =>
+    `${recoveryVerb} ${value === null ? limitText : formatAmount(value, unit)}`;
+  const resolveGroups = hasThreshold(kind)
+    ? [null, ...recoveryChoices].map((value) =>
+        RESOLVE_OPTIONS.map((option) => ({
+          value: `${value ?? 'limit'}:${option.value}`,
+          label: option.value === 0 ? describeRecovery(value) : `${describeRecovery(value)} for ${formatSpan(option.value)}`,
+        }))
+      )
+    : [
+        RESOLVE_OPTIONS.map((option) => ({
+          value: `limit:${option.value}`,
+          label:
+            option.value === 0
+              ? kind === 'offline'
+                ? 'As soon as data comes back'
+                : 'As soon as it recovers'
+              : `${formatSpan(option.value)} after it recovers`,
+        })),
+      ];
+  const resolveValue = `${hasThreshold(kind) && recoveryValue !== null ? recoveryValue : 'limit'}:${resolveForSecs}`;
+  const changeResolve = (value: string | null) => {
+    const [nextRecovery, nextSecs] = (value ?? 'limit:0').split(':');
+    setRecovery(nextRecovery === 'limit' ? '' : (nextRecovery ?? ''));
+    setResolveForSecs(Number(nextSecs));
+  };
+
+  const describeResolve = () => {
+    if (hasThreshold(kind) && recoveryValue !== null) {
+      const span = resolveForSecs > 0 ? ` for ${formatSpan(resolveForSecs)}` : '';
+      return `Resolves ${describeRecovery(recoveryValue).toLowerCase()}${span}`;
+    }
+    if (resolveForSecs > 0) {
+      return `Resolves ${formatSpan(resolveForSecs)} after it recovers`;
+    }
+    return kind === 'offline' ? 'Resolves as soon as data comes back' : 'Resolves as soon as it recovers';
+  };
+  const moreSummary = [
+    describeResolve(),
+    changed.noData && (noData === 'alert' ? 'Alerts when data stops' : 'Resolves when data stops'),
+    remind === 'off'
+      ? 'No reminders'
+      : `Reminds ${(REMIND_OPTIONS.find((option) => option.value === remind)?.label ?? 'while firing').toLowerCase()}`,
+    changed.messageLimit && `At most ${messageLimit} messages an hour`,
+    quietHours.length > 0 ? 'Quiet hours on' : 'No quiet hours',
+    declareIncident ? 'Opens an incident' : 'No incident',
+    changed.runbook && 'Runbook linked',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  const visibleIntegrations = (integrations ?? []).filter(
+    (integration) => (levels[integration.id] ?? 'off') !== 'off' || shownIntegrationIds.includes(integration.id)
+  );
+  const hiddenCount = (integrations ?? []).length - visibleIntegrations.length;
+
+  const now = Date.now();
+  const firedCount = history.filter((alert) => now - new Date(alert.started_at).getTime() < RECENT_MS).length;
+  const forField = (
+    <SelectField
+      label={kind === 'offline' ? 'No Data For' : 'For'}
+      value={forSecs.toString()}
+      onValueChange={(value) => setForSecs(Number(value))}
+      items={FOR_OPTIONS.map((option) => ({ value: option.value.toString(), label: option.label }))}
+    />
+  );
 
   return (
     <div className="flex min-h-full flex-col bg-surface-default">
-      <PageBar backTo={backTo} icon="bell" title="Alerts">
+      <PageBar backTo={backTo} icon="bell" title={rule ? `Alerts / ${rule.name}` : 'Alerts'}>
         {!rule && (
           <>
             <Button nativeButton={false} variant="secondary" className="w-fit" render={<Link to={backTo} />}>
@@ -452,19 +635,39 @@ function RuleFormBody(props: RuleFormBodyProps) {
           className="flex w-200 max-w-full min-w-0 flex-col gap-8"
         >
           <div className="flex flex-col gap-1">
-            <h1 className="text-title-page font-semibold">{rule ? 'Edit Rule' : 'New Rule'}</h1>
+            <h1 className="text-title-page font-semibold">{rule ? `Edit ${rule.name}` : 'New Rule'}</h1>
             <p className="text-body text-text-secondary">
-              Watch a server, uptime check, cron job or log stream, and tell your team when it crosses a limit.
+              {rule
+                ? `Created ${formatDate(rule.created_at)}. Fired ${firedCount === 1 ? 'once' : `${firedCount} times`} in the last 30 days.`
+                : 'Pick a condition and a limit. Everything else starts on a sensible default.'}
             </p>
           </div>
 
-          <FormSection title="Rule">
-            <div className="flex flex-col gap-5 p-4">
-              <FieldRow label="Name" hint="No need to be unique, just a name your team will recognize.">
-                {({ inputId, hintId }) => (
+          <FormSection
+            title="Rule"
+            action={
+              hasWarning(kind) && (
+                <Button
+                  type="button"
+                  variant="tertiary"
+                  className="w-fit"
+                  onClick={() => {
+                    if (isWarningOpen) {
+                      setWarning('');
+                    }
+                    setIsWarningOpen(!isWarningOpen);
+                  }}
+                >
+                  {isWarningOpen ? 'Remove Warning Level' : 'Add Warning Level'}
+                </Button>
+              )
+            }
+          >
+            <div className="flex flex-col gap-3.5 p-3.5">
+              <FieldRow label="Name">
+                {({ inputId }) => (
                   <Input
                     id={inputId}
-                    aria-describedby={hintId}
                     value={name}
                     onValueChange={setName}
                     placeholder="High CPU"
@@ -474,55 +677,90 @@ function RuleFormBody(props: RuleFormBodyProps) {
                   />
                 )}
               </FieldRow>
-              <FieldGrid hint="Both go into every message, so whoever is on call knows what to do.">
-                <FieldRow label="Runbook URL">
-                  {({ inputId }) => (
-                    <Input
-                      id={inputId}
-                      type="url"
-                      value={runbookUrl}
-                      onValueChange={setRunbookUrl}
-                      placeholder="https://wiki.example.com/runbooks/api"
+              <SelectField
+                label="Condition"
+                value={kind}
+                onValueChange={(value) => changeKind(value as ConditionKind)}
+                groups={METRIC_GROUPS.map((group) => ({
+                  label: group.label,
+                  items: group.items.map((item) => ({ value: item.kind, label: CONDITION_LABELS[item.kind] })),
+                }))}
+              />
+              {kind === 'logs' ? (
+                <>
+                  <FieldGrid hint="Only processes with logs: true send lines.">
+                    <SelectField
+                      label="Level"
+                      value={logLevel}
+                      onValueChange={(value) => setLogLevel(value ?? 'error')}
+                      items={LOG_LEVEL_OPTIONS}
+                    />
+                    <SelectField
+                      label="Source"
+                      value={logService || 'any'}
+                      onValueChange={(value) => setLogService(!value || value === 'any' ? '' : value)}
+                      items={[{ value: 'any', label: 'Any source' }, ...logServices.map((service) => ({ value: service, label: service }))]}
+                    />
+                  </FieldGrid>
+                  <FieldRow label="Text" hint="Optional. Matches lines that contain this text.">
+                    {({ inputId, hintId }) => (
+                      <Input
+                        id={inputId}
+                        aria-describedby={hintId}
+                        value={logText}
+                        onValueChange={setLogText}
+                        placeholder="Any text"
+                        maxLength={200}
+                      />
+                    )}
+                  </FieldRow>
+                  <FieldGrid
+                    columns={3}
+                    hint={
+                      isCriticalValid
+                        ? `Fires when ${critical} or more matching lines arrive within ${formatSpan(logWithin)}.`
+                        : undefined
+                    }
+                  >
+                    <UnitField
+                      label="At Least"
+                      unit={unit}
+                      value={critical}
+                      onValueChange={setCritical}
+                      isInvalid={!isCriticalValid}
+                    />
+                    <SelectField
+                      label="Within"
+                      value={logWithin.toString()}
+                      onValueChange={(value) => setLogWithin(Number(value))}
+                      items={LOG_WINDOW_OPTIONS.map((option) => ({ value: option.value.toString(), label: option.label }))}
+                    />
+                    {forField}
+                  </FieldGrid>
+                </>
+              ) : hasThreshold(kind) ? (
+                <FieldGrid columns={isWarningOpen ? 3 : 2}>
+                  <UnitField
+                    label={isWarningOpen ? `Critical ${direction}` : direction}
+                    unit={unit}
+                    value={critical}
+                    onValueChange={setCritical}
+                    isInvalid={!isCriticalValid}
+                  />
+                  {isWarningOpen && (
+                    <UnitField
+                      label={`Warning ${direction}`}
+                      unit={unit}
+                      value={warning}
+                      onValueChange={setWarning}
+                      placeholder="Off"
+                      isInvalid={!isWarningValid}
                     />
                   )}
-                </FieldRow>
-                <SelectField
-                  label="Severity Label"
-                  value={severityLabel}
-                  onValueChange={(value) => setSeverityLabel(value ?? 'none')}
-                  items={SEVERITY_LABEL_OPTIONS}
-                />
-              </FieldGrid>
-            </div>
-          </FormSection>
-
-          <FormSection title="Monitor" description="What to measure, and how to reduce it to one number.">
-            <div className="flex flex-col gap-5 p-4">
-              <FieldGrid hint="Grouped by source: Servers, Uptime checks, Crons and Logs. The scope below follows the source.">
-                <SelectField
-                  label="Metric"
-                  value={kind}
-                  onValueChange={(value) => changeKind(value as ConditionKind)}
-                  groups={METRIC_GROUPS.map((group) => ({
-                    label: group.label,
-                    items: group.items.map((item) => ({ value: item.kind, label: item.label })),
-                  }))}
-                />
-                {hasAggregation(kind) ? (
-                  <SelectField
-                    label="Aggregation"
-                    value={aggregation}
-                    onValueChange={(value) => setAggregation((value ?? 'avg') as Aggregation)}
-                    items={AGGREGATION_OPTIONS}
-                  />
-                ) : kind === 'logs' ? (
-                  <SelectField
-                    label="Level"
-                    value={logLevel}
-                    onValueChange={(value) => setLogLevel(value ?? 'error')}
-                    items={LOG_LEVEL_OPTIONS}
-                  />
-                ) : hasSubjectName(kind) ? (
+                  {forField}
+                </FieldGrid>
+              ) : hasSubjectName(kind) ? (
+                <FieldGrid>
                   <FieldRow label={kind === 'process_stopped' ? 'Process' : 'Port'}>
                     {({ inputId }) => (
                       <Input
@@ -533,256 +771,55 @@ function RuleFormBody(props: RuleFormBodyProps) {
                       />
                     )}
                   </FieldRow>
-                ) : (
-                  <div />
-                )}
-              </FieldGrid>
-              {hasAggregation(kind) && (
-                <FieldGrid
-                  hint={
-                    windowSecs === 0
-                      ? 'Uses the latest sample. Pick a window to smooth out spikes.'
-                      : `Each ${noun} fires and resolves on its own.`
-                  }
-                >
-                  <SelectField
-                    label="Over the Last"
-                    value={windowSecs.toString()}
-                    onValueChange={(value) => setWindowSecs(Number(value))}
-                    items={WINDOW_OPTIONS.map((option) => ({ value: option.value.toString(), label: option.label }))}
-                  />
-                  <div />
+                  {forField}
                 </FieldGrid>
-              )}
-              {kind === 'logs' && (
-                <FieldGrid hint="Only processes with logs: true send lines.">
-                  <SelectField
-                    label="Source"
-                    value={logService || 'any'}
-                    onValueChange={(value) => setLogService(!value || value === 'any' ? '' : value)}
-                    items={[{ value: 'any', label: 'Any source' }, ...logServices.map((service) => ({ value: service, label: service }))]}
-                  />
-                  <FieldRow label="Text">
-                    {({ inputId }) => (
-                      <Input id={inputId} value={logText} onValueChange={setLogText} placeholder="Any text" maxLength={200} />
-                    )}
-                  </FieldRow>
-                </FieldGrid>
+              ) : (
+                forField
               )}
             </div>
-          </FormSection>
-
-          {hasThreshold(kind) && (
-            <FormSection
-              title="Thresholds"
-              description={
-                kind === 'logs'
-                  ? 'Critical is required. Count the matching lines within a window.'
-                  : 'Critical is required. Warning is optional and only goes to integrations set to get it.'
-              }
-            >
-              <div className="p-4">
-                <FieldGrid hint={describeCompare()}>
-                  <UnitField
-                    label={`Critical ${direction}`}
-                    unit={unit}
-                    value={critical}
-                    onValueChange={setCritical}
-                    isInvalid={!isCriticalValid}
-                  />
-                  {kind === 'logs' ? (
-                    <SelectField
-                      label="Within"
-                      value={logWithin.toString()}
-                      onValueChange={(value) => setLogWithin(Number(value))}
-                      items={LOG_WINDOW_OPTIONS.map((option) => ({ value: option.value.toString(), label: option.label }))}
-                    />
-                  ) : (
-                    <UnitField
-                      label={`Warning ${direction}`}
-                      unit={unit}
-                      value={warning}
-                      onValueChange={setWarning}
-                      placeholder="Off"
-                      isInvalid={!isWarningValid}
-                    />
-                  )}
-                </FieldGrid>
-              </div>
-            </FormSection>
-          )}
-
-          <FormSection title="Timing" description="When it fires, when it calms down, and how often it nudges.">
-            <SettingRow title="Fire After" description="How long it must stay over a limit before anyone hears">
-              {(labelId) => (
-                <PlainSelect
-                  labelId={labelId}
-                  value={forSecs.toString()}
-                  onValueChange={(value) => setForSecs(Number(value))}
-                  items={FOR_OPTIONS.map((option) => ({
-                    value: option.value.toString(),
-                    label: option.value === 0 ? 'Immediately' : `Breached for ${option.label}`,
-                  }))}
-                />
-              )}
-            </SettingRow>
-            {hasThreshold(kind) && (
+            {hasAggregation(kind) && (
               <SettingRow
-                title="Recovery Limit"
-                description={`Optional. Must drop ${kind === 'cert_days' ? 'above' : 'below'} this to resolve, so it does not flap`}
-              >
-                {(labelId) => (
-                  <UnitInput
-                    labelId={labelId}
-                    unit={unit}
-                    value={recovery}
-                    onValueChange={setRecovery}
-                    placeholder="Off"
-                    isInvalid={!isRecoveryValid}
-                  />
+                title="Measured As"
+                description="How readings are combined before the check"
+                className="py-3.5"
+                control={(labelId) => (
+                  <PlainSelect labelId={labelId} value={measureValue} onValueChange={changeMeasure} groups={measureGroups} />
                 )}
-              </SettingRow>
-            )}
-            <SettingRow title="Resolve After" description="How long it must stay under the limit before it resolves">
-              {(labelId) => (
-                <PlainSelect
-                  labelId={labelId}
-                  value={resolveForSecs.toString()}
-                  onValueChange={(value) => setResolveForSecs(Number(value))}
-                  items={RESOLVE_OPTIONS.map((option) => ({
-                    value: option.value.toString(),
-                    label: option.label.replace('After ', ''),
-                  }))}
-                />
-              )}
-            </SettingRow>
-            <SettingRow title="Remind" description="While it is still firing">
-              {(labelId) => (
-                <PlainSelect labelId={labelId} value={remind} onValueChange={(value) => setRemind(value ?? 'off')} items={REMIND_OPTIONS} />
-              )}
-            </SettingRow>
-          </FormSection>
-
-          <FormSection
-            title="Noise Control"
-            description="For rules that get loud. The defaults are fine for most."
-            action={
-              isNoiseOpen && (
-                <Button
-                  type="button"
-                  variant="plain"
-                  className="w-fit"
-                  onClick={() => {
-                    setNoData('keep');
-                    setMessageLimit('off');
-                    setQuietHours([]);
-                    setIsNoiseOpen(false);
-                  }}
-                >
-                  <Icon name="undo" className="text-icon-secondary" />
-                  Reset to Defaults
-                </Button>
-              )
-            }
-          >
-            {!isNoiseOpen && (
-              <div className="flex items-center gap-3 px-4 py-3.5">
-                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="text-body font-medium">Using the defaults</span>
-                  <span className="text-body text-text-secondary">
-                    {noun === 'cron' ? '' : 'Keeps the last state when data stops · '}No message limit · No quiet hours
-                  </span>
-                </div>
-                <Button type="button" variant="secondary" className="w-fit" onClick={() => setIsNoiseOpen(true)}>
-                  Customize
-                </Button>
-              </div>
-            )}
-            {isNoiseOpen && (
-              <>
-                {noun !== 'cron' && (
-                  <SettingRow title="If Data Stops" description="When an agent disconnects or a check is paused">
-                    {(labelId) => (
-                      <PlainSelect
-                        labelId={labelId}
-                        value={noData}
-                        onValueChange={(value) => setNoData((value ?? 'keep') as NoData)}
-                        items={NO_DATA_OPTIONS}
-                      />
-                    )}
-                  </SettingRow>
-                )}
-                <SettingRow title="Message Limit" description="Past it, one summary goes out and the rule stays quiet for the hour">
-                  {(labelId) => (
-                    <PlainSelect
-                      labelId={labelId}
-                      value={messageLimit}
-                      onValueChange={(value) => setMessageLimit(value ?? 'off')}
-                      items={MESSAGE_LIMIT_OPTIONS}
-                    />
-                  )}
-                </SettingRow>
-                <div className="flex flex-col">
-                  <SettingRow
-                    title="Quiet Hours"
-                    description="No messages during planned work, like a nightly backup or a deploy window"
-                  >
-                    {quietHours.length === 0
-                      ? (labelId) => (
-                          <PlainSelect
-                            labelId={labelId}
-                            value="off"
-                            onValueChange={(value) => value === 'on' && setQuietHours([DEFAULT_QUIET_WINDOW])}
-                            items={[
-                              { value: 'off', label: 'Off' },
-                              { value: 'on', label: 'Weekdays, 02:00 to 03:00' },
-                            ]}
-                          />
-                        )
-                      : undefined}
-                  </SettingRow>
-                  {quietHours.length > 0 && (
-                    <div className="px-4 pb-4">
-                      <QuietHoursField
-                        windows={quietHours}
-                        timeZone={timeZone}
-                        onWindowsChange={setQuietHours}
-                        onTimeZoneChange={setTimeZone}
-                      />
-                    </div>
-                  )}
-                </div>
-              </>
+              />
             )}
           </FormSection>
 
-          <FormSection title={noun === 'check' ? 'Checks' : noun === 'cron' ? 'Crons' : 'Servers'}>
-            <div className="p-4">
-              <FieldGrid hint={describeMatches(matched.map((target) => target.name), noun, scopeKind)}>
-                <SelectField
-                  label="Scope"
-                  value={scopeKind}
-                  onValueChange={(value) => setScopeKind((value ?? 'all') as ScopeKind)}
-                  items={scopeItems}
-                />
-                {scopeKind === 'label' ? (
-                  <SelectField
-                    label="Label"
-                    placeholder={labels.length > 0 ? 'Pick a label' : 'No server has a label yet'}
-                    value={label || null}
-                    onValueChange={(value) => setLabel(value ?? '')}
-                    items={labels.map((item) => ({ value: item, label: item }))}
-                  />
-                ) : (
-                  <div />
-                )}
-              </FieldGrid>
-            </div>
-            {scopeKind === 'picked' && (
+          <FormSection title={nouns}>
+            <SettingRow
+              title="Scope"
+              isCaption
+              description={
+                scopeKind === 'picked'
+                  ? `Only the ${noun}s you pick.`
+                  : `${nouns} added later join the rule when they match.`
+              }
+              actions={
+                <div role="radiogroup" aria-label="Scope" className="flex shrink-0 items-center gap-0.5">
+                  {scopeItems.map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={scopeKind === item.value}
+                      onClick={() => setScopeKind(item.value)}
+                      className="h-7 rounded-sm px-2.5 text-body font-medium whitespace-nowrap text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-text-link/40 aria-checked:bg-surface-fill aria-checked:text-text-primary"
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              }
+            />
+            {scopeKind === 'picked' ? (
               <div className="flex flex-col py-1">
-                {targets.length === 0 && <p className="px-4 py-2 text-body text-text-secondary">No {noun}s yet.</p>}
+                {targets.length === 0 && <p className="px-3.5 py-2.5 text-body text-text-secondary">No {noun}s yet.</p>}
                 {targets.map((target) => (
-                  <label key={target.id} className="flex cursor-pointer items-center gap-3 px-4 py-2 hover:bg-surface-subtle">
+                  <label key={target.id} className="flex cursor-pointer items-center gap-3 px-3.5 py-2.5 hover:bg-surface-subtle">
                     <Checkbox
                       checked={pickedIds.includes(target.id)}
                       onCheckedChange={(checked) =>
@@ -794,116 +831,320 @@ function RuleFormBody(props: RuleFormBodyProps) {
                   </label>
                 ))}
               </div>
+            ) : (
+              <div className="flex flex-col gap-3.5 p-3.5">
+                {scopeKind === 'label' ? (
+                  <SelectField
+                    label="Label"
+                    placeholder={labels.length > 0 ? 'Pick a label' : 'No server has a label yet'}
+                    value={label || null}
+                    onValueChange={(value) => setLabel(value ?? '')}
+                    items={labels.map((item) => ({ value: item, label: item }))}
+                    hint={describeMatches(matched.map((target) => target.name), noun)}
+                  />
+                ) : (
+                  <p className="text-caption leading-4.5 text-text-secondary">{describeMatches(matched.map((target) => target.name), noun)}</p>
+                )}
+              </div>
             )}
           </FormSection>
 
           <FormSection
             title="Notify"
-            description="Pick which severities each integration gets. Every one also hears when the alert resolves."
+            description="Pick what each integration gets. Every one also hears when the alert resolves."
             action={
               <Button
                 type="button"
-                variant="plain"
+                variant="tertiary"
                 className="w-fit"
                 disabled={!condition || integrationIds.length === 0 || test.isPending}
                 onClick={() =>
                   condition && test.mutate({ name: name.trim() || 'Untitled Rule', condition, for_secs: forSecs, integration_ids: integrationIds })
                 }
               >
-                {test.isPending ? <Icon name="loader" className="animate-spin" /> : <Icon name="send" />}
+                {test.isPending && <Icon name="loader" className="animate-spin" />}
                 Send Test Alert
               </Button>
             }
           >
-            {integrations?.map((integration) => (
+            {visibleIntegrations.map((integration) => (
               <NotifyRow
                 key={integration.id}
                 integration={integration}
                 value={levels[integration.id] ?? 'off'}
-                onValueChange={(value) => setNotifyLevels({ ...levels, [integration.id]: value })}
+                onValueChange={(value) => {
+                  setShownIntegrationIds([...shownIntegrationIds, integration.id]);
+                  setNotifyLevels({ ...levels, [integration.id]: value });
+                }}
               />
             ))}
             <button
               type="button"
-              onClick={() => setIsAddOpen(true)}
-              className="flex items-center gap-2.5 bg-surface-subtle px-4 py-2.5 text-left text-body font-medium outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40 focus-visible:ring-inset"
+              onClick={() =>
+                hiddenCount > 0
+                  ? setShownIntegrationIds((integrations ?? []).map((integration) => integration.id))
+                  : setIsAddOpen(true)
+              }
+              className="flex items-center gap-2 bg-surface-subtle px-3.5 py-2.5 text-left text-body font-medium outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40 focus-visible:ring-inset"
             >
-              <Icon name="plus" />
+              <Icon name="plus" className="size-3.5" />
               Add Integration
             </button>
           </FormSection>
 
-          <FormSection title="Incident" description="Open an incident for bad outages, so the team works from one timeline.">
-            <label className="flex items-center gap-3 px-4 py-3">
-              <Icon name="flag" />
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span id={declareIncidentId} className="text-body font-medium">
-                  Declare an incident when this fires
-                </span>
-                <span className="text-body text-text-secondary">
-                  Daroyan declares it, links this alert and adds what it fires on as an affected component.
-                </span>
-              </span>
-              <Switch.Root
-                aria-labelledby={declareIncidentId}
-                checked={declareIncident}
-                onCheckedChange={setDeclareIncident}
-              >
-                <Switch.Thumb />
-              </Switch.Root>
-            </label>
-            {declareIncident && (
-              <div className="flex flex-col gap-5 p-4">
-                <FieldGrid hint="Severity sets the colour everywhere: Minor grey, Major amber, Critical red.">
-                  <SelectField
-                    label="Severity"
-                    value={declareSeverity}
-                    onValueChange={(value) => setDeclareSeverity(value ?? 'major')}
-                    items={DECLARE_SEVERITY_OPTIONS}
-                  />
-                  <SelectField
-                    label="Show on Status Pages"
-                    value={declareShown}
-                    onValueChange={(value) => setDeclareShown(value ?? 'shown')}
-                    items={DECLARE_SHOWN_OPTIONS}
-                  />
-                </FieldGrid>
+          <FormSection
+            title="More Options"
+            description={
+              isMoreOpen && marksChanges
+                ? `${changedCount === 1 ? '1 setting differs' : `${changedCount} settings differ`} from the defaults and ${changedCount === 1 ? 'is' : 'are'} marked. Reset puts ${changedCount === 1 ? 'it' : 'them'} back.`
+                : 'Resolving, reminders, quiet hours, incidents and a runbook link. The defaults suit most rules.'
+            }
+            action={
+              isMoreOpen && (
+                <div className="flex gap-2">
+                  <Button type="button" variant="tertiary" className="w-fit" disabled={changedCount === 0} onClick={resetMoreOptions}>
+                    Reset to Defaults
+                  </Button>
+                  <Button type="button" variant="tertiary" className="w-fit" onClick={() => setIsMoreOpen(false)}>
+                    Hide
+                  </Button>
+                </div>
+              )
+            }
+          >
+            {!isMoreOpen ? (
+              <div className="flex items-center gap-3 px-3.5 py-3">
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="text-body font-medium">{changedCount === 0 ? 'Using Defaults' : 'Customized'}</span>
+                  <span className="text-body text-text-secondary">{moreSummary}</span>
+                </div>
+                <Button type="button" variant="tertiary" className="w-fit" onClick={() => setIsMoreOpen(true)}>
+                  Show
+                </Button>
               </div>
+            ) : (
+              <>
+                <SettingRow
+                  title="Resolve When"
+                  description={
+                    hasThreshold(kind)
+                      ? `How long it must stay ${kind === 'cert_days' ? 'over' : 'under'} the limit before it resolves`
+                      : 'How long it must stay healthy before it resolves'
+                  }
+                  isChanged={!!rule && changed.resolve}
+                  control={(labelId) => (
+                    <PlainSelect labelId={labelId} value={resolveValue} onValueChange={changeResolve} groups={resolveGroups} />
+                  )}
+                />
+                {noun !== 'cron' && (
+                  <SettingRow
+                    title="If Data Stops"
+                    description="When an agent disconnects or a check is paused"
+                    isChanged={!!rule && changed.noData}
+                    control={(labelId) => (
+                      <PlainSelect
+                        labelId={labelId}
+                        value={noData}
+                        onValueChange={(value) => setNoData((value ?? 'keep') as NoData)}
+                        items={NO_DATA_OPTIONS}
+                      />
+                    )}
+                  />
+                )}
+                <SettingRow
+                  title="Remind"
+                  description="While it is still firing"
+                  isChanged={!!rule && changed.remind}
+                  control={(labelId) => (
+                    <PlainSelect labelId={labelId} value={remind} onValueChange={(value) => setRemind(value ?? 'off')} items={REMIND_OPTIONS} />
+                  )}
+                />
+                <SettingRow
+                  title="Message Limit"
+                  description="Past it, one summary goes out and the rule stays quiet for the hour"
+                  isChanged={!!rule && changed.messageLimit}
+                  control={(labelId) => (
+                    <PlainSelect
+                      labelId={labelId}
+                      value={messageLimit}
+                      onValueChange={(value) => setMessageLimit(value ?? 'off')}
+                      items={MESSAGE_LIMIT_OPTIONS}
+                    />
+                  )}
+                />
+                <SettingRow
+                  title="Quiet Hours"
+                  description="No messages during planned work, like a nightly backup"
+                  isChanged={!!rule && changed.quietHours}
+                  actions={
+                    quietHours.length === 0 ? (
+                      <Button type="button" variant="tertiary" className="w-fit" onClick={() => setQuietHours([DEFAULT_QUIET_WINDOW])}>
+                        Add Quiet Hours
+                      </Button>
+                    ) : (
+                      <div className="flex gap-2">
+                        {quietHours.length < 5 && (
+                          <Button
+                            type="button"
+                            variant="tertiary"
+                            className="w-fit"
+                            onClick={() => setQuietHours([...quietHours, DEFAULT_QUIET_WINDOW])}
+                          >
+                            Add Another Window
+                          </Button>
+                        )}
+                        <Button type="button" variant="tertiary" className="w-fit" onClick={() => setQuietHours([])}>
+                          Remove Quiet Hours
+                        </Button>
+                      </div>
+                    )
+                  }
+                >
+                  {quietHours.length > 0 && (
+                    <QuietHoursField
+                      windows={quietHours}
+                      timeZone={timeZone}
+                      onWindowsChange={setQuietHours}
+                      onTimeZoneChange={setTimeZone}
+                    />
+                  )}
+                </SettingRow>
+                <SettingRow
+                  title="Open an Incident"
+                  description="For bad outages, so the team works from one timeline"
+                  isChanged={!!rule && changed.incident}
+                  actions={(labelId) => (
+                    <Switch.Root aria-labelledby={labelId} checked={declareIncident} onCheckedChange={setDeclareIncident}>
+                      <Switch.Thumb />
+                    </Switch.Root>
+                  )}
+                >
+                  {declareIncident && (
+                    <FieldGrid hint="Daroyan declares it, links this alert and adds what it fires on as an affected component.">
+                      <SelectField
+                        label="Severity"
+                        value={declareSeverity}
+                        onValueChange={(value) => setDeclareSeverity(value ?? 'major')}
+                        items={DECLARE_SEVERITY_OPTIONS}
+                      />
+                      <SelectField
+                        label="Show on Status Pages"
+                        value={declareShown}
+                        onValueChange={(value) => setDeclareShown(value ?? 'shown')}
+                        items={DECLARE_SHOWN_OPTIONS}
+                      />
+                    </FieldGrid>
+                  )}
+                </SettingRow>
+                <SettingRow
+                  title="Runbook URL"
+                  description="Linked in every message, so whoever is on call knows what to do"
+                  isChanged={!!rule && changed.runbook}
+                  control={(labelId) => (
+                    <Input
+                      aria-labelledby={labelId}
+                      type="url"
+                      value={runbookUrl}
+                      onValueChange={setRunbookUrl}
+                      placeholder="https://wiki.example.com/runbooks/api"
+                    />
+                  )}
+                />
+              </>
             )}
           </FormSection>
         </form>
 
-        <aside aria-label="Preview" className="flex w-65 shrink-0 flex-col gap-4 pt-2 max-lg:hidden">
-          <div className="flex flex-col gap-2 border-b border-border-row pb-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-body font-medium">Preview</h2>
-              <span className="text-body text-text-tertiary">Last {backtest?.days ?? 7} days</span>
+        <aside aria-label="Preview" className="flex w-65 shrink-0 flex-col gap-5 pt-2 max-lg:hidden">
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3 text-body">
+              <h2 className="font-medium">{rule ? 'With These Changes' : 'Preview'}</h2>
+              <span className="text-text-tertiary">Last {backtest?.days ?? 7} days</span>
             </div>
-            <BacktestBox backtest={condition && scope ? backtest : undefined} />
+            <BacktestBox
+              backtest={condition && scope ? backtest : undefined}
+              savedCount={rule && savedBacktest?.is_supported ? savedBacktest.hits.length : undefined}
+            />
           </div>
-          <div className="flex flex-col gap-2.5">
-            <h2 className="text-body font-medium">Start From a Template</h2>
-            <div className="flex flex-wrap gap-1.5">
-              {TEMPLATES.map((template) => (
-                <button
-                  key={template.label}
-                  type="button"
-                  onClick={() => applyTemplate(template)}
-                  className="flex h-5.5 items-center rounded-xs bg-surface-fill px-1.75 text-caption font-normal text-text-secondary outline-none hover:bg-surface-fill-strong hover:text-text-primary focus-visible:ring-2 focus-visible:ring-text-link/40"
-                >
-                  {template.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          {rule ? (
+            <>
+              <div className="h-px bg-border-row" />
+              <div className="flex flex-col gap-2.5 text-body">
+                <h2 className="font-medium">Status</h2>
+                <div className="flex items-center gap-3">
+                  <span id="send-alerts" className="flex-1 text-text-secondary">
+                    Send alerts
+                  </span>
+                  <Switch.Root
+                    aria-labelledby="send-alerts"
+                    checked={rule.enabled}
+                    disabled={toggle.isPending}
+                    onCheckedChange={(enabled) => toggle.mutate({ ruleId: rule.id, body: { enabled } })}
+                  >
+                    <Switch.Thumb />
+                  </Switch.Root>
+                </div>
+                <p className="text-text-secondary">Turn off to pause the rule without losing it</p>
+              </div>
+              {isAdmin && (
+                <>
+                  <div className="h-px bg-border-row" />
+                  <div className="flex flex-col gap-2.5">
+                    <h2 className="text-body font-medium">Delete Rule</h2>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="w-fit text-tone-critical-fg"
+                      onClick={() => setIsDeleteOpen(true)}
+                    >
+                      Delete Rule
+                    </Button>
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="h-px bg-border-row" />
+              <div className="flex flex-col gap-2.5">
+                <h2 className="text-body font-medium">Start From a Template</h2>
+                <div className="flex flex-wrap gap-1.5">
+                  {TEMPLATES.map((template) => (
+                    <button
+                      key={template.label}
+                      type="button"
+                      onClick={() => applyTemplate(template)}
+                      className="flex h-5.5 items-center rounded-xs bg-surface-fill px-1.75 text-caption font-normal text-text-secondary outline-none hover:bg-surface-fill-strong hover:text-text-primary focus-visible:ring-2 focus-visible:ring-text-link/40"
+                    >
+                      {template.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </aside>
       </div>
 
       <IntegrationDialog
         open={isAddOpen}
         onOpenChange={setIsAddOpen}
-        onSaved={(saved) => setNotifyLevels({ ...levels, [saved.id]: 'both' })}
+        onSaved={(saved) => {
+          setShownIntegrationIds([...shownIntegrationIds, saved.id]);
+          setNotifyLevels({ ...levels, [saved.id]: 'both' });
+        }}
       />
+      {rule && (
+        <ConfirmDialog
+          open={isDeleteOpen}
+          onOpenChange={setIsDeleteOpen}
+          title={`Delete ${rule.name}?`}
+          description="Its history goes too. A firing alert stops without a resolve message."
+          confirmLabel="Delete Rule"
+          isPending={remove.isPending}
+          onConfirm={() => remove.mutate({ ruleId: rule.id })}
+        />
+      )}
     </div>
   );
 }
@@ -915,18 +1156,16 @@ const DECLARE_SEVERITY_OPTIONS = [
 ];
 
 const DECLARE_SHOWN_OPTIONS = [
-  { value: 'shown', label: 'Yes, on pages that include it' },
+  { value: 'shown', label: 'Yes, as an affected component' },
   { value: 'hidden', label: 'No, internal until someone posts' },
 ];
 
-function describeMatches(names: string[], noun: string, scopeKind: ScopeKind) {
-  const later =
-    scopeKind === 'picked' ? '' : ` ${noun[0]!.toUpperCase()}${noun.slice(1)}s added later join the rule when they match.`;
+function describeMatches(names: string[], noun: string) {
   if (names.length === 0) {
-    return `Matches no ${noun}s yet.${later}`;
+    return `Matches no ${noun}s yet.`;
   }
   const count = names.length === 1 ? `1 ${noun}` : `${names.length} ${noun}s`;
-  return `Matches ${count}: ${joinNames(names)}.${later}`;
+  return `Matches ${count}: ${joinNames(names)}.`;
 }
 
 type FieldGridProps = {
@@ -940,8 +1179,8 @@ function FieldGrid(props: FieldGridProps) {
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className={cn('grid grid-cols-1 gap-3', columns === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>{children}</div>
-      {hint && <p className="text-caption text-text-secondary">{hint}</p>}
+      <div className={cn('grid grid-cols-1 gap-4', columns === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>{children}</div>
+      {hint && <p className="text-caption leading-4.5 text-text-secondary">{hint}</p>}
     </div>
   );
 }
@@ -963,27 +1202,25 @@ function UnitField(props: UnitFieldProps) {
 
 type UnitInputProps = Omit<UnitFieldProps, 'label'> & {
   id?: string;
-  labelId?: string;
 };
 
 function UnitInput(props: UnitInputProps) {
-  const { id, labelId, unit, value, onValueChange, placeholder, isInvalid } = props;
+  const { id, unit, value, onValueChange, placeholder, isInvalid } = props;
 
   return (
     <div className="relative">
       <Input
         id={id}
-        aria-labelledby={labelId}
         inputMode="decimal"
         value={value}
         onValueChange={(next) => onValueChange(next.replace(/[^0-9.]/g, ''))}
         placeholder={placeholder}
         aria-invalid={isInvalid || undefined}
-        className={cn(unit && 'pr-12')}
       />
-      {unit && (
-        <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-body text-text-tertiary">
-          {unit}
+      {unit && value && (
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-px flex items-center pl-3 text-body">
+          <span className="invisible whitespace-pre">{value}</span>
+          <span className="text-text-primary">{unit === '%' ? unit : ` ${unit}`}</span>
         </span>
       )}
     </div>
@@ -993,23 +1230,35 @@ function UnitInput(props: UnitInputProps) {
 type SettingRowProps = {
   title: string;
   description: string;
-  children?: (labelId: string) => ReactNode;
+  isCaption?: boolean;
+  isChanged?: boolean;
+  className?: string;
+  control?: (labelId: string) => ReactNode;
+  actions?: ReactNode | ((labelId: string) => ReactNode);
+  children?: ReactNode;
 };
 
 function SettingRow(props: SettingRowProps) {
-  const { title, description, children } = props;
+  const { title, description, isCaption, isChanged, className, control, actions, children } = props;
 
   const labelId = useId();
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3.5">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span id={labelId} className="text-body font-medium">
-          {title}
-        </span>
-        <span className="text-body text-text-secondary">{description}</span>
+    <div className={cn('flex flex-col gap-3.5 px-3.5 py-3', children && 'pb-3.5', className)}>
+      <div className="flex items-center gap-4">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex items-center gap-2">
+            <span id={labelId} className="text-body font-medium">
+              {title}
+            </span>
+            {isChanged && <Badge tone="info">Changed</Badge>}
+          </span>
+          <span className={cn('text-text-secondary', isCaption ? 'text-caption leading-4.5' : 'text-body')}>{description}</span>
+        </div>
+        {control && <div className="w-60 shrink-0">{control(labelId)}</div>}
+        {typeof actions === 'function' ? actions(labelId) : actions}
       </div>
-      {children && <div className="w-60 shrink-0">{children(labelId)}</div>}
+      {children}
     </div>
   );
 }
@@ -1018,24 +1267,32 @@ type PlainSelectProps = {
   labelId: string;
   value: string;
   onValueChange: (value: string | null) => void;
-  items: SelectItemData[];
+  items?: SelectItemData[];
+  groups?: SelectItemData[][];
 };
 
 function PlainSelect(props: PlainSelectProps) {
-  const { labelId, value, onValueChange, items } = props;
+  const { labelId, value, onValueChange, items, groups } = props;
+
+  const sets = groups ?? [items ?? []];
 
   return (
-    <Select.Root items={items} value={value} onValueChange={(next) => onValueChange(next as string | null)}>
+    <Select.Root items={sets.flat()} value={value} onValueChange={(next) => onValueChange(next as string | null)}>
       <Select.Trigger aria-labelledby={labelId}>
         <Select.Value />
       </Select.Trigger>
       <Select.Portal>
         <Select.Positioner>
           <Select.Popup>
-            {items.map((item) => (
-              <Select.Item key={item.value} value={item.value}>
-                {item.label}
-              </Select.Item>
+            {sets.map((set, index) => (
+              <Fragment key={index}>
+                {index > 0 && <Select.Separator />}
+                {set.map((item) => (
+                  <Select.Item key={item.value} value={item.value}>
+                    {item.label}
+                  </Select.Item>
+                ))}
+              </Fragment>
             ))}
           </Select.Popup>
         </Select.Positioner>
@@ -1056,7 +1313,7 @@ export function FormSection(props: FormSectionProps) {
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex items-end gap-3">
+      <div className="flex items-center gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <h2 className="text-title-section font-medium">{title}</h2>
           {description && <p className="text-body text-text-secondary">{description}</p>}
@@ -1149,7 +1406,7 @@ function NotifyRow(props: NotifyRowProps) {
   const icon = isIntegrationKind(integration.kind) ? INTEGRATION_KINDS[integration.kind].icon : 'webhook';
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
+    <div className="flex items-center gap-3 px-3.5 py-2.5">
       <Icon name={icon} />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span id={titleId} className="truncate text-body font-medium">
@@ -1159,23 +1416,8 @@ function NotifyRow(props: NotifyRowProps) {
           {getIntegrationLabel(integration.kind)} · {integration.target}
         </span>
       </div>
-      <div className="w-48 shrink-0">
-        <Select.Root items={NOTIFY_OPTIONS} value={value} onValueChange={(next) => onValueChange(next as NotifyLevel)}>
-          <Select.Trigger aria-labelledby={titleId}>
-            <Select.Value />
-          </Select.Trigger>
-          <Select.Portal>
-            <Select.Positioner>
-              <Select.Popup>
-                {NOTIFY_OPTIONS.map((option) => (
-                  <Select.Item key={option.value} value={option.value}>
-                    {option.label}
-                  </Select.Item>
-                ))}
-              </Select.Popup>
-            </Select.Positioner>
-          </Select.Portal>
-        </Select.Root>
+      <div className="w-55 shrink-0">
+        <PlainSelect labelId={titleId} value={value} onValueChange={(next) => onValueChange((next ?? 'off') as NotifyLevel)} items={NOTIFY_OPTIONS} />
       </div>
     </div>
   );
@@ -1183,12 +1425,15 @@ function NotifyRow(props: NotifyRowProps) {
 
 type BacktestBoxProps = {
   backtest?: Schemas['AlertRuleBacktest'];
+  savedCount?: number;
 };
 
 function BacktestBox(props: BacktestBoxProps) {
-  const { backtest } = props;
+  const { backtest, savedCount } = props;
 
   const count = backtest?.hits.length ?? 0;
+  const difference = savedCount === undefined ? 0 : count - savedCount;
+  const compared = difference === 0 ? '' : `, ${Math.abs(difference)} ${difference < 0 ? 'fewer' : 'more'}`;
 
   return (
     <div className="flex flex-col gap-2 rounded-2xl bg-surface-subtle p-4 text-body">
@@ -1200,6 +1445,7 @@ function BacktestBox(props: BacktestBoxProps) {
         <>
           <span className="font-medium">
             {count === 0 ? 'Would not have fired' : `Would have fired ${count === 1 ? 'once' : `${count} times`}`}
+            {compared}
           </span>
           {backtest.hits.slice(0, 3).map((hit) => (
             <div key={`${hit.server_id}-${hit.at}`} className="flex items-center gap-3">

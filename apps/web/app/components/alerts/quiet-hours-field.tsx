@@ -91,23 +91,6 @@ export function QuietHoursField(props: QuietHoursFieldProps) {
       <p className="text-body text-text-secondary">
         {describeQuietWindows(windows, timeZone)}. Alerts still fire and show in Daroyan, but no messages go out.
       </p>
-      <div className="flex gap-4">
-        {windows.length < 5 && (
-          <Button
-            type="button"
-            variant="plain"
-            className="w-fit"
-            onClick={() => onWindowsChange([...windows, DEFAULT_QUIET_WINDOW])}
-          >
-            <Icon name="plus" />
-            Add Another Window
-          </Button>
-        )}
-        <Button type="button" variant="plain" className="w-fit" onClick={() => onWindowsChange([])}>
-          <Icon name="trash" />
-          Remove Quiet Hours
-        </Button>
-      </div>
     </div>
   );
 }
@@ -142,7 +125,7 @@ function QuietWindowFields(props: QuietWindowFieldsProps) {
                   onChange({ days: isOn ? window.days.filter((item) => item !== dayIndex) : [...window.days, dayIndex] })
                 }
                 className={cn(
-                  'h-7 rounded-md px-2.5 text-body outline-none focus-visible:ring-2 focus-visible:ring-text-link/40',
+                  'h-7 rounded-sm px-2.5 text-body font-medium outline-none focus-visible:ring-2 focus-visible:ring-text-link/40',
                   isOn ? 'bg-surface-fill text-text-primary' : 'text-text-secondary hover:bg-surface-subtle'
                 )}
               >
@@ -152,7 +135,7 @@ function QuietWindowFields(props: QuietWindowFieldsProps) {
           })}
         </div>
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[150px_150px_1fr]">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-[170px_170px_1fr]">
         <div className="flex flex-col gap-1.5">
           <label htmlFor={fromId} className="text-body font-medium">
             From
