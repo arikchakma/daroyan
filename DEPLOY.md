@@ -193,8 +193,10 @@ curl -fsSL https://monitor.example.com/install.sh | \
   sudo DAROYAN_TOKEN=dy_agent_... DAROYAN_API_URL=https://monitor.example.com sh
 ```
 
-- Install tokens are **single-use by default** (set a higher count when creating
-  one if you are provisioning several hosts in a batch).
+- Install tokens are **single-use and last 24 hours by default**. For Ansible,
+  cloud-init or other automation, create a key in **Settings → Agents** that
+  never expires and works for any number of servers. Revoking a key stops new
+  enrollments; servers that already enrolled keep their own token.
 - The agent downloads itself from the GitHub release that matches your server
   version, so the host needs outbound HTTPS to `github.com`.
 - To let admins start/stop/restart processes from the dashboard, set

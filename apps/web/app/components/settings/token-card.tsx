@@ -21,6 +21,8 @@ export type TokenItem = {
   hint: string;
   created_at: string;
   last_used_at?: string | null;
+  detail?: string;
+  activity?: string;
 };
 
 export type CreatedTokenItem = TokenItem & { token: string };
@@ -41,6 +43,7 @@ type TokenCardProps = {
   prefix: string;
   emptyTitle: string;
   emptyDescription: string;
+  noun?: string;
   onAdd?: () => void;
   onRevoke?: (token: TokenItem) => void;
 };
@@ -52,6 +55,7 @@ export function TokenCard(props: TokenCardProps) {
     prefix,
     emptyTitle,
     emptyDescription,
+    noun = "Token",
     onAdd,
     onRevoke,
   } = props;
@@ -72,6 +76,7 @@ export function TokenCard(props: TokenCardProps) {
           key={token.id}
           token={token}
           prefix={prefix}
+          noun={noun}
           onRevoke={onRevoke && (() => onRevoke(token))}
         />
       ))}
@@ -82,7 +87,7 @@ export function TokenCard(props: TokenCardProps) {
           className="flex items-center gap-2.5 bg-surface-subtle px-4 py-2.5 text-left text-body font-medium outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40 focus-visible:ring-inset"
         >
           <Icon name="plus" />
-          Add Token
+          Add {noun}
         </button>
       )}
     </SettingsCard>
@@ -92,9 +97,10 @@ export function TokenCard(props: TokenCardProps) {
 function TokenRow(props: {
   token: TokenItem;
   prefix: string;
+  noun: string;
   onRevoke?: () => void;
 }) {
-  const { token, prefix, onRevoke } = props;
+  const { token, prefix, noun, onRevoke } = props;
 
   return (
     <div className="flex items-center gap-3 py-2.5 pr-2.5 pl-4 has-data-popup-open:bg-surface-row">
@@ -105,13 +111,15 @@ function TokenRow(props: {
           <span className="font-mono text-code">
             {prefix}…{token.hint}
           </span>{" "}
-          · Created {formatDate(token.created_at)}
+          {token.detail && `· ${token.detail} `}· Created{" "}
+          {formatDate(token.created_at)}
         </span>
       </div>
       <span className="shrink-0 text-body text-text-secondary">
-        {token.last_used_at
-          ? `Used ${formatRelative(token.last_used_at)}`
-          : "Never used"}
+        {token.activity ??
+          (token.last_used_at
+            ? `Used ${formatRelative(token.last_used_at)}`
+            : "Never used")}
       </span>
       {onRevoke && (
         <Menu.Root>
@@ -126,7 +134,7 @@ function TokenRow(props: {
               <Menu.Popup className="min-w-40">
                 <Menu.Item onClick={onRevoke} className="text-tone-critical-fg">
                   <Icon name="trash" />
-                  Revoke Token
+                  Revoke {noun}
                 </Menu.Item>
               </Menu.Popup>
             </Menu.Positioner>
@@ -137,17 +145,21 @@ function TokenRow(props: {
   );
 }
 
-type AddTokenDialogProps = {
+type AddTokenDialogProps<T extends CreatedTokenItem> = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   queryKey: string[];
-  mutation: UseMutationOptions<CreatedTokenItem, Error, { name: string }>;
+  mutation: UseMutationOptions<T, Error, { name: string }>;
   placeholder: string;
   nameHelp: string;
-  renderCreated: (token: CreatedTokenItem) => ReactNode;
+  noun?: string;
+  fields?: ReactNode;
+  renderCreated: (token: T) => ReactNode;
 };
 
-export function AddTokenDialog(props: AddTokenDialogProps) {
+export function AddTokenDialog<T extends CreatedTokenItem>(
+  props: AddTokenDialogProps<T>,
+) {
   const {
     open,
     onOpenChange,
@@ -155,13 +167,15 @@ export function AddTokenDialog(props: AddTokenDialogProps) {
     mutation,
     placeholder,
     nameHelp,
+    noun = "Token",
+    fields,
     renderCreated,
   } = props;
 
   const nameId = useId();
   const [name, setName] = useState("");
-  const [created, setCreated] = useState<CreatedTokenItem>();
-  const [copy] = useCopyToClipboard();
+  const [created, setCreated] = useState<T>();
+  const [copy, isCopied] = useCopyToClipboard();
 
   const create = useMutation({
     ...mutation,
@@ -189,33 +203,32 @@ export function AddTokenDialog(props: AddTokenDialogProps) {
           {created ? (
             <>
               <Dialog.Header>
-                <Dialog.Title>Token Created</Dialog.Title>
+                <Dialog.Title>{noun} Created</Dialog.Title>
               </Dialog.Header>
               <Dialog.Body>
                 <div className="flex flex-col gap-1.5">
                   <span className="text-body font-medium">{created.name}</span>
-                  <div className="flex gap-2">
+                  <div className="group relative">
                     <Input
                       aria-label="Token"
                       value={created.token}
                       readOnly
                       onFocus={(event) => event.currentTarget.select()}
-                      className="font-mono text-code"
+                      className="pr-11 font-mono text-code"
                     />
-                    <Button
+                    <button
                       type="button"
-                      variant="secondary"
-                      className="w-fit"
+                      aria-label="Copy token"
                       onClick={() =>
                         void copy(created.token).then(
-                          (isCopied) =>
-                            isCopied && toast.success("Copied the token"),
+                          (copied) =>
+                            copied && toast.success("Copied the token"),
                         )
                       }
+                      className="absolute top-1/2 right-1 flex size-7 -translate-y-1/2 items-center justify-center rounded-full transition-opacity outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40 pointer-fine:opacity-0 pointer-fine:group-focus-within:opacity-100 pointer-fine:group-hover:opacity-100"
                     >
-                      <Icon name="copy" />
-                      Copy
-                    </Button>
+                      <Icon name={isCopied ? "check" : "copy"} />
+                    </button>
                   </div>
                   {renderCreated(created)}
                 </div>
@@ -233,7 +246,7 @@ export function AddTokenDialog(props: AddTokenDialogProps) {
           ) : (
             <>
               <Dialog.Header>
-                <Dialog.Title>Add Token</Dialog.Title>
+                <Dialog.Title>Add {noun}</Dialog.Title>
               </Dialog.Header>
               <form
                 onSubmit={(event) => {
@@ -258,6 +271,7 @@ export function AddTokenDialog(props: AddTokenDialogProps) {
                     />
                     <p className="text-small text-text-secondary">{nameHelp}</p>
                   </div>
+                  {fields}
                 </Dialog.Body>
                 <Dialog.Footer>
                   <Dialog.Close
@@ -279,7 +293,7 @@ export function AddTokenDialog(props: AddTokenDialogProps) {
                     {create.isPending && (
                       <Icon name="loader" className="animate-spin" />
                     )}
-                    Create Token
+                    Create {noun}
                   </Button>
                 </Dialog.Footer>
               </form>

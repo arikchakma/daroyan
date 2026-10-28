@@ -13,7 +13,7 @@ cargo build --release -p daroyan-agent
 
 ## Install
 
-`install.sh` installs the agent as a service. Run it as root with an install token from the dashboard:
+`install.sh` installs the agent as a service. Run it as root with an install token from the Add Server page, or a long-lived key from Settings → Agents:
 
 ```sh
 curl -fsSL https://daroyan.com/install.sh | sudo DAROYAN_TOKEN=dy_agent_... sh

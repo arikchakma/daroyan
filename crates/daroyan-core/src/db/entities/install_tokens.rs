@@ -8,12 +8,17 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
+    #[sea_orm(column_type = "Text")]
+    pub name: String,
     #[sea_orm(column_type = "Text", unique)]
     pub token_hash: String,
-    pub expires_at: DateTimeUtc,
-    pub created_at: DateTimeUtc,
-    pub max_uses: i32,
+    #[sea_orm(column_type = "Text")]
+    pub hint: String,
+    pub expires_at: Option<DateTimeUtc>,
+    pub max_uses: Option<i32>,
     pub uses: i32,
+    pub created_at: DateTimeUtc,
+    pub last_used_at: Option<DateTimeUtc>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

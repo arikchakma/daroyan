@@ -169,6 +169,38 @@ async fn enrolls_reports_and_runs_commands() {
     assert!(database.claim_install_token(&fleet_hash).await.unwrap());
     assert!(database.claim_install_token(&fleet_hash).await.unwrap());
     assert!(!database.claim_install_token(&fleet_hash).await.unwrap());
+
+    let forever: Value = http
+        .post(format!("{base}/v1/install-tokens"))
+        .json(&json!({ "name": "ansible", "expires_in_hours": null, "max_uses": null }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(forever["name"], "ansible");
+    assert!(forever["expires_at"].is_null());
+    assert!(forever["max_uses"].is_null());
+    let forever_hash = hash_token(forever["token"].as_str().unwrap());
+    for _ in 0..150 {
+        assert!(database.claim_install_token(&forever_hash).await.unwrap());
+    }
+    let listed: Value = http
+        .get(format!("{base}/v1/install-tokens"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let listed = listed.as_array().unwrap();
+    assert!(listed.iter().all(|token| token["token"].is_null()));
+    assert!(listed.iter().all(|token| token["id"] != fleet["id"]));
+    let forever_row = listed.iter().find(|token| token["id"] == forever["id"]).unwrap();
+    assert_eq!(forever_row["uses"], 150);
+    assert!(forever_row["last_used_at"].is_string());
+
     let revoke_url =
         format!("{base}/v1/install-tokens/{}", fleet["id"].as_str().unwrap());
     let revoked = http.delete(&revoke_url).send().await.unwrap();
