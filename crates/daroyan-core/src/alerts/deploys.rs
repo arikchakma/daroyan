@@ -53,31 +53,33 @@ impl DeployWatch {
                     let mut restarted_at =
                         tracked.and_then(|tracked| tracked.restarted_at);
                     if let Some(tracked) = tracked {
-                        if tracked.container.id == container.id {
-                            if tracked.stopped_at.is_some() {
-                                restarted_at = Some(now);
-                            }
-                        } else {
-                            let gap = tracked
-                                .stopped_at
-                                .map_or(0, |at| (now - at).num_seconds());
-                            if gap <= DEPLOY_WINDOW_SECS {
-                                queue(
-                                    &mut self
-                                        .pending
-                                        .entry(server_id.to_string())
-                                        .or_insert_with(|| Batch {
-                                            since: now,
-                                            replacements: Vec::new(),
-                                        })
-                                        .replacements,
-                                    &process.name,
-                                    &tracked.container,
-                                    container,
-                                    gap,
-                                    now,
-                                );
-                            }
+                        let is_replaced = tracked.container.id != container.id;
+                        let came_back = is_replaced || tracked.stopped_at.is_some();
+                        let is_looping = came_back
+                            && restarted_at.is_some_and(|at| {
+                                (now - at).num_seconds() < RESTART_MEMORY_SECS
+                            });
+                        if came_back {
+                            restarted_at = Some(now);
+                        }
+                        let gap =
+                            tracked.stopped_at.map_or(0, |at| (now - at).num_seconds());
+                        if is_replaced && !is_looping && gap <= DEPLOY_WINDOW_SECS {
+                            queue(
+                                &mut self
+                                    .pending
+                                    .entry(server_id.to_string())
+                                    .or_insert_with(|| Batch {
+                                        since: now,
+                                        replacements: Vec::new(),
+                                    })
+                                    .replacements,
+                                &process.name,
+                                &tracked.container,
+                                container,
+                                gap,
+                                now,
+                            );
                         }
                     }
                     self.tracked.insert(
@@ -260,13 +262,9 @@ fn queue(
     gap: i64,
     now: DateTime<Utc>,
 ) {
-    let earlier = list
-        .iter()
-        .position(|item| item.name == name)
-        .map(|index| list.remove(index));
     list.push(Replacement {
         name: name.to_string(),
-        old: earlier.map_or_else(|| old.clone(), |item| item.old),
+        old: old.clone(),
         new: new.clone(),
         gap_secs: gap.unsigned_abs(),
         at: now,
@@ -400,29 +398,69 @@ mod tests {
     }
 
     #[test]
-    fn keeps_one_replacement_per_name_and_skips_a_crashed_one() {
+    fn treats_a_second_replacement_without_a_seen_stop_as_a_crash_loop() {
         let mut watch = DeployWatch::default();
-        let ids = ["c1", "c2", "c3", "c4"];
-        for (index, id) in ids.iter().enumerate() {
-            let secs = u32::try_from(index).unwrap() * 10;
+        let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
+        for (index, id) in ["c1", "c2", "c3"].iter().enumerate() {
+            let now = seconds(i64::try_from(index).unwrap() * 55);
             watch.observe(
                 "srv_1",
-                &[process("API", Some(container(id, "api-1", "api:1")))],
-                at(secs),
+                &[process("API", Some(container(id, "api", "api:1")))],
+                now,
+            );
+            if index == 1 {
+                assert_eq!(
+                    watch.take_ready(now + chrono::Duration::seconds(30)).len(),
+                    1
+                );
+            }
+        }
+        assert!(watch.take_ready(seconds(150)).is_empty());
+        assert!(!watch.may_be_replaced("srv_1", "API", seconds(150)));
+    }
+
+    #[test]
+    fn treats_repeated_replacements_after_a_stop_as_a_crash_loop() {
+        let mut watch = DeployWatch::default();
+        let start = at(0);
+        let seconds = |secs: i64| start + chrono::Duration::seconds(secs);
+        for (cycle, id) in ["c1", "c2", "c3"].iter().enumerate() {
+            let up = seconds(i64::try_from(cycle).unwrap() * 30);
+            watch.observe(
+                "srv_1",
+                &[process("API", Some(container(id, "api", "api:1")))],
+                up,
+            );
+            watch.observe(
+                "srv_1",
+                &[process("API", None)],
+                up + chrono::Duration::seconds(20),
             );
         }
-        let ready = watch.take_ready(at(55));
-        assert_eq!(ready[0].1.len(), 1);
-        assert_eq!(ready[0].1[0].old.id, "c1");
-        assert_eq!(ready[0].1[0].new.id, "c4");
+        let ready = watch.take_ready(seconds(200));
+        assert!(
+            ready
+                .iter()
+                .all(|(_, list)| list.iter().all(|item| item.new.id != "c3"))
+        );
+        assert!(!watch.may_be_replaced("srv_1", "API", seconds(90)));
+    }
 
+    #[test]
+    fn skips_a_replacement_that_crashed_before_the_note() {
+        let mut watch = DeployWatch::default();
         watch.observe(
             "srv_1",
-            &[process("API", Some(container("c5", "api-1", "api:2")))],
-            at(56),
+            &[process("API", Some(container("c1", "api-1", "api:1")))],
+            at(0),
         );
-        watch.observe("srv_1", &[process("API", None)], at(58));
-        assert!(watch.take_ready(at(56) + chrono::Duration::seconds(24)).is_empty());
+        watch.observe(
+            "srv_1",
+            &[process("API", Some(container("c2", "api-1", "api:2")))],
+            at(10),
+        );
+        watch.observe("srv_1", &[process("API", None)], at(20));
+        assert!(watch.take_ready(at(40)).is_empty());
     }
 
     #[test]
@@ -430,11 +468,13 @@ mod tests {
         let mut watch = DeployWatch::default();
         for step in 0..=(MAX_WAIT_SECS / 10 + 1) {
             let now = at(0) + chrono::Duration::seconds(step * 10);
-            watch.observe(
-                "srv_1",
-                &[process("API", Some(container(&format!("c{step}"), "api-1", "api:1")))],
-                now,
-            );
+            let mut processes =
+                vec![process(&format!("S{step}"), Some(container("a", "s", "s:1")))];
+            if step > 0 {
+                let name = format!("S{}", step - 1);
+                processes.push(process(&name, Some(container("b", "s", "s:2"))));
+            }
+            watch.observe("srv_1", &processes, now);
             let ready = watch.take_ready(now);
             assert_eq!(ready.is_empty(), step * 10 < MAX_WAIT_SECS + 10, "{step}");
         }
