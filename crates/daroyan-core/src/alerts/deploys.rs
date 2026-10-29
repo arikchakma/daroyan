@@ -47,11 +47,13 @@ impl DeployWatch {
     ) {
         for process in processes {
             let key = (server_id.to_string(), process.name.clone());
+
             match &process.container {
                 Some(container) => {
                     let tracked = self.tracked.get(&key);
                     let mut restarted_at =
                         tracked.and_then(|tracked| tracked.restarted_at);
+
                     if let Some(tracked) = tracked {
                         let is_replaced = tracked.container.id != container.id;
                         let is_deploy = is_replaced
@@ -62,13 +64,16 @@ impl DeployWatch {
                             && restarted_at.is_some_and(|at| {
                                 (now - at).num_seconds() < RESTART_MEMORY_SECS
                             });
+
                         if is_deploy {
                             restarted_at = None;
                         } else if came_back {
                             restarted_at = Some(now);
                         }
+
                         let gap =
                             tracked.stopped_at.map_or(0, |at| (now - at).num_seconds());
+
                         if is_replaced && !is_looping && gap <= DEPLOY_WINDOW_SECS {
                             queue(
                                 &mut self
@@ -87,6 +92,7 @@ impl DeployWatch {
                             );
                         }
                     }
+
                     self.tracked.insert(
                         key,
                         Tracked {
@@ -134,6 +140,7 @@ impl DeployWatch {
             })
             .map(|(server_id, _)| server_id.clone())
             .collect();
+
         ready
             .into_iter()
             .filter_map(|server_id| {
@@ -173,11 +180,13 @@ impl DeployNote<'_> {
         let longest =
             self.replacements.iter().map(|item| item.gap_secs).max().unwrap_or(0);
         let count = self.replacements.len();
+
         let (noun, verb, running) = match count {
             1 => ("The container", "was", "It is running.".to_string()),
             2 => ("The containers", "were", "Both are running.".to_string()),
             _ => ("The containers", "were", format!("All {count} are running.")),
         };
+
         let summary = if longest == 0 {
             Text::from(format!("{noun} {verb} replaced. {running}"))
         } else {
@@ -185,6 +194,7 @@ impl DeployNote<'_> {
                 .bold(format_span(longest))
                 .plain(format!(". {running}"))
         };
+
         let rows: Vec<[String; 3]> = self
             .replacements
             .iter()
@@ -201,11 +211,13 @@ impl DeployNote<'_> {
                 ]
             })
             .collect();
+
         let widths: Vec<usize> = (0..3)
             .map(|column| {
                 rows.iter().map(|row| row[column].chars().count()).max().unwrap_or(0)
             })
             .collect();
+
         let lines = rows
             .iter()
             .map(|row| {
@@ -218,11 +230,13 @@ impl DeployNote<'_> {
                 format!("{}  up", cells.join("  "))
             })
             .collect();
+
         let context = std::iter::once(self.server_name)
             .chain(self.labels.iter().map(String::as_str))
             .chain(std::iter::once("No alert was opened."))
             .collect::<Vec<_>>()
             .join(" · ");
+
         Notice {
             event: "deploy",
             tone: Tone::Note,
@@ -297,7 +311,9 @@ fn describe_versions(old: &str, new: &str) -> String {
             None => (image.to_string(), "latest".to_string()),
         }
     };
+
     let ((old_repo, old_tag), (new_repo, new_tag)) = (split(old), split(new));
+
     match (old_repo == new_repo, old_tag == new_tag) {
         (true, true) => format!("{new_tag} (recreated)"),
         (true, false) => format!("{old_tag} → {new_tag}"),
@@ -351,6 +367,7 @@ mod tests {
         start: DateTime<Utc>,
     ) {
         let seconds = |secs: i64| start + chrono::Duration::seconds(secs);
+
         watch.observe("srv_1", &[process("API", Some(old))], start);
         watch.observe("srv_1", &[process("API", None)], seconds(5));
         assert!(watch.may_be_replaced("srv_1", "API", seconds(5)));
@@ -361,6 +378,7 @@ mod tests {
     fn keeps_the_grace_for_deploys_close_together() {
         let mut watch = DeployWatch::default();
         let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
+
         deploy(
             &mut watch,
             revision_of("c1", "sha256:a"),
@@ -368,6 +386,7 @@ mod tests {
             at(0),
         );
         assert_eq!(watch.take_ready(seconds(40)).len(), 1);
+
         deploy(
             &mut watch,
             revision_of("c2", "sha256:b"),
@@ -382,6 +401,7 @@ mod tests {
         let mut watch = DeployWatch::default();
         let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
         let (old, new) = (revision_of("c1", "sha256:a"), revision_of("c2", "sha256:b"));
+
         assert_eq!(old.image, new.image);
         deploy(&mut watch, old, new.clone(), at(0));
         assert_eq!(watch.take_ready(seconds(40)).len(), 1);
@@ -393,6 +413,7 @@ mod tests {
     fn treats_the_same_revision_recreated_as_a_crash_loop() {
         let mut watch = DeployWatch::default();
         let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
+
         for (index, id) in ["c1", "c2", "c3"].iter().enumerate() {
             let up = seconds(i64::try_from(index).unwrap() * 40);
             watch.observe(
@@ -406,6 +427,7 @@ mod tests {
                 up + chrono::Duration::seconds(30),
             );
         }
+
         assert!(!watch.may_be_replaced("srv_1", "API", seconds(110)));
     }
 
@@ -413,6 +435,7 @@ mod tests {
     fn falls_back_to_the_image_tag_for_older_agents() {
         let mut watch = DeployWatch::default();
         let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
+
         deploy(
             &mut watch,
             container("c1", "api-1", "api:1"),
@@ -420,6 +443,7 @@ mod tests {
             at(0),
         );
         assert_eq!(watch.take_ready(seconds(40)).len(), 1);
+
         deploy(
             &mut watch,
             container("c2", "api-1", "api:2"),
@@ -453,11 +477,13 @@ mod tests {
         let mut watch = DeployWatch::default();
         let blue = container("c1", "inboxjot-api-blue", "ghcr.io/inboxjot/api:0.0.18");
         let green = container("c2", "inboxjot-api-green", "ghcr.io/inboxjot/api:0.0.19");
+
         watch.observe("srv_1", &[process("Inboxjot API", Some(blue.clone()))], at(0));
         assert!(watch.may_be_replaced("srv_1", "Inboxjot API", at(0)));
         watch.observe("srv_1", &[process("Inboxjot API", None)], at(10));
         watch.observe("srv_1", &[process("Inboxjot API", Some(green.clone()))], at(24));
         assert!(watch.take_ready(at(30)).is_empty());
+
         let ready = watch.take_ready(at(45));
         assert_eq!(
             ready,
@@ -472,6 +498,7 @@ mod tests {
                 }],
             )]
         );
+
         assert!(watch.take_ready(at(59)).is_empty());
     }
 
@@ -490,6 +517,7 @@ mod tests {
             &[process("API", Some(container("c2", "api-1", "api:2")))],
             later,
         );
+
         assert!(watch.take_ready(later + chrono::Duration::seconds(60)).is_empty());
     }
 
@@ -497,11 +525,13 @@ mod tests {
     fn stops_holding_a_container_that_restarts_in_place() {
         let mut watch = DeployWatch::default();
         let api = container("c1", "api-1", "api:1");
+
         watch.observe("srv_1", &[process("API", Some(api.clone()))], at(0));
         assert!(watch.may_be_replaced("srv_1", "API", at(0)));
         watch.observe("srv_1", &[process("API", None)], at(10));
         watch.observe("srv_1", &[process("API", Some(api))], at(20));
         assert!(!watch.may_be_replaced("srv_1", "API", at(30)));
+
         let later = at(20) + chrono::Duration::seconds(RESTART_MEMORY_SECS);
         assert!(watch.may_be_replaced("srv_1", "API", later));
         assert!(watch.take_ready(at(59)).is_empty());
@@ -511,6 +541,7 @@ mod tests {
     fn treats_a_second_replacement_without_a_seen_stop_as_a_crash_loop() {
         let mut watch = DeployWatch::default();
         let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
+
         for (index, id) in ["c1", "c2", "c3"].iter().enumerate() {
             let now = seconds(i64::try_from(index).unwrap() * 55);
             watch.observe(
@@ -518,6 +549,7 @@ mod tests {
                 &[process("API", Some(container(id, "api", "api:1")))],
                 now,
             );
+
             if index == 1 {
                 assert_eq!(
                     watch.take_ready(now + chrono::Duration::seconds(30)).len(),
@@ -525,6 +557,7 @@ mod tests {
                 );
             }
         }
+
         assert!(watch.take_ready(seconds(150)).is_empty());
         assert!(!watch.may_be_replaced("srv_1", "API", seconds(150)));
     }
@@ -534,6 +567,7 @@ mod tests {
         let mut watch = DeployWatch::default();
         let start = at(0);
         let seconds = |secs: i64| start + chrono::Duration::seconds(secs);
+
         for (cycle, id) in ["c1", "c2", "c3"].iter().enumerate() {
             let up = seconds(i64::try_from(cycle).unwrap() * 30);
             watch.observe(
@@ -547,12 +581,14 @@ mod tests {
                 up + chrono::Duration::seconds(20),
             );
         }
+
         let ready = watch.take_ready(seconds(200));
         assert!(
             ready
                 .iter()
                 .all(|(_, list)| list.iter().all(|item| item.new.id != "c3"))
         );
+
         assert!(!watch.may_be_replaced("srv_1", "API", seconds(90)));
     }
 
@@ -569,6 +605,7 @@ mod tests {
             &[process("API", Some(container("c2", "api-1", "api:2")))],
             at(10),
         );
+
         watch.observe("srv_1", &[process("API", None)], at(20));
         assert!(watch.take_ready(at(40)).is_empty());
     }
@@ -580,10 +617,12 @@ mod tests {
             let now = at(0) + chrono::Duration::seconds(step * 10);
             let mut processes =
                 vec![process(&format!("S{step}"), Some(container("a", "s", "s:1")))];
+
             if step > 0 {
                 let name = format!("S{}", step - 1);
                 processes.push(process(&name, Some(container("b", "s", "s:2"))));
             }
+
             watch.observe("srv_1", &processes, now);
             let ready = watch.take_ready(now);
             assert_eq!(ready.is_empty(), step * 10 < MAX_WAIT_SECS + 10, "{step}");
@@ -600,6 +639,7 @@ mod tests {
                 gap_secs,
                 at: at(0),
             };
+
         let replacements = vec![
             replacement(
                 "Inboxjot API",
@@ -620,6 +660,7 @@ mod tests {
                 0,
             ),
         ];
+
         let labels = vec!["production".to_string()];
         let note = DeployNote {
             server_id: "srv_1",
@@ -629,6 +670,7 @@ mod tests {
             app_url: Some("https://daroyan.test"),
         };
         let notice = note.notice();
+
         assert_eq!(
             notice.title,
             "🚀 Deployed: Inboxjot API, Inboxjot Worker and Inboxjot SMTP"

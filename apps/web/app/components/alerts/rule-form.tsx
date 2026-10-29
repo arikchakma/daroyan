@@ -56,9 +56,11 @@ function RuleFormBody(props: RuleFormBodyProps) {
 
   const formRef = useRef<HTMLFormElement>(null);
   const navigate = useNavigate();
+
   const { data: integrations } = useQuery(listIntegrationsOptions());
   const { data: history = [] } = useQuery({ ...listAlertsOptions('all', rule?.id), enabled: !!rule });
   const { data: statusPages = [] } = useQuery(listStatusPagesOptions());
+
   const [form, setForm] = useState(() => readInitialRuleForm({ rule, draft, timeZone: getBrowserTimeZone() }));
   const [notifyLevels, setNotifyLevels] = useState(() => readInitialNotifyLevels(rule));
 
@@ -85,6 +87,7 @@ function RuleFormBody(props: RuleFormBodyProps) {
     toast.success(rule ? `Saved ${saved.name}` : `Created ${saved.name}`);
     navigate(`/alerts/${saved.id}`);
   };
+
   const create = useMutation({ ...createAlertRuleOptions(), onSuccess: onSaved, meta: { errorMessage: 'The rule could not be created' } });
   const update = useMutation({ ...updateAlertRuleOptions(), onSuccess: onSaved, meta: { errorMessage: 'The rule could not be saved' } });
 
@@ -111,7 +114,9 @@ function RuleFormBody(props: RuleFormBodyProps) {
     if (!condition || !scope) {
       return;
     }
+
     const body = { name, condition, for_secs: form.forSecs, scope, integration_ids: integrationIds, options, ...declare };
+
     if (rule) {
       update.mutate({ ruleId: rule.id, body });
     } else {

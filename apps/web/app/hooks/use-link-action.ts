@@ -10,6 +10,7 @@ export function useLinkAction(name: string, isReady: boolean, onAction: (value: 
     if (!value || !isReady) {
       return;
     }
+
     handle(value);
     setSearchParams(
       (params) => {

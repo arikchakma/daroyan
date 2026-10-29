@@ -78,6 +78,7 @@ fn parse_systemd_exit(output: &str) -> ExitInfo {
         .zip(read("ExecMainExitTimestampMonotonic"))
         .filter(|(started, exited)| *started > 0 && exited >= started)
         .and_then(|(started, exited)| u64::try_from((exited - started) / 1_000_000).ok());
+
     ExitInfo {
         code: status.filter(|_| !is_signal),
         signal: status.filter(|_| is_signal).and_then(read_signal_name),
@@ -94,8 +95,10 @@ fn parse_docker_exit(output: &str) -> ExitInfo {
     let Ok(state) = serde_json::from_str::<serde_json::Value>(state) else {
         return ExitInfo::default();
     };
+
     let read_time = |key: &str| DateTime::parse_from_rfc3339(state[key].as_str()?).ok();
     let code = state["ExitCode"].as_i64().and_then(|code| i32::try_from(code).ok());
+
     ExitInfo {
         code,
         signal: code
@@ -125,6 +128,7 @@ fn read_signal_name(number: i32) -> Option<String> {
         15 => "SIGTERM",
         _ => return None,
     };
+
     Some(name.to_string())
 }
 
@@ -171,6 +175,7 @@ fn parse_container(output: &str) -> Option<Container> {
     let details: serde_json::Value = serde_json::from_str(output.trim()).ok()?;
     let labels = &details["Config"]["Labels"];
     let label = |key: &str| labels[key].as_str().map(str::to_string);
+
     Some(Container {
         id: details["Id"].as_str()?.to_string(),
         name: details["Name"].as_str()?.trim_start_matches('/').to_string(),
@@ -295,6 +300,7 @@ mod tests {
                 restarts: Some(3),
             }
         );
+
         let failed = "Result=exit-code\nExecMainCode=1\nExecMainStatus=1\nNRestarts=0\nExecMainStartTimestampMonotonic=0\nExecMainExitTimestampMonotonic=0\n";
         let exit = parse_systemd_exit(failed);
         assert_eq!(
@@ -334,6 +340,7 @@ mod tests {
                 restarts: Some(2),
             }
         );
+
         let clean = r#"0 {"OOMKilled":false,"ExitCode":0,"StartedAt":"0001-01-01T00:00:00Z","FinishedAt":"0001-01-01T00:00:00Z"}"#;
         let exit = parse_docker_exit(clean);
         assert_eq!((exit.code, exit.signal, exit.oom), (Some(0), None, false));

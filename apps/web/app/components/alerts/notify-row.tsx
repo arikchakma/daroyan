@@ -17,6 +17,7 @@ export function NotifyRow(props: NotifyRowProps) {
   const { integration, value, onValueChange } = props;
 
   const titleId = useId();
+
   const icon = isIntegrationKind(integration.kind) ? INTEGRATION_KINDS[integration.kind].icon : 'webhook';
 
   return (

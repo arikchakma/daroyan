@@ -85,6 +85,7 @@ function describeCpu(points: Schemas['TrendPoint'][]) {
   if (points.length === 0) {
     return undefined;
   }
+
   const latest = points.reduce((a, b) => (b.at > a.at ? b : a));
   const peak = points.reduce((a, b) => (b.value > a.value ? b : a));
   return `CPU ${Math.round(latest.value)}% now, peak ${Math.round(peak.value)}% at ${formatClock(peak.at)}`;

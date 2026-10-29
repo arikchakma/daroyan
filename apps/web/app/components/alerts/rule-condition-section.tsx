@@ -28,6 +28,7 @@ export function RuleConditionSection(props: RuleConditionSectionProps) {
       onChange({ windowSecs: 0 });
       return;
     }
+
     const [aggregation, windowSecs] = value.split(':');
     onChange({ aggregation: aggregation as Aggregation, windowSecs: Number(windowSecs) });
   };

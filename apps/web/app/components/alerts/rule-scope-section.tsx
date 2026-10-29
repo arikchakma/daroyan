@@ -27,6 +27,7 @@ export function RuleScopeSection(props: RuleScopeSectionProps) {
   const { scopeKind } = form;
   const noun = readTargetNoun(form.kind);
   const nouns = readTargetNouns(noun);
+
   const labels = [...new Set((servers ?? []).flatMap((server) => server.labels))].sort();
   const targets: Target[] =
     noun === 'check'
@@ -38,6 +39,7 @@ export function RuleScopeSection(props: RuleScopeSectionProps) {
     targets.filter((target) => scopeKind === 'all' || target.labels.includes(form.label)).map((target) => target.name),
     noun
   );
+
   const scopeItems: { value: ScopeKind; label: string }[] = [
     { value: 'all', label: `All ${nouns}` },
     ...(noun === 'server' ? [{ value: 'label' as const, label: 'With Label' }] : []),

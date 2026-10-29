@@ -68,6 +68,7 @@ impl ProcessWatch {
             .iter()
             .any(|check| matches!(check.source, Source::Docker(_)))
             .then(DockerEvents::start);
+
         Self {
             checks,
             controllers,
@@ -145,17 +146,21 @@ impl ProcessWatch {
                 .zip(self.last_containers.get(&check.name))
                 .map(|(docker, last)| docker.list_last_run(&last.id))
                 .unwrap_or_default();
+
             exit.oom |= was_oom(&actions);
             exit.code = exit.code.or_else(|| read_exit_code(&actions));
             let stopped = was_stopped(&actions);
+
             let ran_secs = exit.ran_secs.or_else(|| {
                 let started = self.started.get(&check.name)?;
                 (now_millis() / 1000).checked_sub(*started)
             });
+
             warn!(
                 "{} stopped with code {:?}, signal {:?}, out of memory {}",
                 check.name, exit.code, exit.signal, exit.oom
             );
+
             events.push(new_event(EventKind::ProcessExited {
                 name: check.name.clone(),
                 code: exit.code,
@@ -166,6 +171,7 @@ impl ProcessWatch {
                 restarts: exit.restarts,
             }));
         }
+
         if let Some(started_at) = started_at {
             self.started.insert(check.name.clone(), started_at);
         }
@@ -244,25 +250,31 @@ impl ProcessWatch {
         let Source::Docker(container) = &check.source else {
             return self.match_processes(check, system, cgroups, None);
         };
+
         let cached = self.container_ids.get(container).cloned();
         let id = self.find_container_id(container);
         let matches = self.match_processes(check, system, cgroups, id.as_deref());
+
         if !matches.is_empty() {
             return matches;
         }
+
         self.container_ids.remove(container);
         if cached.is_none() {
             return matches;
         }
+
         let fresh = self.find_container_id(container);
         if fresh.is_none() || fresh == cached {
             self.container_ids.remove(container);
             return matches;
         }
+
         let matches = self.match_processes(check, system, cgroups, fresh.as_deref());
         if matches.is_empty() {
             self.container_ids.remove(container);
         }
+
         matches
     }
 
@@ -299,13 +311,16 @@ impl ProcessWatch {
     fn read_container(&mut self, check: &ProcessCheck) -> Option<Container> {
         let Source::Docker(container) = &check.source else { return None };
         let id = self.container_ids.get(container)?.clone();
+
         if let Some(info) = self.containers.get(&id) {
             return Some(info.clone());
         }
+
         let info = inspect_container(&id)?;
         self.containers.retain(|_, cached| {
             self.last_containers.values().any(|last| last.id == cached.id)
         });
+
         self.containers.insert(id, info.clone());
         Some(info)
     }

@@ -429,6 +429,7 @@ pub async fn list_top_messages(
             push_match(&mut sql, &mut values, &matcher);
             sql.push_str(" GROUP BY message ORDER BY found DESC, max(logged_at) DESC LIMIT ?");
             values.push(SqlValue::UInt(limit));
+
             let mut statement = conn.prepare(&sql)?;
             statement
                 .query_map(params_from_iter(values), |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -464,6 +465,7 @@ pub async fn summarize_log_run(
                  FROM matched",
             );
             values.push(SqlValue::BigInt(window_ms));
+
             conn.query_row(&sql, params_from_iter(values), |row| {
                 Ok(LogRun {
                     total: row.get(0)?,
@@ -489,11 +491,13 @@ pub async fn list_last_lines(
                  WHERE server_id = ? AND service = ? AND logged_at >= ? \
                  ORDER BY logged_at DESC LIMIT ?",
             )?;
+
             let mut lines: Vec<(i64, u8, String)> = statement
                 .query_map(params![server_id, service, since, limit], |row| {
                     Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                 })?
                 .collect::<duckdb::Result<_>>()?;
+
             lines.reverse();
             Ok(lines)
         })

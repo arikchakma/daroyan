@@ -376,6 +376,7 @@ pub async fn find_last_up(
                  FROM uptime_results \
                  WHERE check_id = ? AND status = 'up' ORDER BY checked_at DESC LIMIT 1",
             )?;
+
             statement
                 .query_row(params![check_id], |row| {
                     Ok(ResultItem {

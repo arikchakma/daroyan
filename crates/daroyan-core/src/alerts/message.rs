@@ -90,13 +90,16 @@ impl AlertMessage<'_> {
             (_, AlertFacts::Cert(facts)) => self.cert(facts),
             (_, AlertFacts::None) => self.generic(),
         };
+
         if details.note.is_empty() {
             details.note = moment.note();
         }
+
         if !moment.is_resolved() {
             details.links.extend(self.firing_links());
             details.links.extend(self.action_links());
         }
+
         details
     }
 
@@ -133,14 +136,17 @@ impl AlertMessage<'_> {
         let Condition::Logs { level, within_secs, service, .. } = self.condition else {
             return self.generic();
         };
+
         let found = read_count(&self.alert.value);
         let lines = format!("{found} {} lines", describe_log_level(level));
+
         let mut fields = vec![self.target_field()];
         if let Some(service) = service {
             fields.push(Field::new("Source", service));
         }
         fields.push(self.started_field());
         fields.push(Field::new("Rule", &self.rule.name));
+
         let snippet = (!facts.top.is_empty()).then(|| Snippet {
             label: Some(
                 if level == "error" { "Top errors" } else { "Top messages" }.to_string(),
@@ -151,6 +157,7 @@ impl AlertMessage<'_> {
                 .map(|(message, count)| format!("{count}× {}", to_one_line(message)))
                 .collect(),
         });
+
         Details {
             summary: Text::default().bold(lines).plain(format!(
                 " in the last {}. {}",
@@ -170,19 +177,23 @@ impl AlertMessage<'_> {
             0 => String::new(),
             secs => format!(" for {}", format_span(u64::from(secs))),
         };
+
         let memory = get_percent(facts.mem_used, facts.mem_total);
+
         let mut top: Vec<&TopProcess> = facts.top.iter().collect();
         if matches!(self.condition, Condition::Memory { .. }) {
             top.sort_by_key(|item| std::cmp::Reverse(item.mem_used));
         } else {
             top.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
         }
+
         let width = top
             .iter()
             .take(TOP_PROCESSES)
             .map(|item| item.name.chars().count())
             .max()
             .unwrap_or(0);
+
         let snippet = (!top.is_empty()).then(|| Snippet {
             label: Some("Top processes".to_string()),
             lines: top
@@ -198,6 +209,7 @@ impl AlertMessage<'_> {
                 })
                 .collect(),
         });
+
         Details {
             summary: Text::from(format!("{} at ", alert.subject))
                 .bold(alert.value.as_str())
@@ -226,6 +238,7 @@ impl AlertMessage<'_> {
     fn process(&self, facts: &ProcessFacts) -> Details {
         let name = self.alert.subject.as_str();
         let exit = facts.exit.clone().unwrap_or_default();
+
         let summary = match (&exit.signal, exit.code) {
             _ if exit.oom => Text::default()
                 .bold(name)
@@ -250,6 +263,7 @@ impl AlertMessage<'_> {
                 .plain(". Its last log lines usually show why."),
             (None, None) => Text::default().bold(name).plain(" stopped."),
         };
+
         let mut fields = vec![self.target_field()];
         let reason = match (exit.oom, &exit.signal, exit.code) {
             (true, _, _) => Some("Out of memory".to_string()),
@@ -259,6 +273,7 @@ impl AlertMessage<'_> {
             (false, None, Some(code)) => Some(format!("Code {code}")),
             (false, None, None) => None,
         };
+
         if let Some(reason) = reason {
             fields.push(Field::new("Exit", reason));
         }
@@ -269,6 +284,7 @@ impl AlertMessage<'_> {
             fields.push(Field::new("Restarts", restarts.to_string()));
         }
         fields.push(self.started_field());
+
         let time_zone = self.time_zone();
         let snippet = (!facts.last_lines.is_empty()).then(|| Snippet {
             label: Some("Last log lines".to_string()),
@@ -285,6 +301,7 @@ impl AlertMessage<'_> {
                 })
                 .collect(),
         });
+
         let mut links = self.open_target();
         if facts.controllable
             && let Some(restart) =
@@ -298,9 +315,11 @@ impl AlertMessage<'_> {
                 )
                 .collect();
         }
+
         if snippet.is_some() {
             links.extend(self.logs_link());
         }
+
         Details {
             summary,
             fields,
@@ -318,11 +337,13 @@ impl AlertMessage<'_> {
         } else {
             Text::default().bold(self.target_name).plain(" is down.")
         };
+
         let error = facts
             .latest
             .as_ref()
             .and_then(|latest| latest.error.clone())
             .unwrap_or_else(|| self.alert.value.trim_start_matches("Down: ").to_string());
+
         let mut fields = vec![Field::new("URL", &facts.url), Field::new("Error", error)];
         if let Some(up) = &facts.last_up {
             let mut value = format_moment(up.at, self.now, self.time_zone());
@@ -334,7 +355,9 @@ impl AlertMessage<'_> {
             }
             fields.push(Field::new("Last good check", value));
         }
+
         fields.push(self.started_field());
+
         let snippet = facts.latest.as_ref().map(|latest| {
             let is_https = facts.url.starts_with("https://");
             let steps = [
@@ -343,6 +366,7 @@ impl AlertMessage<'_> {
                 is_https.then_some(("TLS", latest.tls_ms)),
                 Some(("First byte", latest.ttfb_ms)),
             ];
+
             let failed = if latest
                 .error
                 .as_deref()
@@ -352,6 +376,7 @@ impl AlertMessage<'_> {
             } else {
                 "failed"
             };
+
             let mut parts = Vec::new();
             for (label, ms) in steps.into_iter().flatten() {
                 match ms {
@@ -362,8 +387,10 @@ impl AlertMessage<'_> {
                     }
                 }
             }
+
             Snippet { label: None, lines: vec![parts.join(" · ")] }
         });
+
         Details {
             summary,
             fields,
@@ -380,10 +407,12 @@ impl AlertMessage<'_> {
     fn disk(&self, facts: &DiskFacts) -> Details {
         let used = get_percent(facts.used, facts.total);
         let free = facts.total.saturating_sub(facts.used);
+
         let mut fields = vec![self.target_field()];
         if let Some(trend) = facts.trend {
             let window =
                 format_span(u64::try_from(trend.window_ms / 1000).unwrap_or_default());
+
             if trend.bytes_per_hour >= 1.0 {
                 fields.push(Field::new(
                     "Growth",
@@ -407,7 +436,9 @@ impl AlertMessage<'_> {
                 ));
             }
         }
+
         fields.push(self.started_field());
+
         Details {
             summary: Text::from("The disk at ")
                 .bold(facts.mount.as_str())
@@ -432,6 +463,7 @@ impl AlertMessage<'_> {
                 .plain("."),
             None => Text::from("The agent has never reported."),
         };
+
         let mut fields = vec![self.target_field()];
         if let Some(at) = facts.last_seen_at {
             fields.push(Field::new(
@@ -442,6 +474,7 @@ impl AlertMessage<'_> {
         if let Some(version) = &facts.agent_version {
             fields.push(Field::new("Agent", version));
         }
+
         let mut note = Text::default();
         if let Some(checks) = facts.checks.filter(|checks| checks.total > 0) {
             fields.push(Field::new(
@@ -454,6 +487,7 @@ impl AlertMessage<'_> {
                     .plain(" on the server.");
             }
         }
+
         Details {
             summary,
             fields,
@@ -465,11 +499,13 @@ impl AlertMessage<'_> {
 
     fn cert(&self, facts: &CertFacts) -> Details {
         let Some(expires_at) = facts.expires_at else { return self.generic() };
+
         let time_zone = self.time_zone();
         let days = (expires_at - self.now).num_days();
         let plural = |count: i64| {
             if count == 1 { "1 day".to_string() } else { format!("{count} days") }
         };
+
         let (verb, span) = match days {
             _ if expires_at <= self.now => match -days {
                 0 => ("expired ", "today".to_string()),
@@ -478,7 +514,9 @@ impl AlertMessage<'_> {
             0 => ("expires in ", "less than a day".to_string()),
             left => ("expires in ", plural(left)),
         };
+
         let local = expires_at.with_timezone(&time_zone);
+
         Details {
             summary: Text::from("The certificate for ")
                 .bold(facts.domain.as_str())
@@ -504,6 +542,7 @@ impl AlertMessage<'_> {
 
     fn resolved(&self, lasted_secs: u32, facts: &AlertFacts) -> Details {
         let lasted = format_span(u64::from(lasted_secs));
+
         if let (
             AlertFacts::Logs(LogFacts { run: Some(run), .. }),
             Condition::Logs { level, within_secs, .. },
@@ -511,12 +550,14 @@ impl AlertMessage<'_> {
         {
             let level = describe_log_level(level);
             let mut summary = Text::from("Back to normal after ").bold(lasted).plain(".");
+
             if let Some(at) = run.last_at.and_then(DateTime::from_timestamp_millis) {
                 summary = summary.plain(format!(
                     " The last {level} line was at {}.",
                     format_time(at, self.time_zone())
                 ));
             }
+
             return Details {
                 summary,
                 fields: vec![
@@ -534,6 +575,7 @@ impl AlertMessage<'_> {
                 ..Details::default()
             };
         }
+
         Details {
             summary: Text::from(format!(
                 "{} is back to normal after ",
@@ -556,6 +598,7 @@ impl AlertMessage<'_> {
             0 => String::new(),
             secs => format!(" for {}", format_span(u64::from(secs))),
         };
+
         match self.condition {
             Condition::Logs { count, within_secs, .. } => format!(
                 "The rule fires at {count} lines in {}.",
@@ -595,10 +638,12 @@ impl AlertMessage<'_> {
             Target::Check => "Check",
             Target::Cron => "Cron",
         };
+
         let label = std::iter::once(self.target_name)
             .chain(self.labels.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(" · ");
+
         Field::new(kind, label)
     }
 
@@ -612,6 +657,7 @@ impl AlertMessage<'_> {
             Target::Check => "uptime",
             Target::Cron => "crons",
         };
+
         Some(format!("{}/{path}/{}", self.app_url()?, self.target_id))
     }
 
@@ -626,6 +672,7 @@ impl AlertMessage<'_> {
             Target::Check => "Open check",
             Target::Cron => "Open cron",
         };
+
         self.target_url()
             .map(|url| Link::new(label, url).primary())
             .into_iter()
@@ -638,11 +685,13 @@ impl AlertMessage<'_> {
             Condition::Offline | Condition::ProcessStopped { .. } => None,
             _ => self.target_link("Mute", "mute", id),
         };
+
         let declare = (Level::read(&self.alert.severity) == Level::Critical
             && matches!(self.condition, Condition::Logs { .. } | Condition::UptimeDown))
         .then(|| self.target_link("Declare incident", "declare", id))
         .flatten()
         .map(Link::danger);
+
         mute.into_iter().chain(declare).collect()
     }
 
@@ -650,12 +699,14 @@ impl AlertMessage<'_> {
         let app_url = self.app_url()?;
         let mut params =
             vec![("server_id", self.target_id.to_string()), ("range", "1h".to_string())];
+
         match self.condition {
             Condition::Logs { level, service, text, .. } => {
                 let view = match level.as_str() {
                     "error" | "warn" | "info" => level.as_str(),
                     _ => "all",
                 };
+
                 params.push(("level", view.to_string()));
                 params.extend(service.iter().map(|service| ("service", service.clone())));
                 params.extend(text.iter().map(|text| ("q", text.clone())));
@@ -665,12 +716,14 @@ impl AlertMessage<'_> {
             }
             _ => {}
         }
+
         let url = Url::parse_with_params(&format!("{app_url}/logs"), params).ok()?;
         Some(Link::new("Open logs", url.as_str()))
     }
 
     fn firing_links(&self) -> Vec<Link> {
         let Some(app_url) = self.app_url() else { return Vec::new() };
+
         let view = Link::new("View alert", format!("{app_url}/alerts/{}", self.rule.id));
         let runbook = self
             .options
@@ -678,6 +731,7 @@ impl AlertMessage<'_> {
             .as_deref()
             .and_then(parse_runbook_url)
             .map(|url| Link::new("Runbook", url));
+
         std::iter::once(view).chain(runbook).collect()
     }
 }
@@ -695,6 +749,7 @@ fn to_one_line(message: &str) -> String {
     if line.chars().count() <= MAX_SNIPPET_LINE {
         return line;
     }
+
     let mut cut: String = line.chars().take(MAX_SNIPPET_LINE - 1).collect();
     cut.push('…');
     cut
@@ -714,6 +769,7 @@ pub fn format_span(secs: u64) -> String {
     let plural = |count: u64, unit: &str| {
         if count == 1 { format!("1 {unit}") } else { format!("{count} {unit}s") }
     };
+
     match secs {
         0..60 => format!("{secs} s"),
         60..3600 => format!("{} min", secs / 60),
@@ -745,10 +801,12 @@ fn zone_suffix(time_zone: Tz) -> &'static str {
 fn split_bytes(bytes: u64) -> (f64, usize) {
     let mut value = bytes as f64;
     let mut unit = 0;
+
     while value >= 1024.0 && unit < BYTE_UNITS.len() - 1 {
         value /= 1024.0;
         unit += 1;
     }
+
     (value, unit)
 }
 
@@ -895,6 +953,7 @@ mod tests {
             }),
         );
         let details = case.details(Moment::Firing);
+
         assert_eq!(
             details.summary.to_string(),
             "11 error lines in the last 5 min. The rule fires at 10 lines in 5 min."
@@ -940,6 +999,7 @@ mod tests {
             }),
         );
         let details = case.details(Moment::Resolved { lasted_secs: 3060 });
+
         assert_eq!(
             details.summary.to_string(),
             "Back to normal after 51 min. The last error line was at 9:41 AM UTC."
@@ -992,15 +1052,18 @@ mod tests {
                 ],
             }),
         );
+
         case.rule = make_rule(600);
         case.options.runbook_url = Some("https://wiki.test/cpu".to_string());
         let details = case.details(Moment::Firing);
+
         assert_eq!(
             details.summary.to_string(),
             "CPU at 96% for 10 min. The rule fires above 90% for 10 min."
         );
         assert_eq!(details.fields[1], Field::new("Load", "4.2 on 3 cores"));
         assert_eq!(details.fields[2], Field::new("Memory", "30% · 1.1 of 3.7 GB"));
+
         let snippet = details.snippet.clone().unwrap();
         assert_eq!(snippet.label.as_deref(), Some("Top processes"));
         assert_eq!(
@@ -1044,6 +1107,7 @@ mod tests {
             ran_secs: Some(187_200),
             restarts: Some(2),
         });
+
         assert_eq!(
             details.summary.to_string(),
             "inboxjot-api-blue ran out of memory, so the kernel killed it."
@@ -1080,9 +1144,11 @@ mod tests {
             AlertFacts::Logs(LogFacts::default()),
         );
         let links = spike.details(Moment::Firing).links;
+
         assert_eq!(links[2].url, "https://daroyan.test/servers/server_1?mute=alert_1");
         assert_eq!(links[3].url, "https://daroyan.test/servers/server_1?declare=alert_1");
         assert_eq!(links[3].style, LinkStyle::Danger);
+
         assert_eq!(
             labels(&spike.details(Moment::Resolved { lasted_secs: 60 }).links),
             ["Open server"]
@@ -1101,12 +1167,14 @@ mod tests {
             "inboxjot-api-blue was killed by SIGKILL. Something forced it to stop."
         );
         assert_eq!(killed.fields[1], Field::new("Exit", "SIGKILL · code 137"));
+
         let failed = crash(ProcessExit { code: Some(1), ..ProcessExit::default() });
         assert_eq!(
             failed.summary.to_string(),
             "inboxjot-api-blue exited with code 1. Its last log lines usually show why."
         );
         assert_eq!(failed.fields[1], Field::new("Exit", "Code 1"));
+
         let stopped = crash(ProcessExit {
             code: Some(143),
             signal: Some("SIGTERM".to_string()),
@@ -1118,6 +1186,7 @@ mod tests {
             "inboxjot-api-blue was stopped on purpose, with docker stop or docker kill. It has not started again."
         );
         assert_eq!(stopped.fields[1], Field::new("Exit", "Stopped on purpose"));
+
         let unknown = crash(ProcessExit::default());
         assert_eq!(unknown.summary.to_string(), "inboxjot-api-blue stopped.");
         assert_eq!(unknown.fields[1].label, "Started");
@@ -1154,9 +1223,11 @@ mod tests {
                 }),
             }),
         );
+
         case.target = Target::Check;
         case.labels = Vec::new();
         let details = case.details(Moment::Firing);
+
         assert_eq!(
             details.summary.to_string(),
             "Inboxjot Server failed 2 checks in a row."
@@ -1192,6 +1263,7 @@ mod tests {
             tls_ms: None,
             ttfb_ms: None,
         };
+
         let mut case = Case::new(
             Condition::UptimeDown,
             make_alert("Status", "Down: Connection refused"),
@@ -1205,6 +1277,7 @@ mod tests {
         );
         case.target = Target::Check;
         let details = case.details(Moment::Firing);
+
         assert_eq!(details.summary.to_string(), "Inboxjot Server is down.");
         assert_eq!(details.snippet.unwrap().lines, ["DNS 0 ms · Connect failed"]);
         assert_eq!(details.fields[1], Field::new("Error", "Connection refused"));
@@ -1215,6 +1288,7 @@ mod tests {
         const GB: u64 = 1024 * 1024 * 1024;
         let mut alert = make_alert("/", "87%");
         alert.severity = "warning".to_string();
+
         let case = Case::new(
             Condition::Disk { above: 85.0 },
             alert,
@@ -1229,6 +1303,7 @@ mod tests {
             }),
         );
         let details = case.details(Moment::Firing);
+
         assert_eq!(
             details.summary.to_string(),
             "The disk at / is 87% full: 65 of 75 GB. 10 GB are free."
@@ -1255,6 +1330,7 @@ mod tests {
             }),
         );
         let details = case.details(Moment::Firing);
+
         assert_eq!(details.summary.to_string(), "The agent has not reported for 2 min.");
         assert_eq!(details.fields[3], Field::new("Uptime checks", "4 of 4 still pass"));
         assert!(details.note.to_string().contains("systemctl status daroyan"));
@@ -1272,6 +1348,7 @@ mod tests {
         );
         case.target = Target::Check;
         let details = case.details(Moment::Firing);
+
         assert_eq!(
             details.summary.to_string(),
             "The certificate for app.inboxjot.com expires in 12 days, on Nov 9."
@@ -1300,6 +1377,7 @@ mod tests {
             AlertFacts::None,
         );
         let details = case.details(Moment::Firing);
+
         assert_eq!(
             details.summary.to_string(),
             "Inboxjot Server sent no data for this rule, so Daroyan cannot tell if it is healthy."
@@ -1315,12 +1393,15 @@ mod tests {
             AlertFacts::None,
         );
         let details = case.details(Moment::Reminder { lasted_secs: 1800 });
+
         assert_eq!(details.summary.to_string(), "db:5432: Closed.");
         assert_eq!(details.note.to_string(), "Still firing after 30 min.");
         assert_eq!(details.fields.len(), 4);
+
         let resolved = case.details(Moment::Resolved { lasted_secs: 59 });
         assert_eq!(resolved.summary.to_string(), "db:5432 is back to normal after 59 s.");
         assert_eq!(labels(&resolved.links), ["Open server"]);
+
         assert_eq!(Moment::Resolved { lasted_secs: 0 }.tone("critical"), Tone::Resolved);
         assert_eq!(Moment::Escalated.tone("warning"), Tone::Critical);
         assert_eq!(Moment::Firing.tone("warning"), Tone::Warning);
@@ -1333,6 +1414,7 @@ mod tests {
         assert_eq!(format_span(3600), "1 hour");
         assert_eq!(format_span(7500), "2 hours 5 min");
         assert_eq!(format_span(187_200), "2 days 4 hours");
+
         assert_eq!(format_bytes(1536), "1.5 KB");
         assert_eq!(
             format_used_of(65 * 1024_u64.pow(3), 75 * 1024_u64.pow(3)),

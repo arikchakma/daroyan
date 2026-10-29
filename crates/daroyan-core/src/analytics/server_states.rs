@@ -107,6 +107,7 @@ pub fn to_disk_rows(server_id: &str, state: &State) -> Vec<DiskRow> {
         i64::try_from(state.taken_at).unwrap_or(i64::MAX),
         Utc::now().timestamp_millis(),
     );
+
     state
         .disks
         .iter()
@@ -125,6 +126,7 @@ pub fn append_disks(conn: &Connection, rows: &[DiskRow]) -> duckdb::Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
+
     let mut appender = conn.appender("disk_states")?;
     for row in rows {
         appender.append_row(params![
@@ -136,6 +138,7 @@ pub fn append_disks(conn: &Connection, rows: &[DiskRow]) -> duckdb::Result<()> {
             row.disk_used,
         ])?;
     }
+
     appender.flush()
 }
 
@@ -157,10 +160,12 @@ pub async fn fit_disk_trend(
                 "SELECT regr_slope(disk_used, taken_at), count(*), max(taken_at) - min(taken_at) \
                  FROM disk_states WHERE server_id = ? AND mount = ? AND taken_at >= ?",
             )?;
+
             let (slope, count, window_ms): (Option<f64>, u64, Option<i64>) = statement
                 .query_row(params![server_id, mount, since], |row| {
                     Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                 })?;
+
             Ok(slope.zip(window_ms).filter(|_| count >= 2).map(|(slope, window_ms)| {
                 DiskTrend { bytes_per_hour: slope * 3_600_000.0, window_ms }
             }))

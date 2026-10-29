@@ -23,6 +23,7 @@ impl MigrationTrait for Migration {
                 )
                 .await?;
         }
+
         create_indexes(
             manager,
             vec![make_index(INDEX, "alert_deliveries", &["alert_id", "integration_id"])],
@@ -34,6 +35,7 @@ impl MigrationTrait for Migration {
         manager
             .drop_index(Index::drop().name(INDEX).table("alert_deliveries").to_owned())
             .await?;
+
         for column in ["chat_message_id", "chat_channel_id"] {
             manager
                 .alter_table(
@@ -44,6 +46,7 @@ impl MigrationTrait for Migration {
                 )
                 .await?;
         }
+
         Ok(())
     }
 }

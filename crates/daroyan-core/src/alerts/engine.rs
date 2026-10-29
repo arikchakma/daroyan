@@ -407,11 +407,13 @@ impl AlertEngine {
         self.checks =
             checks.iter().map(|check| (check.id.clone(), check.clone())).collect();
         self.down = down.keys().cloned().collect();
+
         for server in &facts {
             if let Some(report) = &server.report {
                 self.deploys.observe(&server.server.id, &report.processes, now);
             }
         }
+
         let target_names: HashMap<String, String> = servers
             .iter()
             .map(|server| (server.id.clone(), server.name.clone()))
@@ -485,6 +487,7 @@ impl AlertEngine {
                         } else {
                             for_secs
                         };
+
                     if (now - since).num_seconds() < hold {
                         continue;
                     }
@@ -611,6 +614,7 @@ impl AlertEngine {
                     .is_some_and(|host| names.contains(&host.as_str()))
             })
             .collect();
+
         Some(CheckCount {
             passing: checks.iter().filter(|check| !self.down.contains(&check.id)).count(),
             total: checks.len(),
@@ -631,6 +635,7 @@ impl AlertEngine {
         if is_unused {
             return AlertFacts::None;
         }
+
         let server = alert.server_id.as_ref().and_then(|id| self.servers.get(id));
         let sources = FactSources {
             analytics: &self.analytics,
@@ -638,6 +643,7 @@ impl AlertEngine {
             check: alert.check_id.as_ref().and_then(|id| self.checks.get(id)),
             server_checks: server.and_then(|server| self.count_server_checks(server)),
         };
+
         sources
             .gather(&parsed.condition, alert, moment, now)
             .await
@@ -661,6 +667,7 @@ impl AlertEngine {
         let target = get_target(alert);
         let now = Utc::now();
         let facts = self.gather_facts(parsed, alert, moment, now).await;
+
         let message = AlertMessage {
             rule,
             condition: &parsed.condition,
@@ -674,6 +681,7 @@ impl AlertEngine {
             app_url: self.app_url.as_deref(),
             now,
         };
+
         Notice {
             event: if moment.is_resolved() { "alert.resolved" } else { "alert.firing" },
             tone: moment.tone(&alert.severity),
@@ -699,6 +707,7 @@ impl AlertEngine {
     ) -> Result<()> {
         tracing::info!(rule_id = %rule.id, target_id, subject = %reading.subject, level = level.as_str(), "alert firing");
         let target_of = |kind: Target| (target == kind).then(|| target_id.to_string());
+
         let alert = self
             .database
             .create_alert(NewAlert {
@@ -716,6 +725,7 @@ impl AlertEngine {
         self.database
             .mark_alert_rule_fired(&AlertRuleId::from(rule.id.as_str()), Utc::now())
             .await?;
+
         let prefix = if level == Level::Warning { "Warning" } else { "Critical" };
         let body = format!(
             "{target_name} · {}: {}\n{}",
@@ -734,6 +744,7 @@ impl AlertEngine {
                 body,
             )
             .await;
+
         self.notify(
             parsed.recipients(level),
             integrations,
@@ -744,9 +755,11 @@ impl AlertEngine {
             None,
         )
         .await?;
+
         if self.maintained.contains(target_id) {
             return Ok(());
         }
+
         let fire = RuleFire {
             rule,
             target_kind: match target {
@@ -763,6 +776,7 @@ impl AlertEngine {
         {
             tracing::error!(rule_id = %rule.id, error = ?error, "declare an incident");
         }
+
         Ok(())
     }
 
@@ -785,11 +799,13 @@ impl AlertEngine {
                 now,
             )
             .await?;
+
         let escalated = Alert {
             severity: level.as_str().to_string(),
             value: reading.label.clone(),
             ..alert.clone()
         };
+
         let body = format!(
             "{target_name} · {}: {} (was a warning)\n{}",
             alert.subject,
@@ -807,6 +823,7 @@ impl AlertEngine {
                 body,
             )
             .await;
+
         self.notify(
             parsed.recipients(level),
             integrations,
@@ -831,6 +848,7 @@ impl AlertEngine {
         let Some(every) = parsed.options.remind_every_secs else {
             return Ok(());
         };
+
         let sent = u32::try_from(alert.reminders_sent).unwrap_or_default();
         let last = alert.last_notified_at.unwrap_or(alert.started_at);
         if sent >= parsed.options.remind_times
@@ -838,6 +856,7 @@ impl AlertEngine {
         {
             return Ok(());
         }
+
         self.database
             .mark_alert_reminded(
                 &AlertId::from(alert.id.as_str()),
@@ -845,12 +864,14 @@ impl AlertEngine {
                 now,
             )
             .await?;
+
         let level = Level::read(&alert.severity);
         let target_id = get_target_id(alert);
         let target_name =
             names.get(&target_id).cloned().unwrap_or_else(|| target_id.clone());
         let lasted =
             u32::try_from((now - alert.started_at).num_seconds()).unwrap_or_default();
+
         let body = format!(
             "{target_name} · {}: {} for {}\n{}",
             alert.subject,
@@ -869,6 +890,7 @@ impl AlertEngine {
                 body,
             )
             .await;
+
         self.notify(
             parsed.recipients(level),
             integrations,
@@ -894,6 +916,7 @@ impl AlertEngine {
         self.database
             .resolve_alert(&AlertId::from(alert.id.as_str()), now)
             .await?;
+
         let lasted =
             u32::try_from((now - alert.started_at).num_seconds()).unwrap_or_default();
         let resolved = Alert {
@@ -901,6 +924,7 @@ impl AlertEngine {
             status: "resolved".to_string(),
             ..alert.clone()
         };
+
         let body = format!(
             "{target_name} · {} is back to normal after {}",
             alert.subject,
@@ -917,6 +941,7 @@ impl AlertEngine {
                 body,
             )
             .await;
+
         self.notify(
             parsed.recipients(Level::read(&alert.severity)),
             integrations,
@@ -984,11 +1009,13 @@ impl AlertEngine {
                 if self.is_muted(&rule.id, alert) {
                     continue;
                 }
+
                 let target_id = get_target_id(alert);
                 let target_name =
                     names.get(&target_id).cloned().unwrap_or_else(|| target_id.clone());
                 let lasted = u32::try_from((now - alert.started_at).num_seconds())
                     .unwrap_or_default();
+
                 let body = format!(
                     "{target_name} · {}: {} for {}\nThe mute ended and it is still firing.",
                     alert.subject,
@@ -1006,6 +1033,7 @@ impl AlertEngine {
                         body,
                     )
                     .await;
+
                 let level = Level::read(&alert.severity);
                 self.notify(
                     parsed.recipients(level),
@@ -1037,6 +1065,7 @@ impl AlertEngine {
             if self.maintained.contains(&server_id) {
                 continue;
             }
+
             let watching: Vec<(&AlertRule, ParsedRule)> = rules
                 .iter()
                 .filter(|rule| rule.enabled)
@@ -1060,6 +1089,7 @@ impl AlertEngine {
                             .any(|mute| mute.covers(&rule.id, &server_id))
                 })
                 .collect();
+
             let watching: Vec<(&AlertRule, ParsedRule)> = watching
                 .into_iter()
                 .filter(|(rule, parsed)| {
@@ -1070,6 +1100,7 @@ impl AlertEngine {
                 })
                 .collect();
             let Some((first, _)) = watching.first() else { continue };
+
             let mut recipients: Vec<String> = Vec::new();
             for (_, parsed) in &watching {
                 for id in &parsed.integration_ids {
@@ -1078,6 +1109,7 @@ impl AlertEngine {
                     }
                 }
             }
+
             let notice = DeployNote {
                 server_id: &server_id,
                 server_name: &server.server.name,
@@ -1086,6 +1118,7 @@ impl AlertEngine {
                 app_url: self.app_url.as_deref(),
             }
             .notice();
+
             tracing::info!(server_id, count = replacements.len(), "deploy noted");
             let log = DeliveryLog {
                 rule_id: first.id.clone(),
@@ -1103,6 +1136,7 @@ impl AlertEngine {
         if is_free {
             sent.push(now);
         }
+
         is_free
     }
 
@@ -1113,6 +1147,7 @@ impl AlertEngine {
         if self.limited.get(rule_id).is_some_and(|until| *until > now) {
             return Slot::Drop;
         }
+
         let until = self
             .sent
             .get(rule_id)
@@ -1136,15 +1171,18 @@ impl AlertEngine {
         if self.is_silenced(&rule.id, parsed, alert, now) {
             return Ok(());
         }
+
         let log = DeliveryLog {
             rule_id: rule.id.clone(),
             alert_id: Some(alert.id.clone()),
             reply,
         };
+
         let Some(limit) = parsed.options.message_limit else {
             notify_integrations(&self.database, recipients, integrations, notice, &log);
             return Ok(());
         };
+
         match self.take_slot(&rule.id, limit, now) {
             Slot::Send => {
                 notify_integrations(
@@ -1160,6 +1198,7 @@ impl AlertEngine {
                 self.database
                     .mark_alert_rule_quiet(&AlertRuleId::from(rule.id.as_str()), until)
                     .await?;
+
                 let time_zone = read_time_zone(parsed.options.time_zone.as_deref());
                 let summary = Notice {
                     event: "alert.limited",
@@ -1178,6 +1217,7 @@ impl AlertEngine {
                     }),
                     details: Details::default(),
                 };
+
                 let log = DeliveryLog {
                     rule_id: rule.id.clone(),
                     alert_id: None,
@@ -1192,6 +1232,7 @@ impl AlertEngine {
                 );
             }
         }
+
         Ok(())
     }
 }
@@ -1231,6 +1272,7 @@ pub fn notify_integrations(
         let integration = integration.clone();
         let notice = notice.clone();
         let log = log.clone();
+
         tokio::spawn(async move {
             if let Err(error) =
                 deliver_notice(&database, &integration, &notice, Some(log)).await
@@ -1262,6 +1304,7 @@ pub async fn deliver_notice(
     else {
         return send_and_log(database, integration, notice, log).await;
     };
+
     let turn = Arc::clone(
         ALERT_DELIVERIES
             .lock()
@@ -1269,14 +1312,17 @@ pub async fn deliver_notice(
             .entry(key.clone())
             .or_default(),
     );
+
     let outcome = {
         let _guard = turn.lock().await;
         send_and_log(database, integration, notice, log).await
     };
+
     let mut deliveries = ALERT_DELIVERIES.lock().unwrap_or_else(PoisonError::into_inner);
     if Arc::strong_count(&turn) == 2 {
         deliveries.remove(&key);
     }
+
     outcome
 }
 
@@ -1288,6 +1334,7 @@ async fn send_and_log(
 ) -> Result<(), String> {
     let id = IntegrationId::from(integration.id.as_str());
     let reply = log.as_ref().and_then(|log| log.reply);
+
     let parent = match (&log, reply) {
         (Some(DeliveryLog { alert_id: Some(alert_id), .. }), Some(_)) => {
             find_thread(database, &AlertId::from(alert_id.as_str()), &id).await
@@ -1298,6 +1345,7 @@ async fn send_and_log(
         .as_ref()
         .zip(reply)
         .map(|((_, parent), reply)| Thread { parent, broadcast: reply != Reply::Quiet });
+
     let config = serde_json::from_value::<IntegrationConfig>(integration.config.clone())
         .map_err(|_| {
             "The integration settings are unreadable. Edit and save it again".to_string()
@@ -1306,6 +1354,7 @@ async fn send_and_log(
         Ok(config) => send_notice(config, notice, thread).await,
         Err(error) => Err(error.clone()),
     };
+
     if let (Ok(config), Ok(_), Some((parent_id, parent)), Some(reply)) =
         (&config, &outcome, &parent, reply)
         && reply.updates_parent()
@@ -1324,12 +1373,14 @@ async fn send_and_log(
             }
         }
     }
+
     if let Some(log) = log {
         let starts_thread = parent.is_none()
             && match reply {
                 None => notice.event == "alert.firing",
                 Some(reply) => reply == Reply::Escalate,
             };
+
         let posted = outcome.as_ref().ok().cloned().flatten().filter(|_| starts_thread);
         let delivery = NewAlertDelivery {
             id: new_id(Prefix::AlertDelivery),
@@ -1347,15 +1398,18 @@ async fn send_and_log(
                 .map(Value::to_string),
             chat_message_id: posted.map(|posted| posted.message_id),
         };
+
         if let Err(error) = database.create_alert_delivery(delivery).await {
             tracing::error!(integration_id = %integration.id, error = %error, "log a delivery");
         }
     }
+
     if let Err(error) =
         database.record_integration_delivery(&id, outcome.clone().err()).await
     {
         tracing::error!(integration_id = %integration.id, error = %error, "record a delivery");
     }
+
     outcome.map(|_| ())
 }
 
@@ -1371,6 +1425,7 @@ async fn find_thread(
             tracing::error!(alert_id = %alert_id.as_str(), error = %error, "find the alert thread");
         })
         .ok()??;
+
     let message = ChatMessage {
         channel_id: delivery.chat_channel_id?,
         message_id: delivery.chat_message_id?,
@@ -1378,6 +1433,7 @@ async fn find_thread(
             .chat_payload
             .and_then(|payload| serde_json::from_str(&payload).ok()),
     };
+
     Some((delivery.id, message))
 }
 

@@ -20,6 +20,7 @@ export function LogConditionFields(props: LogConditionFieldsProps) {
   const { form, onChange } = props;
 
   const { data: logSources } = useQuery(logSourcesOptions());
+
   const services = [...new Set((logSources ?? []).map((source) => source.service))].sort();
   const isValid = isLimitValid(form);
 

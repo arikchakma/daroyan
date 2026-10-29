@@ -137,15 +137,19 @@ impl FactSources<'_> {
         now: DateTime<Utc>,
     ) -> Result<AlertFacts> {
         let now_ms = now.timestamp_millis();
+
         let facts = match condition {
             Condition::Logs { level, within_secs, service, text, .. } => {
                 let Some(server) = self.server else { return Ok(AlertFacts::None) };
+
                 let matcher = || LogMatch {
                     min_severity: read_log_severity(level).unwrap_or(17),
                     service: service.clone(),
                     text: text.clone(),
                 };
+
                 let window_ms = i64::from(*within_secs) * 1000;
+
                 if moment.is_resolved() {
                     let run = summarize_log_run(
                         self.analytics,
@@ -155,6 +159,7 @@ impl FactSources<'_> {
                         window_ms,
                     )
                     .await?;
+
                     AlertFacts::Logs(LogFacts { top: Vec::new(), run: Some(run) })
                 } else {
                     let top = list_top_messages(
@@ -165,6 +170,7 @@ impl FactSources<'_> {
                         TOP_MESSAGES,
                     )
                     .await?;
+
                     AlertFacts::Logs(LogFacts { top, run: None })
                 }
             }
@@ -172,6 +178,7 @@ impl FactSources<'_> {
                 let (Some(report), Some(host)) = (self.report(), self.host()) else {
                     return Ok(AlertFacts::None);
                 };
+
                 AlertFacts::Usage(UsageFacts {
                     load1: report.state.load1,
                     cores: host.cpu_cores,
@@ -182,6 +189,7 @@ impl FactSources<'_> {
             }
             Condition::ProcessStopped { .. } => {
                 let Some(server) = self.server else { return Ok(AlertFacts::None) };
+
                 let exit = find_last_exit(
                     self.analytics,
                     server.id.clone(),
@@ -189,6 +197,7 @@ impl FactSources<'_> {
                     alert.started_at.timestamp_millis() - EXIT_SLACK_MS,
                 )
                 .await?;
+
                 let last_lines = list_last_lines(
                     self.analytics,
                     server.id.clone(),
@@ -206,11 +215,13 @@ impl FactSources<'_> {
                     })
                 })
                 .collect();
+
                 let controllable = self.report().is_some_and(|report| {
                     report.processes.iter().any(|process| {
                         process.name == alert.subject && process.controllable
                     })
                 });
+
                 AlertFacts::Process(ProcessFacts { exit, last_lines, controllable })
             }
             Condition::Disk { .. } => {
@@ -222,6 +233,7 @@ impl FactSources<'_> {
                 else {
                     return Ok(AlertFacts::None);
                 };
+
                 let trend = if PSEUDO_FILESYSTEMS.contains(&disk.filesystem.as_str()) {
                     None
                 } else {
@@ -234,6 +246,7 @@ impl FactSources<'_> {
                     .await?
                     .filter(|trend| trend.window_ms >= MIN_TREND_MS)
                 };
+
                 AlertFacts::Disk(DiskFacts {
                     mount: disk.mount.clone(),
                     used: disk.disk_used,
@@ -248,6 +261,7 @@ impl FactSources<'_> {
             }),
             Condition::UptimeDown => {
                 let Some(check) = self.check else { return Ok(AlertFacts::None) };
+
                 let recent =
                     list_recent_results(self.analytics, check.id.clone(), RECENT_RESULTS)
                         .await?;
@@ -256,6 +270,7 @@ impl FactSources<'_> {
                     .take_while(|result| result.status == STATUS_DOWN)
                     .count();
                 let last_up = find_last_up(self.analytics, check.id.clone()).await?;
+
                 AlertFacts::Check(CheckFacts {
                     url: check.target.clone(),
                     interval_secs: u32::try_from(check.interval_secs).unwrap_or_default(),
@@ -266,10 +281,12 @@ impl FactSources<'_> {
             }
             Condition::CertDays { .. } => {
                 let Some(check) = self.check else { return Ok(AlertFacts::None) };
+
                 let expires_at = list_cert_expiries(self.analytics)
                     .await?
                     .remove(&check.id)
                     .and_then(DateTime::from_timestamp_millis);
+
                 AlertFacts::Cert(CertFacts {
                     domain: Url::parse(&check.target)
                         .ok()
@@ -280,6 +297,7 @@ impl FactSources<'_> {
             }
             _ => AlertFacts::None,
         };
+
         Ok(facts)
     }
 
@@ -402,6 +420,7 @@ mod tests {
         for migration in MIGRATIONS {
             conn.execute_batch(migration)?;
         }
+
         let log = "INSERT INTO log_lines (server_id, logged_at, service, stream, severity, message) VALUES (?, ?, ?, 'stderr', ?, ?)";
         for (minute, message) in
             [(56, "export failed"), (57, "export failed"), (58, "db timeout")]
@@ -411,6 +430,7 @@ mod tests {
                 duckdb::params!["srv_1", ms(8, minute), "api", 17, message],
             )?;
         }
+
         conn.execute(
             log,
             duckdb::params!["srv_1", ms(8, 57), "api", 9, "export queued"],
@@ -427,13 +447,16 @@ mod tests {
             "INSERT INTO server_events VALUES ('srv_1', ?, 'process_exited', '{\"name\":\"api\",\"oom\":true}')",
             [ms(7, 0)],
         )?;
+
         conn.execute_batch(MIGRATION_DISKS)?;
         let disk = "INSERT INTO disk_states VALUES ('srv_1', ?, ?, ?, 100, ?)";
         for (hour, used) in [(4, 30), (5, 50), (6, 70), (7, 90)] {
             conn.execute(disk, duckdb::params![ms(hour, 0), "/", "ext4", used])?;
             conn.execute(disk, duckdb::params![ms(hour, 0), "/run", "tmpfs", used])?;
         }
+
         conn.execute(disk, duckdb::params![ms(1, 0), "/", "ext4", 0])?;
+
         let result = "INSERT INTO uptime_results (check_id, checked_at, status, code, response_ms, error, cert_expires_at, dns_ms, connect_ms, tls_ms, ttfb_ms) VALUES ('chk_1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         let expiry = Utc
             .with_ymd_and_hms(2026, 11, 9, 23, 59, 0)
@@ -484,6 +507,7 @@ mod tests {
                 None::<u32>
             ],
         )?;
+
         Ok(())
     }
 
@@ -494,6 +518,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let analytics = Analytics::open(&dir.join("daroyan.duckdb")).unwrap();
         analytics.run(seed).unwrap();
+
         let (server, check) = (make_server(), make_check());
         let sources = FactSources {
             analytics: &analytics,
@@ -501,6 +526,7 @@ mod tests {
             check: Some(&check),
             server_checks: Some(CheckCount { passing: 1, total: 1 }),
         };
+
         let now = at(9, 0);
         let logs = Condition::Logs {
             level: "error".to_string(),
@@ -536,6 +562,7 @@ mod tests {
                 run: Some(LogRun { total: 3, peak: 3, last_at: Some(ms(8, 58)) }),
             })
         );
+
         let AlertFacts::Process(process) =
             gather(Condition::ProcessStopped { name: None }, "worker", Moment::Firing)
                 .await
@@ -545,12 +572,14 @@ mod tests {
         assert_eq!(process.exit.unwrap().code, Some(137));
         assert_eq!(process.last_lines.len(), 1);
         assert_eq!(process.last_lines[0].message, "memory at 3.6 GB");
+
         let AlertFacts::Process(stale) =
             gather(Condition::ProcessStopped { name: None }, "api", Moment::Firing).await
         else {
             panic!("expected process facts");
         };
         assert_eq!(stale.exit, None);
+
         assert_eq!(
             gather(Condition::Disk { above: 85.0 }, "/", Moment::Firing).await,
             AlertFacts::Disk(DiskFacts {
@@ -560,6 +589,7 @@ mod tests {
                 trend: Some(DiskTrend { bytes_per_hour: 20.0, window_ms: 3 * 3_600_000 }),
             })
         );
+
         let AlertFacts::Check(down) =
             gather(Condition::UptimeDown, "Status", Moment::Firing).await
         else {
@@ -568,6 +598,7 @@ mod tests {
         assert_eq!(down.failures, 2);
         assert_eq!(down.latest.unwrap().tls_ms, Some(48));
         assert_eq!(down.last_up.unwrap().response_ms, Some(118));
+
         assert_eq!(
             gather(Condition::CertDays { below: 14.0 }, "Certificate", Moment::Firing)
                 .await,
@@ -576,6 +607,7 @@ mod tests {
                 expires_at: Some(Utc.with_ymd_and_hms(2026, 11, 9, 23, 59, 0).unwrap()),
             })
         );
+
         assert_eq!(
             gather(Condition::Offline, "Server", Moment::Firing).await,
             AlertFacts::Offline(OfflineFacts {
@@ -584,10 +616,12 @@ mod tests {
                 checks: Some(CheckCount { passing: 1, total: 1 }),
             })
         );
+
         assert!(matches!(
             gather(Condition::Cpu { above: 90.0 }, "CPU", Moment::Firing).await,
             AlertFacts::Usage(UsageFacts { cores: 3, mem_total: 4_000, .. })
         ));
+
         std::fs::remove_dir_all(dir).ok();
     }
 }

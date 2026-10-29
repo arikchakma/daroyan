@@ -23,7 +23,9 @@ export function RuleNotifySection(props: RuleNotifySectionProps) {
 
   const [shownIds, setShownIds] = useState<string[]>([]);
   const [isAddOpen, setIsAddOpen] = useState(false);
+
   const { data: integrations = [] } = useQuery(listIntegrationsOptions());
+
   const test = useMutation({
     ...testAlertRuleOptions(),
     meta: { errorMessage: 'The test alert could not be sent' },

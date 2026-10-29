@@ -17,6 +17,7 @@ export function RuleMoreOptions(props: RuleMoreOptionsProps) {
 
   const changed = getChangedOptions(form);
   const changedCount = Object.values(changed).filter(Boolean).length;
+
   const [isOpen, setIsOpen] = useState(changedCount > 0);
 
   if (!isOpen) {

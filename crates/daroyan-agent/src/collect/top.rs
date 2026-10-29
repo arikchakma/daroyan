@@ -20,10 +20,12 @@ pub fn find_top(
         .flat_map(|(name, pids)| pids.iter().map(move |pid| (*pid, name.as_str())))
         .collect();
     let mut groups: HashMap<String, TopProcess> = HashMap::new();
+
     for (pid, process) in system.processes() {
         if process.thread_kind().is_some() {
             continue;
         }
+
         let name = owners
             .get(pid)
             .map_or_else(|| read_name(process), ToString::to_string);
@@ -33,32 +35,38 @@ pub fn find_top(
             cpu: 0.0,
             mem_used: 0,
         });
+
         group.count += 1;
         group.cpu += process.cpu_usage();
         group.mem_used += process.memory();
     }
+
     pick_top(groups.into_values().collect())
 }
 
 fn pick_top(mut groups: Vec<TopProcess>) -> Vec<TopProcess> {
     groups.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
     let mut top: Vec<TopProcess> = groups.iter().take(TOP_COUNT).cloned().collect();
+
     groups.sort_by_key(|group| std::cmp::Reverse(group.mem_used));
     for group in groups.into_iter().take(TOP_COUNT) {
         if !top.iter().any(|item| item.name == group.name) {
             top.push(group);
         }
     }
+
     top
 }
 
 fn read_name(process: &Process) -> String {
     let name = process.name().to_string_lossy().to_string();
+
     if is_interpreter(&name)
         && let Some(script) = find_script(&name, process.cmd())
     {
         return script;
     }
+
     name
 }
 
@@ -72,6 +80,7 @@ fn is_interpreter(name: &str) -> bool {
 fn find_script(interpreter: &str, cmd: &[OsString]) -> Option<String> {
     let is_php = interpreter.starts_with("php");
     let mut args = cmd.iter().skip(1).map(|arg| arg.to_string_lossy());
+
     while let Some(arg) = args.next() {
         match arg.as_ref() {
             "-m" | "-jar" => return to_script_name(&args.next()?),
@@ -90,6 +99,7 @@ fn find_script(interpreter: &str, cmd: &[OsString]) -> Option<String> {
             script => return to_script_name(script),
         }
     }
+
     None
 }
 
@@ -100,6 +110,7 @@ fn to_script_name(arg: &str) -> Option<String> {
         && !name.chars().any(|character| {
             character.is_whitespace() || "'\"`;$(){}=".contains(character)
         });
+
     is_name.then_some(name)
 }
 
@@ -126,6 +137,7 @@ mod tests {
         assert!(is_interpreter("python3.12"));
         assert!(is_interpreter("node"));
         assert!(!is_interpreter("nginx"));
+
         assert_eq!(
             find_script(
                 "node",
@@ -169,6 +181,7 @@ mod tests {
             .map(|index| group(&format!("busy-{index}"), 50.0 + index as f32, 1))
             .collect();
         groups.push(group("cache", 0.1, 4_000_000_000));
+
         let top = pick_top(groups);
         assert_eq!(top.len(), TOP_COUNT + 1);
         assert_eq!(top[0].name, "busy-11");

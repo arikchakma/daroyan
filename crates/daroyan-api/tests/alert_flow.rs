@@ -98,12 +98,14 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
         );
         axum::serve(hook_listener, app).await
     });
+
     let slack_posts = Arc::new(Mutex::new(Vec::<Value>::new()));
     let slack_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let slack_url = format!("http://{}", slack_listener.local_addr().unwrap());
     let slack_updates = Arc::new(Mutex::new(Vec::<Value>::new()));
     let slack_store = Arc::clone(&slack_posts);
     let update_store = Arc::clone(&slack_updates);
+
     tokio::spawn(async move {
         let app = Router::new()
             .route(
@@ -124,6 +126,7 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
             );
         axum::serve(slack_listener, app).await
     });
+
     let slack_count = || slack_posts.lock().unwrap().len();
     let events = || -> Vec<String> {
         received
@@ -277,6 +280,7 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
         assert_eq!(delivery["status"], "sent");
         assert_eq!(delivery["message"], "Critical: High CPU · worker-1 · CPU: 34%");
     }
+
     let backtest: Value = http
         .post(format!("{base}/v1/alert-rules/backtest"))
         .json(&json!({
@@ -324,6 +328,7 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     })
     .await;
     assert_eq!(events(), ["test", "alert.firing", "alert.resolved"]);
+
     let posts = slack_posts.lock().unwrap().clone();
     assert_eq!(posts[0].get("thread_ts"), None);
     assert!(
@@ -336,6 +341,7 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     assert_eq!(posts[1]["thread_ts"], "1730000000.000001");
     assert_eq!(posts[1]["reply_broadcast"], true);
     assert_eq!(posts[1]["blocks"][0]["text"]["text"], "*✅ Resolved: High CPU*");
+
     let update = slack_updates.lock().unwrap()[0].clone();
     assert_eq!(update["ts"], "1730000000.000001");
     assert_eq!(update["blocks"][0]["text"]["text"], "*✅ Resolved: High CPU*");

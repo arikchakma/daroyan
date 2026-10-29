@@ -169,9 +169,11 @@ function readRecoveryLimit(form: RuleFormState) {
 export function readRecovery(form: RuleFormState) {
   const recovery = readNumber(form.recovery);
   const limit = readRecoveryLimit(form);
+
   if (!hasThreshold(form.kind) || recovery === null || !Number.isFinite(recovery) || limit === null) {
     return null;
   }
+
   const isSafe = form.kind === 'cert_days' ? recovery >= limit : recovery <= limit;
   return isSafe ? recovery : null;
 }
@@ -230,6 +232,7 @@ export function getMatchesText(names: string[], noun: string) {
   if (names.length === 0) {
     return `Matches no ${noun}s yet.`;
   }
+
   const count = names.length === 1 ? `1 ${noun}` : `${names.length} ${noun}s`;
   return `Matches ${count}: ${joinNames(names)}.`;
 }
@@ -283,6 +286,7 @@ export function readInitialNotifyLevels(rule?: Schemas['AlertRule']) {
   if (!rule) {
     return undefined;
   }
+
   return Object.fromEntries(
     rule.integration_ids.map((id): [string, NotifyLevel] => [
       id,
@@ -325,7 +329,9 @@ export function readCondition(form: RuleFormState): Schemas['Condition'] | undef
   if (!isLimitValid(form)) {
     return undefined;
   }
+
   const limit = readLimit(form) ?? 0;
+
   switch (kind) {
     case 'offline':
     case 'uptime_down':
@@ -370,6 +376,7 @@ export function readScope(form: RuleFormState): Scope | undefined {
   if (form.pickedIds.length === 0) {
     return undefined;
   }
+
   if (noun === 'check') {
     return { kind: 'checks', check_ids: form.pickedIds };
   }
@@ -422,6 +429,7 @@ function getRecoveryPresets(kind: ConditionKind, limit: number | null) {
   if (limit === null) {
     return [];
   }
+
   if (kind === 'cert_days') {
     return [limit + 7, limit + 14];
   }
@@ -487,6 +495,7 @@ function getResolveSummary(form: RuleFormState) {
     const span = form.resolveForSecs > 0 ? ` for ${formatSpan(form.resolveForSecs)}` : '';
     return `Resolves ${getRecoveryLabel(form, recovery).toLowerCase()}${span}`;
   }
+
   return `Resolves ${getRecoveredLabel(form.kind, form.resolveForSecs).toLowerCase()}`;
 }
 

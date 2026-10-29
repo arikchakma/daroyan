@@ -20,7 +20,9 @@ export function RuleStatusPanel(props: RuleStatusPanelProps) {
 
   const navigate = useNavigate();
   const isAdmin = useIsAdmin();
+
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+
   const toggle = useMutation({
     ...updateAlertRuleOptions(),
     meta: { errorMessage: 'The rule could not be updated' },

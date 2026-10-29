@@ -184,11 +184,13 @@ pub fn format_clock(at: DateTime<Utc>, time_zone: Tz) -> String {
 pub fn format_moment(at: DateTime<Utc>, now: DateTime<Utc>, time_zone: Tz) -> String {
     let local = at.with_timezone(&time_zone);
     let today = now.with_timezone(&time_zone).date_naive();
+
     let day = match (today - local.date_naive()).num_days() {
         0 => "Today".to_string(),
         1 => "Yesterday".to_string(),
         _ => local.format("%b %-d").to_string(),
     };
+
     let zone = if time_zone == Tz::UTC { " UTC" } else { "" };
     format!("{day} at {}{zone}", local.format("%-I:%M %p"))
 }
@@ -465,8 +467,10 @@ pub fn parse_runbook_url(url: &str) -> Option<reqwest::Url> {
     if url.len() > MAX_RUNBOOK_URL {
         return None;
     }
+
     let parsed = reqwest::Url::parse(url).ok()?;
     let is_web = matches!(parsed.scheme(), "http" | "https") && parsed.host().is_some();
+
     (is_web && parsed.as_str().len() <= MAX_RUNBOOK_URL).then_some(parsed)
 }
 

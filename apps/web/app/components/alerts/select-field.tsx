@@ -21,6 +21,7 @@ export function SelectField(props: SelectFieldProps) {
 
   const labelId = useId();
   const hintId = useId();
+
   const allItems = groups ? groups.flatMap((group) => group.items) : (items ?? []);
 
   return (

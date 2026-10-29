@@ -113,9 +113,11 @@ pub async fn find_last_exit(
                  WHERE server_id = ? AND kind = 'process_exited' AND json_extract_string(data, '$.name') = ? \
                  AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT 1",
             )?;
+
             let data: Option<String> = statement
                 .query_row(params![server_id, name, since_ms], |row| row.get(0))
                 .optional()?;
+
             Ok(data.and_then(|data| serde_json::from_str(&data).ok()))
         })
         .await

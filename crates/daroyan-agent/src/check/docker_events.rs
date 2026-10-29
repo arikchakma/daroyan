@@ -46,18 +46,21 @@ impl DockerEvents {
         let events = Self::default();
         let watched = events.clone();
         thread::spawn(move || watched.follow());
+
         events
     }
 
     pub fn list_last_run(&self, container_id: &str) -> Vec<DockerAction> {
         let actions = lock(&self.actions);
         let Some(list) = actions.get(container_id) else { return Vec::new() };
+
         let start = list.iter().rposition(|item| item.action == "start");
         list[start.map_or(0, |index| index + 1)..].to_vec()
     }
 
     fn follow(&self) {
         let mut use_sudo = false;
+
         loop {
             let (program, prefix): (&str, &[&str]) =
                 if use_sudo { ("sudo", &["-n", "docker"]) } else { ("docker", &[]) };
@@ -72,6 +75,7 @@ impl DockerEvents {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn();
+
             match child {
                 Ok(mut child) => {
                     if let Some(stdout) = child.stdout.take() {
@@ -79,10 +83,12 @@ impl DockerEvents {
                             self.record(&line, Instant::now());
                         }
                     }
+
                     let _ = child.wait();
                 }
                 Err(error) => warn!("follow docker events: {error}"),
             }
+
             use_sudo = !use_sudo;
             thread::sleep(RETRY_AFTER);
         }
@@ -90,20 +96,25 @@ impl DockerEvents {
 
     fn record(&self, line: &str, at: Instant) {
         let Ok(event) = serde_json::from_str::<RawEvent>(line) else { return };
+
         let action = event.action.split(':').next().unwrap_or_default().to_string();
         let exit_code = event
             .actor
             .attributes
             .get("exitCode")
             .and_then(|code| code.parse().ok());
+
         if !ACTIONS.contains(&action.as_str()) {
             return;
         }
+
         let signal = event.actor.attributes.get("signal").cloned();
         let mut actions = lock(&self.actions);
+
         actions.retain(|_, list| {
             list.last().is_some_and(|item| at.duration_since(item.at) < KEEP_FOR)
         });
+
         let list = actions.entry(event.actor.id).or_default();
         list.retain(|item| at.duration_since(item.at) < KEEP_FOR);
         list.push(DockerAction { action, exit_code, signal, at });
@@ -113,6 +124,7 @@ impl DockerEvents {
 pub fn was_stopped(actions: &[DockerAction]) -> bool {
     let last_die = actions.iter().rposition(|item| item.action == "die");
     let before = &actions[..last_die.unwrap_or(actions.len())];
+
     before.iter().any(|item| {
         item.action == "stop" || (item.action == "kill" && is_ending_signal(item))
     }) && !before.iter().any(|item| item.action == "oom")
@@ -163,6 +175,7 @@ mod tests {
         record(&stopped, "kill", None);
         record(&stopped, "die", Some("143"));
         record(&stopped, "stop", None);
+
         let actions = stopped.list_last_run("c1");
         assert!(was_stopped(&actions));
         assert!(!was_oom(&actions));
@@ -176,6 +189,7 @@ mod tests {
         record(&oom, "oom", None);
         record(&oom, "kill", None);
         record(&oom, "die", Some("137"));
+
         let actions = oom.list_last_run("c1");
         assert!(was_oom(&actions));
         assert!(!was_stopped(&actions));
@@ -190,6 +204,7 @@ mod tests {
         record(&restarted, "start", None);
         record(&restarted, "restart", None);
         record(&restarted, "die", Some("1"));
+
         let actions = restarted.list_last_run("c1");
         assert!(!was_stopped(&actions));
         assert_eq!(read_exit_code(&actions), Some(1));
@@ -208,7 +223,9 @@ mod tests {
         record(&events, "exec_start: sh", None);
         record(&events, "health_status: healthy", None);
         events.record("not json", Instant::now());
+
         assert!(events.list_last_run("c1").is_empty());
+
         record(&events, "die", Some("1"));
         assert_eq!(events.list_last_run("c1")[0].action, "die");
     }
@@ -233,6 +250,7 @@ mod tests {
             record_with(&stopped, "kill", &format!(r#","signal":"{signal}""#));
             record(&stopped, "stop", None);
             record(&stopped, "die", Some("0"));
+
             assert!(was_stopped(&stopped.list_last_run("c1")), "{signal}");
         }
 

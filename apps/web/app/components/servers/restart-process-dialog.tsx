@@ -20,8 +20,10 @@ export function RestartProcessDialog(props: RestartProcessDialogProps) {
 
   const { data: me, isSuccess: isMeLoaded } = useQuery(meOptions());
   const { data: firing = [] } = useQuery(listAlertsOptions('firing'));
+
   const [name, setName] = useState('');
   const [isOpen, setIsOpen] = useState(false);
+
   const { mutate: runCommand, isPending } = useMutation({
     ...runCommandOptions(),
     meta: { errorMessage: `${name} could not be restarted` },
@@ -46,6 +48,7 @@ export function RestartProcessDialog(props: RestartProcessDialogProps) {
   });
 
   const alert = firing.find((item) => item.server_id === server.id && item.subject === name);
+
   const restart = () =>
     runCommand(
       { serverId: server.id, action: 'restart_process', name },

@@ -46,8 +46,10 @@ export function AlertBanners(props: AlertBannersProps) {
   const { data: firing = [], isSuccess: isFiringLoaded } = useQuery(listAlertsOptions('firing'));
   const { data: mutes = [] } = useQuery(listAlertMutesOptions());
   const { data: rules = [] } = useQuery(listAlertRulesOptions());
+
   const [muting, setMuting] = useState<{ alert: Schemas['Alert']; isWholeRule: boolean } | undefined>();
   const [declaring, setDeclaring] = useState<DeclareDefaults | undefined>();
+
   const create = useCreateMute();
   const unmute = useMutation({
     ...deleteAlertMuteOptions(),
@@ -64,6 +66,7 @@ export function AlertBanners(props: AlertBannersProps) {
       (checkId && alert.check_id === checkId) ||
       (cronId && alert.cron_id === cronId)
   );
+
   const openFromLink = (alertId: string, open: (alert: Schemas['Alert']) => void) => {
     const alert = alerts.find((item) => item.id === alertId);
     if (alert) {
@@ -72,6 +75,7 @@ export function AlertBanners(props: AlertBannersProps) {
       toast.info('This alert is no longer firing.');
     }
   };
+
   useLinkAction('mute', isFiringLoaded, (alertId) =>
     openFromLink(alertId, (alert) => setMuting({ alert, isWholeRule: false }))
   );
