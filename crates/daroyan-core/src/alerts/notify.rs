@@ -24,6 +24,8 @@ const DISCORD_MAX_FIELDS: usize = 25;
 const DISCORD_MAX_FOOTER: usize = 2048;
 const DISCORD_MAX_TOTAL: usize = 6000;
 const TELEGRAM_MAX_SNIPPET: usize = 2500;
+const TELEGRAM_MAX_TEXT: usize = 4096;
+const TELEGRAM_MAX_TITLE: usize = 256;
 const MAX_LINE: usize = 300;
 
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
@@ -238,6 +240,15 @@ pub struct Details {
     pub note: Text,
     pub links: Vec<Link>,
     pub context: Option<String>,
+}
+
+impl Details {
+    fn shown_fields(&self) -> Vec<&Field> {
+        self.fields
+            .iter()
+            .filter(|field| !field.value.trim().is_empty())
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -504,7 +515,7 @@ fn build_slack_body(notice: &Notice) -> Value {
             SLACK_MAX_TEXT,
         )));
     }
-    for fields in details.fields.chunks(SLACK_MAX_FIELDS) {
+    for fields in details.shown_fields().chunks(SLACK_MAX_FIELDS) {
         let fields: Vec<Value> = fields
             .iter()
             .map(|field| {
@@ -558,7 +569,7 @@ fn build_slack_body(notice: &Notice) -> Value {
 fn build_discord_message(notice: &Notice) -> Value {
     let details = &notice.details;
     let mut fields: Vec<Value> = details
-        .fields
+        .shown_fields()
         .iter()
         .map(|field| {
             json!({
@@ -579,7 +590,11 @@ fn build_discord_message(notice: &Notice) -> Value {
     let links = notice
         .links()
         .iter()
-        .map(|link| format!("[{}]({})", escape_markdown(&link.label), link.url))
+        .map(|link| {
+            let url =
+                link.url.replace('(', "%28").replace(')', "%29").replace(' ', "%20");
+            format!("[{}]({url})", escape_markdown(&link.label))
+        })
         .collect::<Vec<_>>()
         .join(" · ");
     let room = DISCORD_MAX_FIELD.saturating_sub(links.chars().count() + 1);
@@ -640,22 +655,28 @@ fn build_telegram_message(
     thread: Option<&ChatMessage>,
 ) -> Value {
     let details = &notice.details;
-    let mut parts =
-        vec![format!("<b>{}{}</b>", notice.tone.emoji(), escape_html(&notice.title))];
+    let title =
+        cut(&format!("{}{}", notice.tone.emoji(), notice.title), TELEGRAM_MAX_TITLE);
+    let mut parts = vec![format!("<b>{}</b>", escape_html(&title))];
     let summary = notice.summary();
     if !summary.is_empty() {
-        parts.push(summary.render(escape_html, "<b>", "</b>"));
+        parts.push(summary.render_within(
+            escape_html,
+            "<b>",
+            "</b>",
+            TELEGRAM_MAX_SNIPPET,
+        ));
     }
-    if !details.fields.is_empty() {
+    let fields = details.shown_fields();
+    if !fields.is_empty() {
         parts.push(
-            details
-                .fields
+            fields
                 .iter()
                 .map(|field| {
                     format!(
                         "<b>{}</b>: {}",
-                        escape_html(&field.label),
-                        escape_html(&field.value)
+                        cut_escaped(&field.label, escape_html, MAX_LINE),
+                        cut_escaped(&field.value, escape_html, MAX_LINE)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -670,7 +691,7 @@ fn build_telegram_message(
         });
     }
     if !details.note.is_empty() {
-        parts.push(details.note.render(escape_html, "<b>", "</b>"));
+        parts.push(details.note.render_within(escape_html, "<b>", "</b>", MAX_LINE * 2));
     }
     let links = notice
         .links()
@@ -688,11 +709,24 @@ fn build_telegram_message(
         parts.push(links);
     }
     if let Some(context) = &details.context {
-        parts.push(format!("<i>{}</i>", escape_html(context)));
+        parts.push(format!("<i>{}</i>", cut_escaped(context, escape_html, MAX_LINE)));
+    }
+    let mut text = String::new();
+    let mut length = 0;
+    for part in parts {
+        let needed = part.chars().count() + if text.is_empty() { 0 } else { 2 };
+        if length + needed > TELEGRAM_MAX_TEXT {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&part);
+        length += needed;
     }
     let mut message = json!({
         "chat_id": chat_id,
-        "text": parts.join("\n\n"),
+        "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": true,
     });
@@ -1028,6 +1062,41 @@ mod tests {
         assert!(text.contains("<b>Source</b>: &lt;!channel&gt;"));
         assert!(text.contains("<b>Top errors</b>\n<pre>11× HTTP export"));
         assert!(text.ends_with("<i>Checked every 60 s</i>"));
+    }
+
+    #[test]
+    fn drops_empty_fields_and_escapes_discord_link_urls() {
+        let mut details = make_details();
+        details.fields.push(Field::new("Error", " "));
+        details.links = vec![Link::new("Runbook", "https://wiki.test/a_(b)")];
+        let discord = build_discord_message(&make_notice(details.clone()));
+        let fields = discord["embeds"][0]["fields"].as_array().unwrap();
+        assert!(fields.iter().all(|field| field["name"] != "Error"));
+        assert_eq!(
+            fields.last().unwrap()["value"],
+            "[Runbook](https://wiki.test/a_%28b%29)"
+        );
+        let slack = build_slack_message("C1", &make_notice(details), None);
+        assert!(!slack.to_string().contains("*Error*"));
+    }
+
+    #[test]
+    fn keeps_telegram_messages_under_the_limit() {
+        let mut details = make_details();
+        details.summary = Text::from("s".repeat(5000));
+        details.fields = (0..40)
+            .map(|index| Field::new(format!("F{index}"), "v".repeat(400)))
+            .collect();
+        details.snippet = Some(Snippet {
+            label: None,
+            lines: (0..40).map(|_| "<".repeat(300)).collect(),
+        });
+        let telegram = build_telegram_message("42", &make_notice(details), None);
+        let text = telegram["text"].as_str().unwrap();
+        assert!(text.chars().count() <= TELEGRAM_MAX_TEXT);
+        assert!(text.starts_with("<b>🔴 Critical"));
+        assert!(text.ends_with("<i>Checked every 60 s</i>"));
+        assert_eq!(text.matches("<pre>").count(), text.matches("</pre>").count());
     }
 
     fn chat_message(channel_id: &str, message_id: &str) -> ChatMessage {
