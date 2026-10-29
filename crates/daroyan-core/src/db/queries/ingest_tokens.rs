@@ -24,7 +24,7 @@ impl Database {
             hint: Set(hint),
             created_at: Set(Utc::now()),
             last_used_at: Set(None),
-            dropped_log_records: Set(0),
+            throttled_log_records: Set(0),
         }
         .insert(&self.conn)
         .await
@@ -59,15 +59,16 @@ impl Database {
         .map(|_| ())
     }
 
-    pub async fn add_dropped_log_records(
+    pub async fn add_throttled_log_records(
         &self,
         id: &str,
         count: u64,
     ) -> Result<(), DbErr> {
         Entity::update_many()
             .col_expr(
-                Column::DroppedLogRecords,
-                Expr::col(Column::DroppedLogRecords).add(count as i64),
+                Column::ThrottledLogRecords,
+                Expr::col(Column::ThrottledLogRecords)
+                    .add(i64::try_from(count).unwrap_or(i64::MAX)),
             )
             .filter(Column::Id.eq(id))
             .exec(&self.conn)

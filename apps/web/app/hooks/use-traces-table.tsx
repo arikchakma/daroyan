@@ -52,7 +52,7 @@ function TraceServer(props: TraceServerProps) {
   }
 
   return (
-    <Link to={`/servers/${server.id}`} className="relative z-10 truncate outline-none hover:underline focus-visible:underline">
+    <Link to={`/servers/${server.id}`} className="relative z-1 truncate outline-none hover:underline focus-visible:underline">
       {server.name}
     </Link>
   );

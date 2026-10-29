@@ -1762,13 +1762,13 @@ export interface components {
         IngestToken: {
             /** Format: date-time */
             created_at: string;
-            /** Format: int64 */
-            dropped_log_records: number;
             hint: string;
             id: string;
             /** Format: date-time */
             last_used_at?: string | null;
             name: string;
+            /** Format: int64 */
+            throttled_log_records: number;
         };
         IngestTokenBody: {
             name: string;
@@ -1872,6 +1872,7 @@ export interface components {
             level: string;
             message: string;
             raw?: string | null;
+            resource?: Record<string, never> | null;
             server_id: string;
             service: string;
             /** Format: int32 */

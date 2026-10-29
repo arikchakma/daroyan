@@ -127,35 +127,24 @@ impl LogBudgets {
         Self { limit, windows: Arc::default() }
     }
 
-    pub fn keep<T>(
-        &self,
-        key: &str,
-        items: Vec<T>,
-        size: impl Fn(&T) -> u64,
-    ) -> (Vec<T>, u64) {
+    pub fn spend(&self, key: &str, size: u64) -> Result<(), Duration> {
         let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
         let window = windows
             .entry(key.to_string())
             .or_insert(BudgetWindow { started_at: Instant::now(), used: 0 });
-        if window.started_at.elapsed() >= LOG_BUDGET_WINDOW {
+        let elapsed = window.started_at.elapsed();
+        if elapsed >= LOG_BUDGET_WINDOW {
             *window = BudgetWindow { started_at: Instant::now(), used: 0 };
         }
 
-        let mut dropped = 0;
-        let kept = items
-            .into_iter()
-            .filter(|item| {
-                let size = size(item);
-                if window.used + size > self.limit {
-                    dropped += 1;
-                    return false;
-                }
-                window.used += size;
-                true
-            })
-            .collect();
+        // A batch bigger than the whole budget still goes through at the start
+        // of a window, or its client would retry it forever.
+        if window.used > 0 && window.used + size > self.limit {
+            return Err(LOG_BUDGET_WINDOW.saturating_sub(window.started_at.elapsed()));
+        }
 
-        (kept, dropped)
+        window.used += size;
+        Ok(())
     }
 }
 
@@ -202,16 +191,18 @@ mod tests {
     }
 
     #[test]
-    fn keeps_log_records_until_the_budget_is_spent() {
+    fn refuses_a_batch_over_the_budget_until_the_window_resets() {
         let budgets = LogBudgets::new(10);
-        let (kept, dropped) = budgets.keep("ing_1", vec![4, 4, 4, 1], |size| *size);
-        assert_eq!((kept, dropped), (vec![4, 4, 1], 1));
+        assert!(budgets.spend("ing_1", 8).is_ok());
 
-        let (kept, dropped) = budgets.keep("ing_1", vec![2], |size| *size);
-        assert_eq!((kept, dropped), (vec![], 1));
+        let retry_after = budgets.spend("ing_1", 4).unwrap_err();
+        assert!(
+            retry_after <= LOG_BUDGET_WINDOW && retry_after > Duration::from_secs(55)
+        );
+        assert!(budgets.spend("ing_1", 2).is_ok());
 
-        let (kept, dropped) = budgets.keep("ing_2", vec![10], |size| *size);
-        assert_eq!((kept, dropped), (vec![10], 0));
+        assert!(budgets.spend("ing_2", 50).is_ok());
+        assert!(budgets.spend("ing_2", 1).is_err());
     }
 
     #[test]

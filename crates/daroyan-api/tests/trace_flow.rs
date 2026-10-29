@@ -204,7 +204,7 @@ async fn ingests_otlp_traces_and_groups_exceptions() {
     assert_eq!(accepted.headers()["content-type"], "application/x-protobuf");
 
     let mut bomb = GzEncoder::new(Vec::new(), Compression::best());
-    bomb.write_all(&vec![0; 9 * 1024 * 1024]).unwrap();
+    bomb.write_all(&vec![0; 17 * 1024 * 1024]).unwrap();
     let too_large = anonymous
         .post(&endpoint)
         .bearer_auth(&token)

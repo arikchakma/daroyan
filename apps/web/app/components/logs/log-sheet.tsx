@@ -128,6 +128,7 @@ function LogBody(props: LogBodyProps) {
   const request = describeRequest(line);
   const duration = formatDuration(values['duration_ms']);
   const attributes = Object.entries(values).filter(([key]) => !HTTP_KEYS.includes(key) && key !== 'stack.lines');
+  const resource = Object.entries((line.resource ?? {}) as Record<string, unknown>);
 
   return (
     <div className="flex pb-16 max-lg:flex-col">
@@ -223,19 +224,31 @@ function LogBody(props: LogBodyProps) {
             )}
           </dl>
         </div>
-        {attributes.length > 0 && (
-          <div className="flex flex-col gap-2">
-            <h2 className="text-body font-medium">Attributes</h2>
-            <dl className="flex flex-col gap-2 text-body">
-              {attributes.map(([key, value]) => (
-                <RailRow key={key} label={key} mono>
-                  {typeof value === 'string' ? value : JSON.stringify(value)}
-                </RailRow>
-              ))}
-            </dl>
-          </div>
-        )}
+        {attributes.length > 0 && <AttributeList title="Attributes" entries={attributes} />}
+        {resource.length > 0 && <AttributeList title="Resource" entries={resource} />}
       </aside>
+    </div>
+  );
+}
+
+type AttributeListProps = {
+  title: string;
+  entries: [string, unknown][];
+};
+
+function AttributeList(props: AttributeListProps) {
+  const { title, entries } = props;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <h2 className="text-body font-medium">{title}</h2>
+      <dl className="flex flex-col gap-2 text-body">
+        {entries.map(([key, value]) => (
+          <RailRow key={key} label={key} mono>
+            {typeof value === 'string' ? value : JSON.stringify(value)}
+          </RailRow>
+        ))}
+      </dl>
     </div>
   );
 }

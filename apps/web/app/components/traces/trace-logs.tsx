@@ -6,16 +6,25 @@ import { logsOptions } from '~/queries/logs';
 import { formatLogClock } from '~/utils/format';
 
 const LOG_LIMIT = 50;
+const WAIT_MS = 5_000;
+const RECENT_MS = 2 * 60_000;
 
 type TraceLogsProps = {
   traceId: string;
+  startedAt: number;
 };
 
 export function TraceLogs(props: TraceLogsProps) {
-  const { traceId } = props;
+  const { traceId, startedAt } = props;
 
   const query = `trace_id:${traceId}`;
-  const { data } = useQuery(logsOptions({ q: query, offset: 0, limit: LOG_LIMIT }, false));
+  const { data } = useQuery({
+    ...logsOptions({ q: query, offset: 0, limit: LOG_LIMIT }, false),
+    // Log batches arrive a few seconds after the spans, so keep looking while a
+    // fresh trace has none yet.
+    refetchInterval: (current) =>
+      current.state.data?.lines.length === 0 && Date.now() - startedAt < RECENT_MS ? WAIT_MS : false,
+  });
   const lines = [...(data?.lines ?? [])].reverse();
 
   return (
@@ -46,7 +55,9 @@ export function TraceLogs(props: TraceLogsProps) {
               <span className="shrink-0 font-mono text-code-small text-text-secondary tabular-nums">
                 {formatLogClock(line.at)}
               </span>
-              <LevelBadge level={line.level} />
+              <span className="w-14 shrink-0">
+                <LevelBadge level={line.level} />
+              </span>
               <span className="w-28 shrink-0 truncate text-caption text-text-secondary">{line.service}</span>
               <span className="min-w-0 flex-1 font-mono text-code-small wrap-anywhere text-text-primary">
                 {line.message}

@@ -11,7 +11,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table("ingest_tokens")
-                    .add_column(big_integer("dropped_log_records").default(0).take())
+                    .add_column(big_integer("throttled_log_records").default(0).take())
                     .to_owned(),
             )
             .await
@@ -22,7 +22,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table("ingest_tokens")
-                    .drop_column("dropped_log_records")
+                    .drop_column("throttled_log_records")
                     .to_owned(),
             )
             .await

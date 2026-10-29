@@ -78,7 +78,9 @@ export default function TraceSetupPage() {
   const env = `OTEL_SERVICE_NAME=api
 OTEL_EXPORTER_OTLP_ENDPOINT=${window.location.origin}/v1/otlp
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ${token ?? '<token>'}`;
+OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ${token ?? '<token>'}
+# In Docker, name the server so logs and traces land on it
+OTEL_RESOURCE_ATTRIBUTES=host.name=<server hostname>`;
 
   return (
     <div className="flex min-h-full flex-col bg-surface-page">

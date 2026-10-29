@@ -146,7 +146,7 @@ export function TraceDetail(props: TraceDetailProps) {
             </div>
           </section>
 
-          <TraceLogs traceId={traceId} />
+          <TraceLogs traceId={traceId} startedAt={root.started_at / 1_000} />
         </div>
 
         <SpanRail span={selected} />

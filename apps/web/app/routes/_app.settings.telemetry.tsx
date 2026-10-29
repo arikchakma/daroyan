@@ -36,8 +36,8 @@ export default function TelemetryPage() {
   const tokens = data?.map((token) => ({
     ...token,
     detail:
-      token.dropped_log_records > 0
-        ? `${token.dropped_log_records.toLocaleString()} log records dropped over the budget`
+      token.throttled_log_records > 0
+        ? `${token.throttled_log_records.toLocaleString()} log records throttled over the budget`
         : undefined,
   }));
   const [isAdding, setIsAdding] = useState(false);

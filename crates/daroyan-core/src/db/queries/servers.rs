@@ -2,7 +2,7 @@ use chrono::Utc;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter,
-    QueryOrder, TransactionTrait,
+    QueryOrder, QuerySelect, TransactionTrait,
 };
 use serde_json::Value;
 
@@ -61,6 +61,17 @@ impl Database {
         Entity::find()
             .order_by_asc(Column::Name)
             .order_by_asc(Column::Id)
+            .all(&self.conn)
+            .await
+    }
+
+    pub async fn list_server_hosts(&self) -> Result<Vec<(String, Value)>, DbErr> {
+        Entity::find()
+            .select_only()
+            .columns([Column::Id, Column::Host])
+            .order_by_asc(Column::Name)
+            .order_by_asc(Column::Id)
+            .into_tuple()
             .all(&self.conn)
             .await
     }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use daroyan_protocol::log::{LogBatch, SEVERITY_INFO, SEVERITY_WARN};
+use daroyan_protocol::log::{LogBatch, SEVERITY_ERROR, SEVERITY_INFO, SEVERITY_WARN};
 use duckdb::types::Value as SqlValue;
 use duckdb::{Connection, params, params_from_iter};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
@@ -12,7 +13,8 @@ use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::analytics::log_parse::{
-    normalize_json_line, parse_text_line, read_level_word, take_json_time,
+    normalize_json_line, parse_text_line, read_level_value, read_level_word,
+    take_json_time,
 };
 use crate::analytics::spans::{
     UNKNOWN_SERVICE, find_text, to_hex, to_json_map, to_json_value,
@@ -27,6 +29,7 @@ const MAX_NAME_BYTES: usize = 200;
 const AGENT_SERVICE: &str = "Daroyan agent";
 const LINE_OVERHEAD: u64 = 64;
 pub const OTLP_SERVER_ID: &str = "otlp";
+const LEVEL_KEYS: [&str; 4] = ["level", "severity", "status", "log.level"];
 
 pub struct LogRow {
     server_id: String,
@@ -39,11 +42,21 @@ pub struct LogRow {
     trace_id: Option<String>,
     span_id: Option<String>,
     raw: Option<String>,
+    resource: Option<Arc<str>>,
 }
 
 impl LogRow {
     pub fn size(&self) -> u64 {
-        (self.message.len() + self.attributes.as_ref().map_or(0, String::len)) as u64
+        [
+            Some(self.message.as_str()),
+            self.attributes.as_deref(),
+            self.raw.as_deref(),
+            self.resource.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|text| text.len() as u64)
+        .sum::<u64>()
             + LINE_OVERHEAD
     }
 }
@@ -102,6 +115,7 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
                 span_id: line.span_id.map(|id| cut(&id, 32)),
                 raw: (original != line.message)
                     .then(|| cut(&original, MAX_MESSAGE_BYTES)),
+                resource: None,
             }
         })
         .collect();
@@ -118,9 +132,19 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
             trace_id: None,
             span_id: None,
             raw: None,
+            resource: None,
         });
     }
     rows
+}
+
+pub fn count_otlp_records(request: &ExportLogsServiceRequest) -> usize {
+    request
+        .resource_logs
+        .iter()
+        .flat_map(|resource_logs| &resource_logs.scope_logs)
+        .map(|scope_logs| scope_logs.log_records.len())
+        .sum()
 }
 
 pub fn to_otlp_log_rows(
@@ -140,22 +164,30 @@ pub fn to_otlp_log_rows(
         let server_id = find_text(resource, &["host.name"])
             .and_then(|host_name| hosts.find(&host_name).map(str::to_string))
             .unwrap_or_else(|| OTLP_SERVER_ID.to_string());
-        let Value::Object(resource) = to_json_map(resource) else { continue };
+        // Resource attributes are the same on every record from a process, so
+        // they are kept apart and shared instead of repeated in each line.
+        let resource: Option<Arc<str>> =
+            (!resource.is_empty()).then(|| to_json_map(resource).to_string().into());
 
         for scope_logs in &resource_logs.scope_logs {
             let scope = scope_logs.scope.as_ref().map(|scope| scope.name.as_str());
             for record in &scope_logs.log_records {
-                let mut attributes = resource.clone();
+                let mut attributes = Map::new();
                 if let Some(scope) = scope.filter(|scope| !scope.is_empty()) {
                     attributes.insert("otel.scope.name".into(), scope.into());
+                }
+                if !record.event_name.is_empty() {
+                    attributes
+                        .insert("event.name".into(), record.event_name.clone().into());
                 }
                 if let Value::Object(own) = to_json_map(&record.attributes) {
                     attributes.extend(own);
                 }
 
-                rows.push(to_otlp_log_row(
-                    record, &server_id, &service, attributes, now_ms,
-                ));
+                let mut row =
+                    to_otlp_log_row(record, &server_id, &service, attributes, now_ms);
+                row.resource = resource.clone();
+                rows.push(row);
             }
         }
     }
@@ -181,7 +213,7 @@ fn to_otlp_log_row(
         at: clamp_future_ms(at, now_ms),
         service: cut(service, MAX_NAME_BYTES),
         stream: "otlp",
-        severity: read_otlp_severity(record),
+        severity: read_otlp_severity(record, &attributes),
         message: cut(&read_body(record.body.as_ref()), MAX_MESSAGE_BYTES),
         attributes: (!attributes.is_empty())
             .then(|| Value::Object(attributes).to_string()),
@@ -190,15 +222,24 @@ fn to_otlp_log_row(
         raw: serde_json::to_string(record)
             .ok()
             .map(|raw| cut(&raw, MAX_MESSAGE_BYTES)),
+        resource: None,
     }
 }
 
-fn read_otlp_severity(record: &LogRecord) -> u8 {
-    if let Ok(severity @ 1..=24) = u8::try_from(record.severity_number) {
-        return severity;
+fn read_otlp_severity(record: &LogRecord, attributes: &Map<String, Value>) -> u8 {
+    match record.severity_number {
+        1..=24 => return record.severity_number as u8,
+        25.. => return SEVERITY_ERROR,
+        _ => {}
     }
 
-    read_level_word(record.severity_text.trim()).unwrap_or(SEVERITY_INFO)
+    read_level_word(record.severity_text.trim())
+        .or_else(|| {
+            LEVEL_KEYS
+                .iter()
+                .find_map(|key| attributes.get(*key).and_then(read_level_value))
+        })
+        .unwrap_or(SEVERITY_INFO)
 }
 
 fn read_body(body: Option<&AnyValue>) -> String {
@@ -226,6 +267,7 @@ pub fn append_logs(conn: &Connection, rows: &[LogRow]) -> duckdb::Result<()> {
             row.trace_id,
             row.span_id,
             row.raw,
+            row.resource.as_deref(),
         ])?;
     }
     appender.flush()
@@ -304,8 +346,10 @@ fn push_term(sql: &mut String, values: &mut Vec<SqlValue>, term: SearchTerm) {
         "service" | "source" => "service".to_string(),
         "trace_id" | "trace" => "trace_id".to_string(),
         _ => {
-            values.push(SqlValue::Text(format!("$.\"{}\"", key.replace('"', ""))));
-            "json_extract_string(attributes, ?)".to_string()
+            let path = format!("$.\"{}\"", key.replace('"', ""));
+            values.extend([SqlValue::Text(path.clone()), SqlValue::Text(path)]);
+            "coalesce(json_extract_string(attributes, ?), json_extract_string(resource, ?))"
+                .to_string()
         }
     };
     if term.value.contains('*') {
@@ -338,13 +382,15 @@ pub struct LogItem {
     pub trace_id: Option<String>,
     pub span_id: Option<String>,
     pub raw: Option<String>,
+    #[schema(value_type = Option<Object>)]
+    pub resource: Option<Value>,
 }
 
 pub async fn list_logs(analytics: &Analytics, query: LogQuery) -> Result<Vec<LogItem>> {
     analytics
         .read(move |conn| {
             let mut sql = String::from(
-                "SELECT logged_at, server_id, service, stream, severity, message, CAST(attributes AS VARCHAR), trace_id, span_id, raw \
+                "SELECT logged_at, server_id, service, stream, severity, message, CAST(attributes AS VARCHAR), trace_id, span_id, raw, CAST(resource AS VARCHAR) \
                  FROM log_lines WHERE logged_at <= ?",
             );
             let mut values: Vec<SqlValue> = vec![SqlValue::BigInt(query.until)];
@@ -389,6 +435,9 @@ fn read_item(row: &duckdb::Row<'_>) -> duckdb::Result<LogItem> {
         trace_id: row.get(7)?,
         span_id: row.get(8)?,
         raw: row.get(9)?,
+        resource: row
+            .get::<_, Option<String>>(10)?
+            .and_then(|text| serde_json::from_str(&text).ok()),
     })
 }
 
@@ -401,7 +450,7 @@ pub async fn list_log_context(
 ) -> Result<Vec<LogItem>> {
     analytics
         .read(move |conn| {
-            let columns = "SELECT logged_at, server_id, service, stream, severity, message, CAST(attributes AS VARCHAR), trace_id, span_id, raw FROM log_lines WHERE server_id = ? AND service = ?";
+            let columns = "SELECT logged_at, server_id, service, stream, severity, message, CAST(attributes AS VARCHAR), trace_id, span_id, raw, CAST(resource AS VARCHAR) FROM log_lines WHERE server_id = ? AND service = ?";
             let mut before = conn.prepare(&format!(
                 "{columns} AND logged_at <= ? ORDER BY logged_at DESC LIMIT ?"
             ))?;
@@ -804,6 +853,9 @@ mod tests {
         ))?;
         conn.execute_batch(include_str!(
             "../../../daroyan-migration/duckdb/0003_log_raw.sql"
+        ))?;
+        conn.execute_batch(include_str!(
+            "../../../daroyan-migration/duckdb/0011_log_resource.sql"
         ))
     }
 

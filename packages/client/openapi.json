@@ -4934,16 +4934,12 @@
           "name",
           "hint",
           "created_at",
-          "dropped_log_records"
+          "throttled_log_records"
         ],
         "properties": {
           "created_at": {
             "type": "string",
             "format": "date-time"
-          },
-          "dropped_log_records": {
-            "type": "integer",
-            "format": "int64"
           },
           "hint": {
             "type": "string"
@@ -4960,6 +4956,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "throttled_log_records": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -5355,6 +5355,12 @@
           "raw": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "resource": {
+            "type": [
+              "object",
               "null"
             ]
           },

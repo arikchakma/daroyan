@@ -165,14 +165,19 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
 
     let missing = anonymous.post(&endpoint).body(body.clone()).send().await.unwrap();
     assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(missing.headers()["content-type"], "application/x-protobuf");
     let wrong = anonymous
         .post(&endpoint)
         .bearer_auth("dy_ingest_wrong")
-        .body(body.clone())
+        .json(&json!({}))
         .send()
         .await
         .unwrap();
     assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong.headers()["content-type"], "application/json");
+    let status: Value = wrong.json().await.unwrap();
+    assert_eq!(status["code"], 16);
+    assert_eq!(status["message"], "The ingest token is not valid");
     let unsupported = anonymous
         .post(&endpoint)
         .bearer_auth(&token)
@@ -182,6 +187,32 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
         .await
         .unwrap();
     assert_eq!(unsupported.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let garbage = anonymous
+        .post(&endpoint)
+        .bearer_auth(&token)
+        .json(&json!({ "resourceLogs": "nope" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(garbage.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(garbage.json::<Value>().await.unwrap()["code"], 3);
+    let empty = anonymous
+        .post(&endpoint)
+        .bearer_auth(&token)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), StatusCode::OK);
+    let crowded = sample_request("inboxjot", vec![LogRecord::default(); 10_001]);
+    let crowded = anonymous
+        .post(&endpoint)
+        .bearer_auth(&token)
+        .body(crowded.encode_to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(crowded.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
     let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
     gzip.write_all(&body).unwrap();
@@ -201,13 +232,26 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
 
     let json_request = sample_request(
         "4f1c2a9b7e3d",
-        vec![LogRecord {
-            time_unix_nano: now,
-            body: Some(AnyValue {
-                value: Some(AnyValueKind::StringValue("worker started".into())),
-            }),
-            ..Default::default()
-        }],
+        vec![
+            LogRecord {
+                time_unix_nano: now,
+                body: Some(AnyValue {
+                    value: Some(AnyValueKind::StringValue("worker started".into())),
+                }),
+                ..Default::default()
+            },
+            LogRecord {
+                time_unix_nano: now - 300_000_000,
+                severity_number: 30,
+                ..Default::default()
+            },
+            LogRecord {
+                time_unix_nano: now - 500_000_000,
+                event_name: "email.bounced".to_string(),
+                attributes: vec![text("level", "error")],
+                ..Default::default()
+            },
+        ],
     );
     let accepted = anonymous
         .post(&endpoint)
@@ -229,25 +273,32 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
         .await
         .unwrap();
     let lines = page["lines"].as_array().unwrap();
-    assert_eq!(lines.len(), 3);
+    assert_eq!(lines.len(), 5);
 
     assert_eq!(lines[0]["message"], "worker started");
     assert_eq!(lines[0]["server_id"], "otlp");
     assert_eq!(lines[0]["level"], "info");
 
-    assert_eq!(lines[1]["message"], r#"{"event":"slow job"}"#);
-    assert_eq!(lines[1]["level"], "warn");
-    assert_eq!(lines[1]["server_id"], "srv_inboxjot");
+    assert_eq!(lines[1]["severity"], 17);
 
-    assert_eq!(lines[2]["message"], "SES SendEmail failed");
-    assert_eq!(lines[2]["stream"], "otlp");
-    assert_eq!(lines[2]["severity"], 17);
-    assert_eq!(lines[2]["trace_id"], "ab".repeat(16));
-    assert_eq!(lines[2]["span_id"], "01".repeat(8));
-    assert_eq!(lines[2]["attributes"]["email.id"], "eml_1");
-    assert_eq!(lines[2]["attributes"]["host.name"], "inboxjot");
-    assert_eq!(lines[2]["attributes"]["otel.scope.name"], "inboxjot");
-    assert!(lines[2]["raw"].as_str().unwrap().contains("SES SendEmail failed"));
+    assert_eq!(lines[2]["level"], "error");
+    assert_eq!(lines[2]["attributes"]["event.name"], "email.bounced");
+
+    assert_eq!(lines[3]["message"], r#"{"event":"slow job"}"#);
+    assert_eq!(lines[3]["level"], "warn");
+    assert_eq!(lines[3]["server_id"], "srv_inboxjot");
+
+    assert_eq!(lines[4]["message"], "SES SendEmail failed");
+    assert_eq!(lines[4]["stream"], "otlp");
+    assert_eq!(lines[4]["severity"], 17);
+    assert_eq!(lines[4]["trace_id"], "ab".repeat(16));
+    assert_eq!(lines[4]["span_id"], "01".repeat(8));
+    assert_eq!(lines[4]["attributes"]["email.id"], "eml_1");
+    assert_eq!(lines[4]["attributes"].get("host.name"), None);
+    assert_eq!(lines[4]["resource"]["host.name"], "inboxjot");
+    assert_eq!(lines[4]["resource"]["service.name"], "inboxjot-api");
+    assert_eq!(lines[4]["attributes"]["otel.scope.name"], "inboxjot");
+    assert!(lines[4]["raw"].as_str().unwrap().contains("SES SendEmail failed"));
 
     let traced: Value = http
         .get(format!("{base}/v1/logs?q=trace_id:{}", "ab".repeat(16)))
@@ -258,6 +309,15 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
         .await
         .unwrap();
     assert_eq!(traced["lines"].as_array().unwrap().len(), 1);
+    let by_resource: Value = http
+        .get(format!("{base}/v1/logs?q=host.name:inboxjot"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(by_resource["lines"].as_array().unwrap().len(), 2);
 
     let sources: Value = http
         .get(format!("{base}/v1/logs/sources"))
@@ -284,23 +344,20 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
             })
             .collect(),
     );
-    let partial = anonymous
+    let throttled = anonymous
         .post(&endpoint)
         .bearer_auth(&token)
         .json(&noisy)
         .send()
         .await
         .unwrap();
-    assert_eq!(partial.status(), StatusCode::OK);
-    let partial: Value = partial.json().await.unwrap();
-    let rejected = partial["partialSuccess"]["rejectedLogRecords"].as_i64().unwrap();
-    assert!(rejected > 0 && rejected < 100, "{rejected}");
-    assert!(
-        partial["partialSuccess"]["errorMessage"]
-            .as_str()
-            .unwrap()
-            .contains("over the budget")
-    );
+    assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry_after: u64 =
+        throttled.headers()["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!((1..=60).contains(&retry_after), "{retry_after}");
+    let status: Value = throttled.json().await.unwrap();
+    assert_eq!(status["code"], 8);
+    assert!(status["message"].as_str().unwrap().contains("4 KB of logs"));
 
     let tokens: Value = http
         .get(format!("{base}/v1/ingest-tokens"))
@@ -310,7 +367,7 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
         .json()
         .await
         .unwrap();
-    assert_eq!(tokens[0]["dropped_log_records"], rejected);
+    assert_eq!(tokens[0]["throttled_log_records"], 100);
 
     let spans = ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
@@ -360,6 +417,33 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
             assert_eq!(trace["server_id"], "srv_inboxjot");
         }
     }
+
+    let deleted = http
+        .delete(format!("{base}/v1/servers/srv_inboxjot"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    let kept: Value = http
+        .get(format!("{base}/v1/logs?service=inboxjot-api"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let kept = kept["lines"].as_array().unwrap();
+    assert_eq!(kept.len(), 5);
+    assert!(kept.iter().all(|line| line["server_id"] == "otlp"));
+    let traces: Value = http
+        .get(format!("{base}/v1/traces"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(traces[0]["server_id"], Value::Null);
 
     std::fs::remove_dir_all(dir).ok();
 }

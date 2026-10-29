@@ -20,7 +20,7 @@ const LEVEL_TEXT_KEYS: [&str; 3] = ["severity_text", "severityText", "@level"];
 
 const LEVEL_NUMBER_KEYS: [&str; 2] = ["severity_number", "severityNumber"];
 
-pub(super) fn read_level_value(value: &Value) -> Option<u8> {
+pub(crate) fn read_level_value(value: &Value) -> Option<u8> {
     match value {
         Value::String(word) => read_level_word(word),
         Value::Number(number) => match number.as_u64()? {
