@@ -1,5 +1,6 @@
 import type { Schemas } from '@daroyan/client';
 import { useQuery } from '@tanstack/react-query';
+import { cva } from 'class-variance-authority';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
@@ -507,6 +508,35 @@ type TrendBarsProps = {
 const HOUR_MS = 3_600_000;
 const TREND_HOURS = 24;
 
+const trendBar = cva('absolute inset-x-0 bottom-0', {
+  variants: {
+    tone: {
+      normal: '',
+      warning: 'bg-toast-warning-icon',
+      critical: 'bg-brand',
+    },
+  },
+});
+
+type GetBarToneOptions = {
+  value: number;
+  warnAt?: number;
+  criticalAt?: number;
+};
+
+function getBarTone(options: GetBarToneOptions) {
+  const { value, warnAt, criticalAt } = options;
+
+  if (criticalAt !== undefined && value >= criticalAt) {
+    return 'critical';
+  }
+  if (warnAt !== undefined && value >= warnAt) {
+    return 'warning';
+  }
+
+  return 'normal';
+}
+
 function TrendBars(props: TrendBarsProps) {
   const { points, label, minScale, max, fillClassName, warnAt, criticalAt } = props;
 
@@ -520,6 +550,8 @@ function TrendBars(props: TrendBarsProps) {
       <div className="flex h-7 items-stretch gap-0.5">
         {hours.map((hour) => {
           const value = byHour.get(hour);
+          const tone = value === undefined ? 'normal' : getBarTone({ value, warnAt, criticalAt });
+
           return (
             <span
               key={hour}
@@ -528,14 +560,7 @@ function TrendBars(props: TrendBarsProps) {
             >
               {value !== undefined && value > 0 && (
                 <span
-                  className={cn(
-                    'absolute inset-x-0 bottom-0',
-                    criticalAt !== undefined && value >= criticalAt
-                      ? 'bg-brand'
-                      : warnAt !== undefined && value >= warnAt
-                        ? 'bg-toast-warning-icon'
-                        : fillClassName
-                  )}
+                  className={cn(trendBar({ tone }), tone === 'normal' && fillClassName)}
                   style={{ height: `${Math.max((value / top) * 100, 4)}%` }}
                 />
               )}

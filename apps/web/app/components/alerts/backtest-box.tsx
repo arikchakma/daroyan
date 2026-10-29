@@ -2,6 +2,7 @@ import type { Schemas } from '@daroyan/client';
 import type { ReactNode } from 'react';
 
 import { formatDate } from '~/utils/format';
+import { getTimesText } from '~/utils/rule-form';
 
 type BacktestBoxProps = {
   backtest?: Schemas['AlertRuleBacktest'];
@@ -20,12 +21,12 @@ export function BacktestBox(props: BacktestBoxProps) {
 
   const count = backtest.hits.length;
   const difference = savedCount === undefined ? 0 : count - savedCount;
-  const compared = difference === 0 ? '' : `, ${Math.abs(difference)} ${difference < 0 ? 'fewer' : 'more'}`;
+  const compared = getComparedText(difference);
 
   return (
     <div className="flex flex-col gap-2 rounded-2xl bg-surface-subtle p-4 text-body">
       <span className="font-medium">
-        {count === 0 ? 'Would not have fired' : `Would have fired ${count === 1 ? 'once' : `${count} times`}`}
+        {count === 0 ? 'Would not have fired' : `Would have fired ${getTimesText(count)}`}
         {compared}
       </span>
       {backtest.hits.slice(0, 3).map((hit) => (
@@ -49,4 +50,13 @@ function BacktestNote(props: BacktestNoteProps) {
   const { children } = props;
 
   return <div className="flex flex-col gap-2 rounded-2xl bg-surface-subtle p-4 text-body text-text-secondary">{children}</div>;
+}
+
+function getComparedText(difference: number) {
+  if (difference === 0) {
+    return '';
+  }
+
+  const direction = difference < 0 ? 'fewer' : 'more';
+  return `, ${Math.abs(difference)} ${direction}`;
 }

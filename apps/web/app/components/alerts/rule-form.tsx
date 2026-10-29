@@ -23,6 +23,7 @@ import type { NotifyLevel } from '~/utils/alerts';
 import { formatDate } from '~/utils/format';
 import {
   applyTemplate,
+  getTimesText,
   isOptionalNumber,
   readCondition,
   readInitialNotifyLevels,
@@ -164,7 +165,7 @@ function RuleFormBody(props: RuleFormBodyProps) {
             <h1 className="text-title-page font-semibold">{rule ? `Edit ${rule.name}` : 'New Rule'}</h1>
             <p className="text-body text-text-secondary">
               {rule
-                ? `Created ${formatDate(rule.created_at)}. Fired ${firedCount === 1 ? 'once' : `${firedCount} times`} in the last 30 days.`
+                ? `Created ${formatDate(rule.created_at)}. Fired ${getTimesText(firedCount)} in the last 30 days.`
                 : 'Pick a condition and a limit. Everything else starts on a sensible default.'}
             </p>
           </div>

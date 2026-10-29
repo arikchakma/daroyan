@@ -342,16 +342,18 @@ export function readCondition(form: RuleFormState): Schemas['Condition'] | undef
     case 'port_closed':
       return { kind, name: form.subjectName.trim() || null };
     case 'logs':
-      return Number.isInteger(limit)
-        ? {
-            kind,
-            level: form.logLevel,
-            count: limit,
-            within_secs: form.logWithin,
-            service: form.logService || null,
-            text: form.logText.trim() || null,
-          }
-        : undefined;
+      if (!Number.isInteger(limit)) {
+        return undefined;
+      }
+
+      return {
+        kind,
+        level: form.logLevel,
+        count: limit,
+        within_secs: form.logWithin,
+        service: form.logService || null,
+        text: form.logText.trim() || null,
+      };
     case 'cert_days':
       return { kind, below: limit };
     case 'cpu':
@@ -453,6 +455,15 @@ function getRecoveredLabel(kind: ConditionKind, secs: number) {
   return kind === 'offline' ? 'As soon as data comes back' : 'As soon as it recovers';
 }
 
+export function getResolveDescription(kind: ConditionKind) {
+  if (!hasThreshold(kind)) {
+    return 'How long it must stay healthy before it resolves';
+  }
+
+  const side = kind === 'cert_days' ? 'over' : 'under';
+  return `How long it must stay ${side} the limit before it resolves`;
+}
+
 export function getResolveGroups(form: RuleFormState) {
   if (!hasThreshold(form.kind)) {
     return [RESOLVE_OPTIONS.map((option) => ({ value: `limit:${option.value}`, label: getRecoveredLabel(form.kind, option.value) }))];
@@ -514,6 +525,10 @@ export function getMoreOptionsSummary(form: RuleFormState) {
   ]
     .filter(Boolean)
     .join(' · ');
+}
+
+export function getTimesText(count: number) {
+  return count === 1 ? 'once' : `${count} times`;
 }
 
 export function getChangedCountText(count: number) {

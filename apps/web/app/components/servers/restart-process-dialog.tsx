@@ -32,19 +32,27 @@ export function RestartProcessDialog(props: RestartProcessDialogProps) {
   const processes = server.last_report?.processes ?? [];
 
   useLinkAction('restart', isMeLoaded, (processName) => {
-    const process = processes.find((item) => item.name === processName);
     if (me?.role !== 'admin') {
       toast.error('Only admins can restart processes. Ask an admin.');
-    } else if (!process) {
-      toast.info(`${server.name} no longer watches ${processName}.`);
-    } else if (!process.controllable) {
-      toast.info(`Daroyan can’t restart ${processName}. It is watch only.`);
-    } else if (process.status === 'running') {
-      toast.success(`${processName} is running again.`);
-    } else {
-      setName(processName);
-      setIsOpen(true);
+      return;
     }
+
+    const process = processes.find((item) => item.name === processName);
+    if (!process) {
+      toast.info(`${server.name} no longer watches ${processName}.`);
+      return;
+    }
+    if (!process.controllable) {
+      toast.info(`Daroyan can’t restart ${processName}. It is watch only.`);
+      return;
+    }
+    if (process.status === 'running') {
+      toast.success(`${processName} is running again.`);
+      return;
+    }
+
+    setName(processName);
+    setIsOpen(true);
   });
 
   const alert = firing.find((item) => item.server_id === server.id && item.subject === name);

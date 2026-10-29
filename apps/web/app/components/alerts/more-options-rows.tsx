@@ -7,10 +7,11 @@ import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Switch } from '~/components/ui/switch';
 import type { NoData } from '~/utils/alerts';
-import { hasThreshold, MESSAGE_LIMIT_OPTIONS, NO_DATA_OPTIONS, REMIND_OPTIONS } from '~/utils/alerts';
+import { MESSAGE_LIMIT_OPTIONS, NO_DATA_OPTIONS, REMIND_OPTIONS } from '~/utils/alerts';
 import {
   DECLARE_SEVERITY_OPTIONS,
   DECLARE_SHOWN_OPTIONS,
+  getResolveDescription,
   getResolveGroups,
   readRecovery,
   readTargetNoun,
@@ -39,11 +40,7 @@ export function MoreOptionsRows(props: MoreOptionsRowsProps) {
     <>
       <SettingRow
         title="Resolve When"
-        description={
-          hasThreshold(kind)
-            ? `How long it must stay ${kind === 'cert_days' ? 'over' : 'under'} the limit before it resolves`
-            : 'How long it must stay healthy before it resolves'
-        }
+        description={getResolveDescription(kind)}
         isChanged={changed?.resolve}
         control={(labelId) => (
           <PlainSelect labelId={labelId} value={resolveValue} onValueChange={changeResolve} groups={getResolveGroups(form)} />
@@ -95,27 +92,23 @@ export function MoreOptionsRows(props: MoreOptionsRowsProps) {
         description="No messages during planned work, like a nightly backup"
         isChanged={changed?.quietHours}
         actions={
-          quietHours.length === 0 ? (
-            <Button type="button" variant="tertiary" className="w-fit" onClick={() => onChange({ quietHours: [DEFAULT_QUIET_WINDOW] })}>
-              Add Quiet Hours
-            </Button>
-          ) : (
-            <div className="flex gap-2">
-              {quietHours.length < 5 && (
-                <Button
-                  type="button"
-                  variant="tertiary"
-                  className="w-fit"
-                  onClick={() => onChange({ quietHours: [...quietHours, DEFAULT_QUIET_WINDOW] })}
-                >
-                  Add Another Window
-                </Button>
-              )}
+          <div className="flex gap-2">
+            {quietHours.length < 5 && (
+              <Button
+                type="button"
+                variant="tertiary"
+                className="w-fit"
+                onClick={() => onChange({ quietHours: [...quietHours, DEFAULT_QUIET_WINDOW] })}
+              >
+                {quietHours.length === 0 ? 'Add Quiet Hours' : 'Add Another Window'}
+              </Button>
+            )}
+            {quietHours.length > 0 && (
               <Button type="button" variant="tertiary" className="w-fit" onClick={() => onChange({ quietHours: [] })}>
                 Remove Quiet Hours
               </Button>
-            </div>
-          )
+            )}
+          </div>
         }
       >
         {quietHours.length > 0 && (

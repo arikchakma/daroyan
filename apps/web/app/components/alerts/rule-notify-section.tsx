@@ -38,6 +38,15 @@ export function RuleNotifySection(props: RuleNotifySectionProps) {
   );
   const hiddenCount = integrations.length - visible.length;
 
+  const addIntegration = () => {
+    if (hiddenCount > 0) {
+      setShownIds(integrations.map((integration) => integration.id));
+      return;
+    }
+
+    setIsAddOpen(true);
+  };
+
   return (
     <>
       <FormSection
@@ -69,7 +78,7 @@ export function RuleNotifySection(props: RuleNotifySectionProps) {
         ))}
         <button
           type="button"
-          onClick={() => (hiddenCount > 0 ? setShownIds(integrations.map((integration) => integration.id)) : setIsAddOpen(true))}
+          onClick={addIntegration}
           className="flex items-center gap-2 bg-surface-subtle px-3.5 py-2.5 text-left text-body font-medium outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40 focus-visible:ring-inset"
         >
           <Icon name="plus" className="size-3.5" />

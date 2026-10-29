@@ -67,21 +67,25 @@ export function AlertBanners(props: AlertBannersProps) {
       (cronId && alert.cron_id === cronId)
   );
 
-  const openFromLink = (alertId: string, open: (alert: Schemas['Alert']) => void) => {
+  useLinkAction('mute', isFiringLoaded, (alertId) => {
     const alert = alerts.find((item) => item.id === alertId);
-    if (alert) {
-      open(alert);
-    } else {
+    if (!alert) {
       toast.info('This alert is no longer firing.');
+      return;
     }
-  };
 
-  useLinkAction('mute', isFiringLoaded, (alertId) =>
-    openFromLink(alertId, (alert) => setMuting({ alert, isWholeRule: false }))
-  );
-  useLinkAction('declare', isFiringLoaded, (alertId) =>
-    openFromLink(alertId, (alert) => setDeclaring(toDeclareDefaults(alert)))
-  );
+    setMuting({ alert, isWholeRule: false });
+  });
+
+  useLinkAction('declare', isFiringLoaded, (alertId) => {
+    const alert = alerts.find((item) => item.id === alertId);
+    if (!alert) {
+      toast.info('This alert is no longer firing.');
+      return;
+    }
+
+    setDeclaring(toDeclareDefaults(alert));
+  });
 
   if (alerts.length === 0) {
     return null;
