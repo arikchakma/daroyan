@@ -99,7 +99,9 @@ impl Analytics {
 
     pub fn buffer_report(&self, server_id: &str, report: &Report) {
         let mut pending = lock(&self.pending);
-        if pending.states.len() + pending.events.len() >= MAX_PENDING_ROWS {
+        if pending.states.len() + pending.disks.len() + pending.events.len()
+            >= MAX_PENDING_ROWS
+        {
             tracing::warn!(server_id, "dropped a report, the write buffer is full");
             return;
         }
@@ -110,7 +112,9 @@ impl Analytics {
 
     pub fn buffer_server_event(&self, server_id: &str, kind: &str) {
         let mut pending = lock(&self.pending);
-        if pending.states.len() + pending.events.len() >= MAX_PENDING_ROWS {
+        if pending.states.len() + pending.disks.len() + pending.events.len()
+            >= MAX_PENDING_ROWS
+        {
             tracing::warn!(
                 server_id,
                 kind,
