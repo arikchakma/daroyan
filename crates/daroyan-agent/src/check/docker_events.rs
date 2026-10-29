@@ -9,12 +9,14 @@ use log::warn;
 use serde::Deserialize;
 
 const KEEP_FOR: Duration = Duration::from_secs(600);
+const ACTIONS: [&str; 5] = ["start", "die", "kill", "stop", "oom"];
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DockerAction {
     pub action: String,
     pub exit_code: Option<i32>,
+    pub signal: Option<String>,
     at: Instant,
 }
 
@@ -59,9 +61,14 @@ impl DockerEvents {
         loop {
             let (program, prefix): (&str, &[&str]) =
                 if use_sudo { ("sudo", &["-n", "docker"]) } else { ("docker", &[]) };
+            let filters = ACTIONS
+                .iter()
+                .flat_map(|action| ["--filter".to_string(), format!("event={action}")]);
             let child = Command::new(program)
                 .args(prefix)
-                .args(["events", "--filter", "type=container", "--format", "{{json .}}"])
+                .args(["events", "--filter", "type=container"])
+                .args(filters)
+                .args(["--format", "{{json .}}"])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn();
@@ -89,26 +96,32 @@ impl DockerEvents {
             .attributes
             .get("exitCode")
             .and_then(|code| code.parse().ok());
+        if !ACTIONS.contains(&action.as_str()) {
+            return;
+        }
+        let signal = event.actor.attributes.get("signal").cloned();
         let mut actions = lock(&self.actions);
         actions.retain(|_, list| {
-            list.retain(|item| at.duration_since(item.at) < KEEP_FOR);
-            !list.is_empty()
+            list.last().is_some_and(|item| at.duration_since(item.at) < KEEP_FOR)
         });
-        actions.entry(event.actor.id).or_default().push(DockerAction {
-            action,
-            exit_code,
-            at,
-        });
+        let list = actions.entry(event.actor.id).or_default();
+        list.retain(|item| at.duration_since(item.at) < KEEP_FOR);
+        list.push(DockerAction { action, exit_code, signal, at });
     }
 }
 
 pub fn was_stopped(actions: &[DockerAction]) -> bool {
     let last_die = actions.iter().rposition(|item| item.action == "die");
     let before = &actions[..last_die.unwrap_or(actions.len())];
-    before
-        .iter()
-        .any(|item| item.action == "stop" || item.action == "kill")
-        && !before.iter().any(|item| item.action == "oom")
+    before.iter().any(|item| {
+        item.action == "stop" || (item.action == "kill" && is_ending_signal(item))
+    }) && !before.iter().any(|item| item.action == "oom")
+}
+
+fn is_ending_signal(action: &DockerAction) -> bool {
+    action.signal.as_deref().is_none_or(|signal| {
+        matches!(signal, "9" | "15" | "KILL" | "TERM" | "SIGKILL" | "SIGTERM")
+    })
 }
 
 pub fn was_oom(actions: &[DockerAction]) -> bool {
@@ -134,6 +147,10 @@ mod tests {
     fn record(events: &DockerEvents, action: &str, exit_code: Option<&str>) {
         let attributes =
             exit_code.map_or_else(String::new, |code| format!(r#","exitCode":"{code}""#));
+        record_with(events, action, &attributes);
+    }
+
+    fn record_with(events: &DockerEvents, action: &str, attributes: &str) {
         events.record(
             &format!(r#"{{"Type":"container","Action":"{action}","Actor":{{"ID":"c1","Attributes":{{"name":"api"{attributes}}}}}}}"#),
             Instant::now(),
@@ -186,11 +203,26 @@ mod tests {
     }
 
     #[test]
-    fn keeps_the_action_name_before_a_colon() {
+    fn keeps_only_lifecycle_actions() {
         let events = DockerEvents::default();
         record(&events, "exec_start: sh", None);
-        assert_eq!(events.list_last_run("c1")[0].action, "exec_start");
+        record(&events, "health_status: healthy", None);
         events.record("not json", Instant::now());
-        assert_eq!(events.list_last_run("c1").len(), 1);
+        assert!(events.list_last_run("c1").is_empty());
+        record(&events, "die", Some("1"));
+        assert_eq!(events.list_last_run("c1")[0].action, "die");
+    }
+
+    #[test]
+    fn treats_a_reload_signal_as_a_crash() {
+        let reloaded = DockerEvents::default();
+        record_with(&reloaded, "kill", r#","signal":"1""#);
+        record(&reloaded, "die", Some("1"));
+        assert!(!was_stopped(&reloaded.list_last_run("c1")));
+
+        let killed = DockerEvents::default();
+        record_with(&killed, "kill", r#","signal":"9""#);
+        record(&killed, "die", Some("137"));
+        assert!(was_stopped(&killed.list_last_run("c1")));
     }
 }
