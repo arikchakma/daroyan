@@ -55,7 +55,7 @@ fn pick_top(mut groups: Vec<TopProcess>) -> Vec<TopProcess> {
 fn read_name(process: &Process) -> String {
     let name = process.name().to_string_lossy().to_string();
     if is_interpreter(&name)
-        && let Some(script) = find_script(process.cmd())
+        && let Some(script) = find_script(&name, process.cmd())
     {
         return script;
     }
@@ -69,13 +69,18 @@ fn is_interpreter(name: &str) -> bool {
     INTERPRETERS.contains(&base)
 }
 
-fn find_script(cmd: &[OsString]) -> Option<String> {
+fn find_script(interpreter: &str, cmd: &[OsString]) -> Option<String> {
+    let is_php = interpreter.starts_with("php");
     let mut args = cmd.iter().skip(1).map(|arg| arg.to_string_lossy());
     while let Some(arg) = args.next() {
         match arg.as_ref() {
             "-m" | "-jar" => return to_script_name(&args.next()?),
-            "-c" | "-e" | "-E" | "-r" | "-p" | "--eval" | "--print" | "--command" => {
+            "-r" if is_php => return None,
+            "-c" | "-e" | "-E" | "-p" | "--eval" | "--print" | "--command" => {
                 return None;
+            }
+            "-r" => {
+                args.next();
             }
             "-cp" | "-classpath" | "--class-path" | "-W" | "-X" | "-I" | "--require"
             | "--import" | "--loader" => {
@@ -122,31 +127,40 @@ mod tests {
         assert!(is_interpreter("node"));
         assert!(!is_interpreter("nginx"));
         assert_eq!(
-            find_script(&cmd(&[
+            find_script(
                 "node",
-                "--max-old-space-size=512",
-                "/app/dist/server.js"
-            ])),
+                &cmd(&["node", "--max-old-space-size=512", "/app/dist/server.js"])
+            ),
             Some("server.js".to_string())
         );
         assert_eq!(
-            find_script(&cmd(&["python3", "-m", "celery", "worker"])),
+            find_script("python3", &cmd(&["python3", "-m", "celery", "worker"])),
             Some("celery".to_string())
         );
         assert_eq!(
-            find_script(&cmd(&["java", "-Xmx1g", "-jar", "/opt/app/billing.jar"])),
+            find_script(
+                "java",
+                &cmd(&["java", "-Xmx1g", "-jar", "/opt/app/billing.jar"])
+            ),
             Some("billing.jar".to_string())
         );
-        assert_eq!(find_script(&cmd(&["bash", "-c", "sleep 1"])), None);
-        assert_eq!(find_script(&cmd(&["php", "-r", "echo getenv('KEY');"])), None);
-        assert_eq!(find_script(&cmd(&["node", "--eval", "run()"])), None);
-        assert_eq!(find_script(&cmd(&["node", "-r", "dotenv/config", "app.js"])), None);
+        assert_eq!(find_script("bash", &cmd(&["bash", "-c", "sleep 1"])), None);
+        assert_eq!(find_script("php", &cmd(&["php", "-r", "echo getenv('KEY');"])), None);
+        assert_eq!(find_script("node", &cmd(&["node", "--eval", "run()"])), None);
         assert_eq!(
-            find_script(&cmd(&["java", "-cp", "/opt/x.jar", "com.acme.Main"])),
+            find_script("node", &cmd(&["node", "-r", "dotenv/config", "app.js"])),
+            Some("app.js".to_string())
+        );
+        assert_eq!(
+            find_script("ruby", &cmd(&["ruby", "-r", "bundler/setup", "worker.rb"])),
+            Some("worker.rb".to_string())
+        );
+        assert_eq!(
+            find_script("java", &cmd(&["java", "-cp", "/opt/x.jar", "com.acme.Main"])),
             Some("com.acme.Main".to_string())
         );
-        assert_eq!(find_script(&cmd(&["sh", "echo $TOKEN; run"])), None);
-        assert_eq!(find_script(&cmd(&["node"])), None);
+        assert_eq!(find_script("sh", &cmd(&["sh", "echo $TOKEN; run"])), None);
+        assert_eq!(find_script("node", &cmd(&["node"])), None);
     }
 
     #[test]
