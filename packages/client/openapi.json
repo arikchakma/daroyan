@@ -2359,6 +2359,15 @@
             }
           },
           {
+            "name": "server_id",
+            "in": "query",
+            "description": "Only traces whose `host.name` matches this server",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "status",
             "in": "query",
             "description": "`error` keeps traces with an error span",
@@ -3425,6 +3434,49 @@
             }
           }
         ]
+      },
+      "Container": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "image"
+        ],
+        "properties": {
+          "config_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "image_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "CreateAlertMuteBody": {
         "type": "object",
@@ -4881,12 +4933,17 @@
           "id",
           "name",
           "hint",
-          "created_at"
+          "created_at",
+          "dropped_log_records"
         ],
         "properties": {
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "dropped_log_records": {
+            "type": "integer",
+            "format": "int64"
           },
           "hint": {
             "type": "string"
@@ -5258,6 +5315,12 @@
           },
           "state": {
             "$ref": "#/components/schemas/State"
+          },
+          "top": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TopProcess"
+            }
           }
         }
       },
@@ -5702,6 +5765,16 @@
           "write_speed"
         ],
         "properties": {
+          "container": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Container"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "controllable": {
             "type": "boolean"
           },
@@ -6892,6 +6965,34 @@
           }
         }
       },
+      "TopProcess": {
+        "type": "object",
+        "required": [
+          "name",
+          "count",
+          "cpu",
+          "mem_used"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "cpu": {
+            "type": "number",
+            "format": "float"
+          },
+          "mem_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "TraceService": {
         "type": "object",
         "required": [
@@ -6987,6 +7088,12 @@
           "resource": {
             "type": "object"
           },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "service": {
             "type": "string"
           },
@@ -7068,6 +7175,12 @@
           },
           "name": {
             "type": "string"
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "service": {
             "type": "string"

@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
 import type { ColumnVisibilityState, SortingState } from '@tanstack/react-table';
 import { useMemo } from 'react';
@@ -7,6 +8,7 @@ import { Icon } from '~/components/icons/icon';
 import { Badge } from '~/components/ui/badge';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
+import { listServersOptions } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { formatLogStamp, formatLogTime } from '~/utils/format';
 import { describeSpans, formatMicros, getServiceColor, getTraceStatus } from '~/utils/traces';
@@ -33,6 +35,26 @@ export function ServiceDot(props: { service: string; color?: string; className?:
       className={cn('inline-block size-1.5 shrink-0 rounded-full', className)}
       style={{ backgroundColor: color ?? getServiceColor(service) }}
     />
+  );
+}
+
+type TraceServerProps = {
+  trace: TraceSummary;
+};
+
+function TraceServer(props: TraceServerProps) {
+  const { trace } = props;
+
+  const { data: servers } = useQuery(listServersOptions());
+  const server = servers?.find((item) => item.id === trace.server_id);
+  if (!server) {
+    return <span className="truncate">{trace.host ?? '—'}</span>;
+  }
+
+  return (
+    <Link to={`/servers/${server.id}`} className="relative z-10 truncate outline-none hover:underline focus-visible:underline">
+      {server.name}
+    </Link>
   );
 }
 
@@ -76,7 +98,7 @@ const columns = helper.columns([
     cell: ({ row }) => (
       <span className="flex min-w-0 items-center gap-1.5 text-caption text-text-secondary">
         <Icon name="server" className="size-3.5 shrink-0" />
-        <span className="truncate">{row.original.host ?? '—'}</span>
+        <TraceServer trace={row.original} />
       </span>
     ),
   }),

@@ -29,7 +29,7 @@ hyper-util = { version = "0.1.20", features = ["tokio"] }
 governor = { version = "0.10.4", default-features = false, features = ["std", "dashmap", "quanta"] }
 hex = "0.4.3"
 ipnet = "2.12.2"
-opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "trace", "with-serde"] }
+opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "logs", "trace", "with-serde"] }
 prost = "0.14.4"
 rand = "0.9"
 sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-sqlite", "with-chrono", "with-json"] }

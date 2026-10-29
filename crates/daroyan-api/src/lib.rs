@@ -14,7 +14,7 @@ use daroyan_core::analytics::Analytics;
 use daroyan_core::config::Config;
 use daroyan_core::crons::Crons;
 use daroyan_core::db::Database;
-use daroyan_core::limits::Limits;
+use daroyan_core::limits::{Limits, LogBudgets};
 use daroyan_core::uptime::Uptime;
 
 #[derive(Clone)]
@@ -24,6 +24,7 @@ pub struct AppState {
     pub analytics: Analytics,
     pub agents: Agents,
     pub limits: Limits,
+    pub log_budgets: LogBudgets,
     pub connects: ConnectStates,
     pub uptime: Uptime,
     pub crons: Crons,

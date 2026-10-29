@@ -43,7 +43,7 @@ pub struct ParsedLine {
     pub attributes: Map<String, Value>,
 }
 
-fn read_level_word(word: &str) -> Option<u8> {
+pub(crate) fn read_level_word(word: &str) -> Option<u8> {
     match word.to_ascii_lowercase().as_str() {
         "fatal" | "panic" | "crit" | "critical" | "emerg" | "alert" => {
             Some(SEVERITY_FATAL)

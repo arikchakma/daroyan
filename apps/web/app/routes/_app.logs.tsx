@@ -28,6 +28,7 @@ import { cn } from '~/utils/classname';
 import { joinNames } from '~/utils/alerts';
 import { readListParam } from '~/utils/filter';
 import type { SearchFilterField } from '~/utils/filter';
+import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
 const PAGE_SIZE = 50;
 const EXPORT_LIMIT = 5_000;
@@ -155,7 +156,11 @@ export default function LogsPage() {
     )
   );
 
-  const serverNames = new Map((servers ?? []).map((server) => [server.id, server.name]));
+  const serverNames = new Map([
+    [OTLP_SERVER_ID, OTLP_SERVER_NAME],
+    ...(servers ?? []).map((server) => [server.id, server.name] as const),
+  ]);
+  const hasOtlpLines = (sources ?? []).some((source) => source.server_id === OTLP_SERVER_ID);
   const lines = collapseRepeats(data?.lines ?? [], serverNames);
   const hasRequests = (data?.lines ?? []).some(hasHttp);
   const columnVisibility: ColumnVisibilityState = {
@@ -217,7 +222,10 @@ export default function LogsPage() {
       negatable: true,
       plural: 'servers',
       isLoading: !servers,
-      options: (servers ?? []).map((server) => ({ value: server.id, label: server.name })),
+      options: [
+        ...(servers ?? []).map((server) => ({ value: server.id, label: server.name })),
+        ...(hasOtlpLines ? [{ value: OTLP_SERVER_ID, label: OTLP_SERVER_NAME }] : []),
+      ],
     },
     {
       key: 'service',
@@ -320,7 +328,7 @@ export default function LogsPage() {
           icon="terminal"
           marks={['check', 'check', 'check']}
           title="No logs yet"
-          description="Turn on logs for a docker or systemd process in the agent config, or list a log file to follow."
+          description="Turn on logs for a docker or systemd process in the agent config, list a log file to follow, or send logs with an OpenTelemetry SDK."
         />
       ) : (
         <div className="flex flex-1 flex-col gap-2 px-3 pt-1 pb-3">

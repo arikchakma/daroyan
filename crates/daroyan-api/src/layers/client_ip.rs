@@ -60,6 +60,7 @@ mod tests {
             duckdb_path: "unused".into(),
             retention_days: 30,
             log_retention_days: 7,
+            otlp_log_budget: 1024 * 1024,
             backup_dir: None,
             trusted_proxies: parse_trusted_proxies("127.0.0.1,::1").unwrap(),
             client_ip_header: "cf-connecting-ip".to_string(),

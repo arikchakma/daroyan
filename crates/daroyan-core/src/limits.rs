@@ -17,6 +17,7 @@ const SOCKET_PER_SECOND: NonZeroU32 = NonZeroU32::new(20).unwrap();
 const SOCKET_BURST: NonZeroU32 = NonZeroU32::new(200).unwrap();
 const AUTH_FAILURE_LIMIT: u32 = 10;
 const AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
+const LOG_BUDGET_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct Limits {
@@ -110,6 +111,54 @@ pub fn new_socket_limiter() -> DefaultDirectRateLimiter {
     RateLimiter::direct(Quota::per_second(SOCKET_PER_SECOND).allow_burst(SOCKET_BURST))
 }
 
+#[derive(Clone)]
+pub struct LogBudgets {
+    limit: u64,
+    windows: Arc<Mutex<HashMap<String, BudgetWindow>>>,
+}
+
+struct BudgetWindow {
+    started_at: Instant,
+    used: u64,
+}
+
+impl LogBudgets {
+    pub fn new(limit: u64) -> Self {
+        Self { limit, windows: Arc::default() }
+    }
+
+    pub fn keep<T>(
+        &self,
+        key: &str,
+        items: Vec<T>,
+        size: impl Fn(&T) -> u64,
+    ) -> (Vec<T>, u64) {
+        let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
+        let window = windows
+            .entry(key.to_string())
+            .or_insert(BudgetWindow { started_at: Instant::now(), used: 0 });
+        if window.started_at.elapsed() >= LOG_BUDGET_WINDOW {
+            *window = BudgetWindow { started_at: Instant::now(), used: 0 };
+        }
+
+        let mut dropped = 0;
+        let kept = items
+            .into_iter()
+            .filter(|item| {
+                let size = size(item);
+                if window.used + size > self.limit {
+                    dropped += 1;
+                    return false;
+                }
+                window.used += size;
+                true
+            })
+            .collect();
+
+        (kept, dropped)
+    }
+}
+
 fn too_many_requests() -> Error {
     Error::new(ErrorName::RateLimitExceeded, "Too many requests. Please try again later.")
 }
@@ -150,6 +199,19 @@ mod tests {
             allowed += 1;
         }
         assert_eq!(allowed, SOCKET_BURST.get());
+    }
+
+    #[test]
+    fn keeps_log_records_until_the_budget_is_spent() {
+        let budgets = LogBudgets::new(10);
+        let (kept, dropped) = budgets.keep("ing_1", vec![4, 4, 4, 1], |size| *size);
+        assert_eq!((kept, dropped), (vec![4, 4, 1], 1));
+
+        let (kept, dropped) = budgets.keep("ing_1", vec![2], |size| *size);
+        assert_eq!((kept, dropped), (vec![], 1));
+
+        let (kept, dropped) = budgets.keep("ing_2", vec![10], |size| *size);
+        assert_eq!((kept, dropped), (vec![10], 0));
     }
 
     #[test]

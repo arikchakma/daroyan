@@ -14,6 +14,7 @@ import { toast } from '~/lib/toast';
 import { logContextOptions } from '~/queries/logs';
 import { cn } from '~/utils/classname';
 import { formatLogClock, formatLogStamp } from '~/utils/format';
+import { getLogOrigin, OTLP_SERVER_ID } from '~/utils/logs';
 
 type LogSheetProps = {
   line?: LogRow;
@@ -79,9 +80,11 @@ export function LogSheet(props: LogSheetProps) {
                     >
                       Copy JSON
                     </ActionPill>
-                    <ActionPill icon="bell" tone="light" onClick={() => navigate(buildAlertLink(line))}>
-                      Alert on This
-                    </ActionPill>
+                    {line.server_id !== OTLP_SERVER_ID && (
+                      <ActionPill icon="bell" tone="light" onClick={() => navigate(buildAlertLink(line))}>
+                        Alert on This
+                      </ActionPill>
+                    )}
                   </>
                 )}
               </div>
@@ -131,9 +134,7 @@ function LogBody(props: LogBodyProps) {
       <div className="flex min-w-0 flex-1 flex-col gap-6 px-10 pt-6 max-lg:px-4">
         <div className="flex flex-wrap items-center gap-3">
           <LevelBadge level={line.level} />
-          <p className="text-body text-text-secondary">
-            {line.service} wrote this to {line.stream} on {line.serverName}.
-          </p>
+          <p className="text-body text-text-secondary">{getLogOrigin(line)}</p>
         </div>
 
         <section className="flex flex-col gap-2.5">

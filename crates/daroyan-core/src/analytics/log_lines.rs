@@ -3,18 +3,30 @@ use std::collections::HashMap;
 use daroyan_protocol::log::{LogBatch, SEVERITY_INFO, SEVERITY_WARN};
 use duckdb::types::Value as SqlValue;
 use duckdb::{Connection, params, params_from_iter};
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::common::v1::AnyValue;
+use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValueKind;
+use opentelemetry_proto::tonic::logs::v1::LogRecord;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
-use crate::analytics::log_parse::{normalize_json_line, parse_text_line, take_json_time};
+use crate::analytics::log_parse::{
+    normalize_json_line, parse_text_line, read_level_word, take_json_time,
+};
+use crate::analytics::spans::{
+    UNKNOWN_SERVICE, find_text, to_hex, to_json_map, to_json_value,
+};
 use crate::analytics::{Analytics, clamp_future_ms};
 use crate::error::Result;
+use crate::servers::hosts::HostIndex;
 
 const MAX_LINES: usize = 5_000;
 const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_NAME_BYTES: usize = 200;
 const AGENT_SERVICE: &str = "Daroyan agent";
+const LINE_OVERHEAD: u64 = 64;
+pub const OTLP_SERVER_ID: &str = "otlp";
 
 pub struct LogRow {
     server_id: String,
@@ -27,6 +39,13 @@ pub struct LogRow {
     trace_id: Option<String>,
     span_id: Option<String>,
     raw: Option<String>,
+}
+
+impl LogRow {
+    pub fn size(&self) -> u64 {
+        (self.message.len() + self.attributes.as_ref().map_or(0, String::len)) as u64
+            + LINE_OVERHEAD
+    }
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -102,6 +121,95 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
         });
     }
     rows
+}
+
+pub fn to_otlp_log_rows(
+    request: &ExportLogsServiceRequest,
+    hosts: &HostIndex,
+    now_ms: i64,
+) -> Vec<LogRow> {
+    let mut rows = Vec::new();
+    for resource_logs in &request.resource_logs {
+        let resource = resource_logs
+            .resource
+            .as_ref()
+            .map(|resource| resource.attributes.as_slice())
+            .unwrap_or_default();
+        let service = find_text(resource, &["service.name"])
+            .unwrap_or_else(|| UNKNOWN_SERVICE.to_string());
+        let server_id = find_text(resource, &["host.name"])
+            .and_then(|host_name| hosts.find(&host_name).map(str::to_string))
+            .unwrap_or_else(|| OTLP_SERVER_ID.to_string());
+        let Value::Object(resource) = to_json_map(resource) else { continue };
+
+        for scope_logs in &resource_logs.scope_logs {
+            let scope = scope_logs.scope.as_ref().map(|scope| scope.name.as_str());
+            for record in &scope_logs.log_records {
+                let mut attributes = resource.clone();
+                if let Some(scope) = scope.filter(|scope| !scope.is_empty()) {
+                    attributes.insert("otel.scope.name".into(), scope.into());
+                }
+                if let Value::Object(own) = to_json_map(&record.attributes) {
+                    attributes.extend(own);
+                }
+
+                rows.push(to_otlp_log_row(
+                    record, &server_id, &service, attributes, now_ms,
+                ));
+            }
+        }
+    }
+
+    rows
+}
+
+fn to_otlp_log_row(
+    record: &LogRecord,
+    server_id: &str,
+    service: &str,
+    attributes: Map<String, Value>,
+    now_ms: i64,
+) -> LogRow {
+    let at = [record.time_unix_nano, record.observed_time_unix_nano]
+        .into_iter()
+        .find(|nanos| *nanos > 0)
+        .and_then(|nanos| i64::try_from(nanos / 1_000_000).ok())
+        .unwrap_or(now_ms);
+
+    LogRow {
+        server_id: server_id.to_string(),
+        at: clamp_future_ms(at, now_ms),
+        service: cut(service, MAX_NAME_BYTES),
+        stream: "otlp",
+        severity: read_otlp_severity(record),
+        message: cut(&read_body(record.body.as_ref()), MAX_MESSAGE_BYTES),
+        attributes: (!attributes.is_empty())
+            .then(|| Value::Object(attributes).to_string()),
+        trace_id: to_hex(&record.trace_id),
+        span_id: to_hex(&record.span_id),
+        raw: serde_json::to_string(record)
+            .ok()
+            .map(|raw| cut(&raw, MAX_MESSAGE_BYTES)),
+    }
+}
+
+fn read_otlp_severity(record: &LogRecord) -> u8 {
+    if let Ok(severity @ 1..=24) = u8::try_from(record.severity_number) {
+        return severity;
+    }
+
+    read_level_word(record.severity_text.trim()).unwrap_or(SEVERITY_INFO)
+}
+
+fn read_body(body: Option<&AnyValue>) -> String {
+    let Some(body) = body else { return String::new() };
+    match &body.value {
+        Some(AnyValueKind::StringValue(text)) => text.clone(),
+        _ => match to_json_value(body) {
+            Value::Null => String::new(),
+            value => value.to_string(),
+        },
+    }
 }
 
 pub fn append_logs(conn: &Connection, rows: &[LogRow]) -> duckdb::Result<()> {

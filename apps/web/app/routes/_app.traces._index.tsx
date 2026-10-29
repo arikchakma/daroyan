@@ -13,6 +13,7 @@ import { PageBar } from '~/components/ui/page-bar';
 import { Pager } from '~/components/ui/pager';
 import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { TRACE_COLUMN_LABELS, useTracesTable } from '~/hooks/use-traces-table';
+import { listServersOptions } from '~/queries/servers';
 import { listTracesOptions, traceStatusOptions } from '~/queries/traces';
 import { SLOW_MS } from '~/utils/traces';
 
@@ -59,14 +60,18 @@ export default function TracesPage() {
   const view = VIEWS.find((item) => item.value === searchParams.get('view'))?.value ?? 'all';
   const sort = SORTS.find((item) => item.value === searchParams.get('sort')) ?? SORTS[0];
   const search = searchParams.get('q') ?? '';
+  const serverId = searchParams.get('server') ?? '';
   const page = Math.max(Number(searchParams.get('page')) || 1, 1);
 
   const [hiddenColumns, setHiddenColumns] = useState(readColumns);
 
   const { data: status } = useQuery(traceStatusOptions());
+  const { data: servers } = useQuery(listServersOptions());
+  const server = servers?.find((item) => item.id === serverId);
   const { data, isLoading } = useQuery(
     listTracesOptions({
       rangeMs: range.ms,
+      server_id: serverId || undefined,
       status: view === 'error' ? 'error' : undefined,
       min_duration_ms: view === 'slow' ? SLOW_MS : undefined,
       q: search.trim() || undefined,
@@ -117,6 +122,29 @@ export default function TracesPage() {
   return (
     <div className="flex min-h-full flex-col bg-surface-default">
       <PageBar icon="layers" title="Traces">
+        {servers && servers.length > 0 && (
+          <Menu.Root>
+            <Menu.Trigger render={<Button variant="secondary" className="w-fit" />}>
+              <Icon name="server" />
+              {server?.name ?? 'All Servers'}
+              <Icon name="chevron-down" />
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner align="end">
+                <Menu.Popup className="min-w-40">
+                  <Menu.RadioGroup value={serverId} onValueChange={(value: string) => setParams({ server: value || null })}>
+                    <Menu.RadioItem value="">All Servers</Menu.RadioItem>
+                    {servers.map((item) => (
+                      <Menu.RadioItem key={item.id} value={item.id}>
+                        {item.name}
+                      </Menu.RadioItem>
+                    ))}
+                  </Menu.RadioGroup>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
+        )}
         <Menu.Root>
           <Menu.Trigger render={<Button variant="secondary" className="w-fit" />}>
             <Icon name="calendar" />

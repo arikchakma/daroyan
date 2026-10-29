@@ -140,6 +140,18 @@ impl Analytics {
         pending.logs.extend(rows);
     }
 
+    pub fn buffer_log_rows(&self, rows: Vec<LogRow>) -> Result<()> {
+        let mut pending = lock(&self.pending);
+        if pending.logs.len() >= MAX_PENDING_ROWS {
+            return Err(Error::new(
+                ErrorName::RateLimitExceeded,
+                "Too many log records at once. Retry in a few seconds",
+            ));
+        }
+        pending.logs.extend(rows);
+        Ok(())
+    }
+
     pub fn buffer_spans(
         &self,
         spans: Vec<SpanRow>,

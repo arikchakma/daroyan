@@ -39,6 +39,7 @@ start. Put TLS in front of it with a reverse proxy.
 | `DUCKDB_BACKUP_DIR` | No | – | If set, periodic DuckDB backups are written here. |
 | `RETENTION_DAYS` | No | `30` | Days of metrics/traces kept. |
 | `LOG_RETENTION_DAYS` | No | `7` | Days of logs kept. |
+| `OTLP_LOG_BUDGET_KB` | No | `1024` | The most OpenTelemetry log data each ingest token can send per minute, in KB. Records over it are dropped and counted in Settings → Telemetry. |
 | `TRUSTED_PROXIES` | No | `127.0.0.1,::1` | CIDRs allowed to set the real-client-IP header. See the warning below. |
 | `CLIENT_IP_HEADER` | No | `cf-connecting-ip` | Header your proxy sets with the real client IP. Use `x-forwarded-for` for most proxies. |
 | `ALLOW_PRIVATE_TARGETS` | No | `false` | Allow uptime checks against private/localhost addresses. **Keep `false` in production** (it is the SSRF guard). Only enable if you monitor LAN hosts. |

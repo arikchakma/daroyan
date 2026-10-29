@@ -1365,6 +1365,15 @@ export interface components {
             /** @enum {string} */
             kind: "cron_failed";
         };
+        Container: {
+            config_hash?: string | null;
+            id: string;
+            image: string;
+            image_id?: string | null;
+            name: string;
+            project?: string | null;
+            service?: string | null;
+        };
         CreateAlertMuteBody: {
             check_id?: string | null;
             cron_id?: string | null;
@@ -1753,6 +1762,8 @@ export interface components {
         IngestToken: {
             /** Format: date-time */
             created_at: string;
+            /** Format: int64 */
+            dropped_log_records: number;
             hint: string;
             id: string;
             /** Format: date-time */
@@ -1852,6 +1863,7 @@ export interface components {
             ports: components["schemas"]["PortState"][];
             processes: components["schemas"]["ProcessState"][];
             state: components["schemas"]["State"];
+            top?: components["schemas"]["TopProcess"][];
         };
         LogLine: {
             /** Format: int64 */
@@ -1970,6 +1982,7 @@ export interface components {
             } | null;
         };
         ProcessState: {
+            container?: components["schemas"]["Container"] | null;
             controllable?: boolean;
             /** Format: int32 */
             count: number;
@@ -2303,6 +2316,15 @@ export interface components {
         TestIntegrationBody: {
             config: components["schemas"]["IntegrationConfig"];
         };
+        TopProcess: {
+            /** Format: int32 */
+            count: number;
+            /** Format: float */
+            cpu: number;
+            /** Format: int64 */
+            mem_used: number;
+            name: string;
+        };
         TraceService: {
             /** Format: int64 */
             error_count: number;
@@ -2327,6 +2349,7 @@ export interface components {
             name: string;
             parent_span_id?: string | null;
             resource: Record<string, never>;
+            server_id?: string | null;
             service: string;
             span_id: string;
             /** Format: int64 */
@@ -2349,6 +2372,7 @@ export interface components {
             /** Format: int32 */
             http_status?: number | null;
             name: string;
+            server_id?: string | null;
             service: string;
             services: string[];
             /** Format: int64 */
@@ -4461,6 +4485,8 @@ export interface operations {
                 /** @description Only traces with a span before this time in ms */
                 until?: number;
                 service?: string;
+                /** @description Only traces whose `host.name` matches this server */
+                server_id?: string;
                 /** @description `error` keeps traces with an error span */
                 status?: string;
                 min_duration_ms?: number;

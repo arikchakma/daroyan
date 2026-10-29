@@ -129,7 +129,7 @@ fn list_tool_defs() -> Vec<ToolDef> {
             "list_log_sources",
             GET,
             "/v1/logs/sources",
-            "The server and source pairs that have log lines, to use as search_logs filters."
+            "The server and source pairs that have log lines, to use as search_logs filters. OpenTelemetry lines whose host.name matches no server have the server id otlp."
         ),
         tool!(
             "list_traces",
