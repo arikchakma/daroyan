@@ -1,7 +1,10 @@
+use std::borrow::Cow;
+use std::fmt;
 use std::net::IpAddr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
+use serde::{Serialize, Serializer};
 use serde_json::{Value, json};
 
 use crate::alerts::integrations::IntegrationConfig;
@@ -9,6 +12,21 @@ use crate::net::{ReachableResolver, blocked_error, is_reachable};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+const SLACK_MAX_BLOCKS: usize = 50;
+const SLACK_MAX_TEXT: usize = 3000;
+const SLACK_MAX_FIELD: usize = 2000;
+const SLACK_MAX_FIELDS: usize = 10;
+const SLACK_MAX_BUTTON: usize = 75;
+const DISCORD_MAX_TITLE: usize = 256;
+const DISCORD_MAX_DESCRIPTION: usize = 4096;
+const DISCORD_MAX_FIELD: usize = 1024;
+const DISCORD_MAX_FIELDS: usize = 25;
+const DISCORD_MAX_FOOTER: usize = 2048;
+const DISCORD_MAX_TOTAL: usize = 6000;
+const TELEGRAM_MAX_SNIPPET: usize = 2500;
+const TELEGRAM_MAX_TEXT: usize = 4096;
+const TELEGRAM_MAX_TITLE: usize = 256;
+const MAX_LINE: usize = 300;
 
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
@@ -19,13 +37,236 @@ static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .unwrap_or_default()
 });
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tone {
+    Critical,
+    Warning,
+    Resolved,
+    #[default]
+    Note,
+}
+
+impl Tone {
+    fn color(self) -> u32 {
+        match self {
+            Self::Critical => 0x00D9_3025,
+            Self::Warning => 0x00F5_B83D,
+            Self::Resolved => 0x001F_8A4C,
+            Self::Note => 0x008A_8A8A,
+        }
+    }
+
+    fn emoji(self) -> &'static str {
+        match self {
+            Self::Critical => "🔴 ",
+            Self::Warning => "🟠 ",
+            Self::Resolved => "✅ ",
+            Self::Note => "",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Span {
+    text: String,
+    bold: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Text(Vec<Span>);
+
+impl Text {
+    #[must_use]
+    pub fn plain(mut self, text: impl Into<String>) -> Self {
+        self.0.push(Span { text: text.into(), bold: false });
+        self
+    }
+
+    #[must_use]
+    pub fn bold(mut self, text: impl Into<String>) -> Self {
+        self.0.push(Span { text: text.into(), bold: true });
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(|span| span.text.is_empty())
+    }
+
+    fn render(&self, escape: impl Fn(&str) -> String, open: &str, close: &str) -> String {
+        self.0
+            .iter()
+            .map(|span| {
+                if span.bold && !span.text.trim().is_empty() {
+                    format!("{open}{}{close}", escape(&span.text))
+                } else {
+                    escape(&span.text)
+                }
+            })
+            .collect()
+    }
+
+    // Cuts before escaping, one character at a time, so the cut never splits
+    // an entity or leaves a bold marker open.
+    fn render_within(
+        &self,
+        escape: impl Fn(&str) -> String,
+        open: &str,
+        close: &str,
+        max: usize,
+    ) -> String {
+        let full = self.render(&escape, open, close);
+        if full.chars().count() <= max {
+            return full;
+        }
+
+        let budget = max.saturating_sub(1);
+        let mut rendered = String::new();
+        let mut used = 0;
+
+        for span in &self.0 {
+            let (open, close) = if span.bold && !span.text.trim().is_empty() {
+                (open, close)
+            } else {
+                ("", "")
+            };
+
+            let markers = open.chars().count() + close.chars().count();
+            let mut body = String::new();
+            let mut is_cut = false;
+
+            for character in span.text.chars() {
+                let escaped = escape(character.encode_utf8(&mut [0; 4]));
+                let length = escaped.chars().count();
+                if used + markers + length > budget {
+                    is_cut = true;
+                    break;
+                }
+                used += length;
+                body.push_str(&escaped);
+            }
+
+            if !body.is_empty() {
+                used += markers;
+                rendered.push_str(&format!("{open}{body}{close}"));
+            }
+
+            if is_cut {
+                break;
+            }
+        }
+
+        rendered.push('…');
+        rendered
+    }
+}
+
+impl From<String> for Text {
+    fn from(text: String) -> Self {
+        Self::default().plain(text)
+    }
+}
+
+impl From<&str> for Text {
+    fn from(text: &str) -> Self {
+        Self::default().plain(text)
+    }
+}
+
+impl fmt::Display for Text {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.iter().try_for_each(|span| formatter.write_str(&span.text))
+    }
+}
+
+impl Serialize for Text {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Field {
+    pub label: String,
+    pub value: String,
+}
+
+impl Field {
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self { label: label.into(), value: value.into() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Snippet {
+    pub label: Option<String>,
+    pub lines: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkStyle {
+    #[default]
+    Default,
+    Primary,
+    Danger,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Link {
+    pub label: String,
+    pub url: String,
+    pub style: LinkStyle,
+}
+
+impl Link {
+    pub fn new(label: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            url: url.into(),
+            style: LinkStyle::Default,
+        }
+    }
+
+    #[must_use]
+    pub fn primary(self) -> Self {
+        Self { style: LinkStyle::Primary, ..self }
+    }
+
+    #[must_use]
+    pub fn danger(self) -> Self {
+        Self { style: LinkStyle::Danger, ..self }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Details {
+    pub summary: Text,
+    pub fields: Vec<Field>,
+    pub snippet: Option<Snippet>,
+    pub note: Text,
+    pub links: Vec<Link>,
+    pub context: Option<String>,
+}
+
+impl Details {
+    fn shown_fields(&self) -> Vec<&Field> {
+        self.fields
+            .iter()
+            .filter(|field| !field.value.trim().is_empty())
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Notice {
     pub event: &'static str,
+    pub tone: Tone,
     pub title: String,
     pub body: String,
     pub url: Option<String>,
     pub data: Value,
+    pub details: Details,
 }
 
 impl Notice {
@@ -36,78 +277,111 @@ impl Notice {
         }
     }
 
-    fn get_color(&self) -> u32 {
-        match self.event {
-            "alert.firing" => 0x00D9_3025,
-            "alert.resolved" => 0x001F_8A4C,
-            "alert.limited" => 0x00F5_B83D,
-            _ => 0x008A_8A8A,
+    fn summary(&self) -> Cow<'_, Text> {
+        if self.details.summary.is_empty() {
+            Cow::Owned(Text::from(self.body.as_str()))
+        } else {
+            Cow::Borrowed(&self.details.summary)
         }
     }
+
+    fn links(&self) -> Cow<'_, [Link]> {
+        if !self.details.links.is_empty() {
+            return Cow::Borrowed(&self.details.links);
+        }
+
+        Cow::Owned(
+            self.url
+                .iter()
+                .map(|url| Link::new("Open in Daroyan", url.as_str()).primary())
+                .collect(),
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChatMessage {
+    pub channel_id: String,
+    pub message_id: String,
+    pub payload: Option<Value>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Thread<'a> {
+    pub parent: &'a ChatMessage,
+    pub broadcast: bool,
 }
 
 pub async fn send_notice(
     config: &IntegrationConfig,
     notice: &Notice,
-) -> Result<(), String> {
-    let link = notice.url.as_deref();
+    thread: Option<Thread<'_>>,
+) -> Result<Option<ChatMessage>, String> {
     let request = match config {
-        IntegrationConfig::Slack { api_url, bot_token, channel_id, .. } => {
-            let link = link
-                .map(|url| format!("\n<{url}|Open in Daroyan →>"))
-                .unwrap_or_default();
-            CLIENT
-                .post(format!("{}/api/chat.postMessage", api_url.trim_end_matches('/')))
-                .bearer_auth(bot_token)
-                .json(&json!({
-                    "channel": channel_id,
-                    "text": escape_slack(&notice.title),
-                    "attachments": [{
-                        "color": format!("#{:06X}", notice.get_color()),
-                        "text": format!(
-                            "*{}*\n{}{link}",
-                            escape_slack(&notice.title),
-                            escape_slack(&notice.body)
-                        ),
-                        "mrkdwn_in": ["text"],
-                    }],
-                }))
-        }
+        IntegrationConfig::Slack { api_url, bot_token, channel_id, .. } => CLIENT
+            .post(format!("{}/api/chat.postMessage", api_url.trim_end_matches('/')))
+            .bearer_auth(bot_token)
+            .json(&build_slack_message(channel_id, notice, thread)),
         IntegrationConfig::Discord { webhook_url } => {
-            let link = link
-                .map(|url| format!("\n[Open in Daroyan →]({url})"))
-                .unwrap_or_default();
-            CLIENT.post(webhook_url).json(&json!({
-                "embeds": [{
-                    "title": notice.title,
-                    "description": format!("{}{link}", escape_markdown(&notice.body)),
-                    "color": notice.get_color(),
-                }],
-            }))
+            CLIENT.post(webhook_url).json(&build_discord_message(notice))
         }
-        IntegrationConfig::Telegram { bot_token, chat_id } => {
-            let link = link
-                .map(|url| {
-                    format!("\n<a href=\"{}\">Open in Daroyan →</a>", escape_html(url))
-                })
-                .unwrap_or_default();
-            CLIENT
-                .post(format!("https://api.telegram.org/bot{bot_token}/sendMessage"))
-                .json(&json!({
-                    "chat_id": chat_id,
-                    "text": format!("<b>{}</b>\n{}{link}", escape_html(&notice.title), escape_html(&notice.body)),
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": true,
-                }))
-        }
+        IntegrationConfig::Telegram { bot_token, chat_id } => CLIENT
+            .post(format!("https://api.telegram.org/bot{bot_token}/sendMessage"))
+            .json(&build_telegram_message(
+                chat_id,
+                notice,
+                thread.map(|thread| thread.parent),
+            )),
         IntegrationConfig::Webhook { url } => CLIENT.post(url).json(&json!({
             "event": notice.event,
             "title": notice.title,
             "body": notice.body,
             "url": notice.url,
             "data": notice.data,
+            "details": notice.details,
         })),
     };
+
+    let answer = execute(request).await?;
+    let payload = match config {
+        IntegrationConfig::Slack { .. } if thread.is_none() => {
+            Some(build_slack_body(notice))
+        }
+        _ => None,
+    };
+
+    Ok(answer.and_then(|answer| read_chat_message(config, &answer, payload)))
+}
+
+pub async fn update_parent(
+    config: &IntegrationConfig,
+    parent: &ChatMessage,
+    notice: &Notice,
+) -> Result<Option<Value>, String> {
+    let IntegrationConfig::Slack { api_url, bot_token, .. } = config else {
+        return Ok(None);
+    };
+
+    let body = if notice.tone == Tone::Resolved {
+        let Some(original) = &parent.payload else { return Ok(None) };
+        mark_resolved(original, notice)
+    } else {
+        build_slack_body(notice)
+    };
+
+    let mut request_body = body.clone();
+    request_body["channel"] = json!(parent.channel_id);
+    request_body["ts"] = json!(parent.message_id);
+
+    let request = CLIENT
+        .post(format!("{}/api/chat.update", api_url.trim_end_matches('/')))
+        .bearer_auth(bot_token)
+        .json(&request_body);
+    execute(request).await?;
+    Ok(Some(body))
+}
+
+async fn execute(request: reqwest::RequestBuilder) -> Result<Option<Value>, String> {
     let request = request.build().map_err(|error| describe_error(&error))?;
     if let Some(ip) = request
         .url()
@@ -117,6 +391,7 @@ pub async fn send_notice(
     {
         return Err(blocked_error(&ip.to_string()));
     }
+
     let mut response = CLIENT
         .execute(request)
         .await
@@ -128,6 +403,7 @@ pub async fn send_notice(
     {
         bytes.extend_from_slice(&chunk);
     }
+
     let body = String::from_utf8_lossy(&bytes);
     let answer = serde_json::from_str::<Value>(&body).ok();
     let refusal =
@@ -137,12 +413,427 @@ pub async fn send_notice(
             .and_then(|answer| {
                 answer["error"].as_str().or_else(|| answer["description"].as_str())
             });
+
     if status.is_success() && refusal.is_none() {
-        return Ok(());
+        return Ok(answer);
     }
+
     let detail = refusal
         .map_or_else(|| body.chars().take(200).collect::<String>(), str::to_string);
     Err(format!("HTTP {}: {}", status.as_u16(), detail.trim()))
+}
+
+fn read_chat_message(
+    config: &IntegrationConfig,
+    answer: &Value,
+    payload: Option<Value>,
+) -> Option<ChatMessage> {
+    let (channel_id, message_id) = match config {
+        IntegrationConfig::Slack { .. } => {
+            (answer["channel"].as_str()?.to_string(), answer["ts"].as_str()?.to_string())
+        }
+        IntegrationConfig::Telegram { chat_id, .. } => {
+            (chat_id.clone(), answer["result"]["message_id"].as_i64()?.to_string())
+        }
+        IntegrationConfig::Discord { .. } | IntegrationConfig::Webhook { .. } => {
+            return None;
+        }
+    };
+
+    Some(ChatMessage { channel_id, message_id, payload })
+}
+
+fn build_slack_message(
+    channel_id: &str,
+    notice: &Notice,
+    thread: Option<Thread<'_>>,
+) -> Value {
+    let mut message = build_slack_body(notice);
+    message["channel"] = json!(channel_id);
+
+    if let Some(thread) = thread.filter(|thread| thread.parent.channel_id == channel_id) {
+        message["thread_ts"] = json!(thread.parent.message_id);
+        if thread.broadcast {
+            message["reply_broadcast"] = json!(true);
+        }
+    }
+
+    message
+}
+
+fn mark_resolved(original: &Value, notice: &Notice) -> Value {
+    let mut body = original.clone();
+    let title = format!("*{}{}*", notice.tone.emoji(), escape_slack(&notice.title));
+    body["text"] = json!(build_slack_text(notice));
+    body["blocks"] = json!([slack_section(title)]);
+
+    if let Some(attachment) = body["attachments"].get_mut(0) {
+        attachment["color"] = json!(format!("#{:06X}", notice.tone.color()));
+        let summary =
+            notice.summary().render_within(escape_slack, "*", "*", SLACK_MAX_TEXT);
+
+        if let Some(blocks) = attachment["blocks"].as_array_mut() {
+            blocks
+                .retain(|block| block["type"] != "context" && block["type"] != "actions");
+            blocks.extend(slack_actions(notice));
+            blocks.push(json!({
+                "type": "context",
+                "elements": [{ "type": "mrkdwn", "text": summary }],
+            }));
+        }
+    }
+
+    body
+}
+
+fn slack_actions(notice: &Notice) -> Option<Value> {
+    let buttons: Vec<Value> = notice
+        .links()
+        .iter()
+        .enumerate()
+        .map(|(index, link)| {
+            let mut button = json!({
+                "type": "button",
+                "action_id": format!("link_{index}"),
+                "text": { "type": "plain_text", "text": cut(&link.label, SLACK_MAX_BUTTON) },
+                "url": link.url,
+            });
+
+            match link.style {
+                LinkStyle::Primary => button["style"] = json!("primary"),
+                LinkStyle::Danger => button["style"] = json!("danger"),
+                LinkStyle::Default => {}
+            }
+
+            button
+        })
+        .collect();
+
+    (!buttons.is_empty()).then(|| json!({ "type": "actions", "elements": buttons }))
+}
+
+fn slack_section(text: String) -> Value {
+    json!({ "type": "section", "text": { "type": "mrkdwn", "text": cut(&text, SLACK_MAX_TEXT) } })
+}
+
+fn build_slack_text(notice: &Notice) -> String {
+    let title = escape_slack(&notice.title);
+    let summary = escape_slack(&notice.summary().to_string());
+
+    if summary.is_empty() {
+        format!("{}{title}", notice.tone.emoji())
+    } else {
+        format!("{}{title}: {summary}", notice.tone.emoji())
+    }
+}
+
+fn build_slack_body(notice: &Notice) -> Value {
+    let details = &notice.details;
+    let title = slack_section(format!(
+        "*{}{}*",
+        notice.tone.emoji(),
+        escape_slack(&notice.title)
+    ));
+
+    let mut blocks = Vec::new();
+    let summary = notice.summary();
+    if !summary.is_empty() {
+        blocks.push(slack_section(summary.render_within(
+            escape_slack,
+            "*",
+            "*",
+            SLACK_MAX_TEXT,
+        )));
+    }
+
+    for fields in details.shown_fields().chunks(SLACK_MAX_FIELDS) {
+        let fields: Vec<Value> = fields
+            .iter()
+            .map(|field| {
+                let label = cut_escaped(&field.label, escape_slack, SLACK_MAX_FIELD / 4);
+                let room = SLACK_MAX_FIELD - label.chars().count() - 3;
+                let value = cut_escaped(&field.value, escape_slack, room);
+                json!({ "type": "mrkdwn", "text": format!("*{label}*\n{value}") })
+            })
+            .collect();
+
+        blocks.push(json!({ "type": "section", "fields": fields }));
+    }
+
+    if let Some(snippet) = &details.snippet {
+        if let Some(label) = &snippet.label {
+            blocks.push(slack_section(format!("*{}*", escape_slack(label))));
+        }
+        let code = format_code(&snippet.lines, escape_slack, SLACK_MAX_TEXT - 6);
+        blocks.push(slack_section(format!("```{code}```")));
+    }
+
+    if !details.note.is_empty() {
+        blocks.push(slack_section(details.note.render_within(
+            escape_slack,
+            "*",
+            "*",
+            SLACK_MAX_TEXT,
+        )));
+    }
+
+    blocks.extend(slack_actions(notice));
+    if let Some(context) = &details.context {
+        blocks.push(json!({
+            "type": "context",
+            "elements": [{ "type": "mrkdwn", "text": cut_escaped(context, escape_slack, SLACK_MAX_TEXT) }],
+        }));
+    }
+
+    blocks.truncate(SLACK_MAX_BLOCKS - 1);
+
+    // Slack shows `text` above a message that only has attachments, so the
+    // title goes in a top-level block and `text` stays a notification fallback.
+    let mut body = json!({
+        "text": build_slack_text(notice),
+        "blocks": [title],
+        "attachments": [],
+    });
+
+    if !blocks.is_empty() {
+        body["attachments"] = json!([{
+            "color": format!("#{:06X}", notice.tone.color()),
+            "blocks": blocks,
+        }]);
+    }
+
+    body
+}
+
+fn build_discord_message(notice: &Notice) -> Value {
+    let details = &notice.details;
+    let mut fields: Vec<Value> = details
+        .shown_fields()
+        .iter()
+        .map(|field| {
+            json!({
+                "name": cut(&field.label, DISCORD_MAX_TITLE),
+                "value": cut_escaped(&field.value, escape_markdown, DISCORD_MAX_FIELD),
+                "inline": true,
+            })
+        })
+        .collect();
+
+    if let Some(snippet) = &details.snippet {
+        let code = format_code(&snippet.lines, str::to_string, DISCORD_MAX_FIELD - 6);
+        fields.push(json!({
+            "name": snippet.label.as_deref().map_or("\u{200b}".to_string(), |label| cut(label, DISCORD_MAX_TITLE)),
+            "value": format!("```{code}```"),
+            "inline": false,
+        }));
+    }
+
+    let links = notice
+        .links()
+        .iter()
+        .map(|link| {
+            let url =
+                link.url.replace('(', "%28").replace(')', "%29").replace(' ', "%20");
+            format!("[{}]({url})", escape_markdown(&link.label))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+
+    let room = DISCORD_MAX_FIELD.saturating_sub(links.chars().count() + 1);
+    let after = [details.note.render_within(escape_markdown, "**", "**", room), links]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !after.is_empty() {
+        fields.push(json!({
+            "name": "\u{200b}",
+            "value": cut(&after, DISCORD_MAX_FIELD),
+            "inline": false,
+        }));
+    }
+
+    fields.truncate(DISCORD_MAX_FIELDS);
+    let title =
+        cut(&format!("{}{}", notice.tone.emoji(), notice.title), DISCORD_MAX_TITLE);
+    let footer = details
+        .context
+        .as_deref()
+        .map(|context| cut(context, DISCORD_MAX_FOOTER));
+
+    let length = |text: &str| text.chars().count();
+    let field_length = |field: &Value| {
+        length(field["name"].as_str().unwrap_or_default())
+            + length(field["value"].as_str().unwrap_or_default())
+    };
+    let mut used = length(&title) + footer.as_deref().map_or(0, length);
+
+    fields.retain(|field| {
+        let next = used + field_length(field);
+        let fits = next <= DISCORD_MAX_TOTAL;
+        if fits {
+            used = next;
+        }
+        fits
+    });
+
+    let description = notice.summary().render_within(
+        escape_markdown,
+        "**",
+        "**",
+        DISCORD_MAX_DESCRIPTION.min(DISCORD_MAX_TOTAL.saturating_sub(used)),
+    );
+
+    let mut embed = json!({
+        "title": title,
+        "description": description,
+        "color": notice.tone.color(),
+        "fields": fields,
+    });
+
+    if let Some(footer) = footer {
+        embed["footer"] = json!({ "text": footer });
+    }
+
+    json!({ "embeds": [embed] })
+}
+
+fn build_telegram_message(
+    chat_id: &str,
+    notice: &Notice,
+    thread: Option<&ChatMessage>,
+) -> Value {
+    let details = &notice.details;
+    let title =
+        cut(&format!("{}{}", notice.tone.emoji(), notice.title), TELEGRAM_MAX_TITLE);
+    let mut parts = vec![format!("<b>{}</b>", escape_html(&title))];
+    let summary = notice.summary();
+    if !summary.is_empty() {
+        parts.push(summary.render_within(
+            escape_html,
+            "<b>",
+            "</b>",
+            TELEGRAM_MAX_SNIPPET,
+        ));
+    }
+
+    let fields = details.shown_fields();
+    if !fields.is_empty() {
+        parts.push(
+            fields
+                .iter()
+                .map(|field| {
+                    format!(
+                        "<b>{}</b>: {}",
+                        cut_escaped(&field.label, escape_html, MAX_LINE),
+                        cut_escaped(&field.value, escape_html, MAX_LINE)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+
+    if let Some(snippet) = &details.snippet {
+        let code = format_code(&snippet.lines, escape_html, TELEGRAM_MAX_SNIPPET);
+        parts.push(match &snippet.label {
+            Some(label) => format!("<b>{}</b>\n<pre>{code}</pre>", escape_html(label)),
+            None => format!("<pre>{code}</pre>"),
+        });
+    }
+
+    if !details.note.is_empty() {
+        parts.push(details.note.render_within(escape_html, "<b>", "</b>", MAX_LINE * 2));
+    }
+
+    let links = notice
+        .links()
+        .iter()
+        .map(|link| {
+            format!(
+                "<a href=\"{}\">{}</a>",
+                escape_html(&link.url),
+                escape_html(&link.label)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+
+    if !links.is_empty() {
+        parts.push(links);
+    }
+
+    if let Some(context) = &details.context {
+        parts.push(format!("<i>{}</i>", cut_escaped(context, escape_html, MAX_LINE)));
+    }
+
+    let mut text = String::new();
+    let mut length = 0;
+
+    for part in parts {
+        let needed = part.chars().count() + if text.is_empty() { 0 } else { 2 };
+        if length + needed > TELEGRAM_MAX_TEXT {
+            continue;
+        }
+
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&part);
+        length += needed;
+    }
+
+    let mut message = json!({
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": true,
+    });
+
+    if let Some(message_id) = thread
+        .filter(|thread| thread.channel_id == chat_id)
+        .and_then(|thread| thread.message_id.parse::<i64>().ok())
+    {
+        message["reply_parameters"] = json!({
+            "message_id": message_id,
+            "allow_sending_without_reply": true,
+        });
+    }
+
+    message
+}
+
+fn format_code(lines: &[String], escape: impl Fn(&str) -> String, max: usize) -> String {
+    let mut code = String::new();
+
+    for line in lines {
+        let line = escape(&cut(line, MAX_LINE)).replace("```", "``\u{200b}`");
+        let needed = line.chars().count() + usize::from(!code.is_empty());
+        if code.chars().count() + needed > max {
+            break;
+        }
+
+        if !code.is_empty() {
+            code.push('\n');
+        }
+        code.push_str(&line);
+    }
+
+    code
+}
+
+fn cut_escaped(text: &str, escape: impl Fn(&str) -> String, max: usize) -> String {
+    Text::from(text).render_within(escape, "", "", max)
+}
+
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+
+    let mut cut: String = text.chars().take(max.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
 }
 
 fn escape_html(text: &str) -> String {
@@ -200,13 +891,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cuts_before_escaping() {
+        let text = Text::from("Tom & Jerry ").bold("<b>loud</b>");
+        assert_eq!(
+            text.render_within(escape_html, "<b>", "</b>", 100),
+            "Tom &amp; Jerry <b>&lt;b&gt;loud&lt;/b&gt;</b>"
+        );
+        assert_eq!(text.render_within(escape_html, "<b>", "</b>", 10), "Tom &amp;…");
+        assert_eq!(text.render_within(escape_html, "<b>", "</b>", 8), "Tom …");
+        assert_eq!(
+            text.render_within(escape_html, "<b>", "</b>", 30),
+            "Tom &amp; Jerry <b>&lt;b</b>…"
+        );
+        assert_eq!(cut_escaped("a&b", escape_slack, 4), "a…");
+    }
+
+    #[test]
+    fn keeps_a_discord_embed_under_the_total_limit() {
+        let mut details = make_details();
+        details.summary = Text::from("x".repeat(5000));
+        details.fields = (0..8)
+            .map(|index| Field::new(format!("Field {index}"), "y".repeat(2000)))
+            .collect();
+        details.context = Some("z".repeat(3000));
+
+        let message = build_discord_message(&make_notice(details));
+        let embed = &message["embeds"][0];
+        let length =
+            |value: &Value| value.as_str().map_or(0, |text| text.chars().count());
+        let total = length(&embed["title"])
+            + length(&embed["description"])
+            + length(&embed["footer"]["text"])
+            + embed["fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|field| length(&field["name"]) + length(&field["value"]))
+                .sum::<usize>();
+
+        assert!(total <= DISCORD_MAX_TOTAL, "{total}");
+        assert_eq!(length(&embed["footer"]["text"]), DISCORD_MAX_FOOTER);
+    }
+
+    #[test]
+    fn escapes_the_slack_notification_text() {
+        let notice = Notice {
+            title: "Rule & co".to_string(),
+            body: "<!channel> <https://evil.test|Open>".to_string(),
+            ..make_notice(Details::default())
+        };
+
+        assert_eq!(
+            build_slack_text(&notice),
+            "🔴 Rule &amp; co: &lt;!channel&gt; &lt;https://evil.test|Open&gt;"
+        );
+    }
+
+    #[test]
     fn summarizes_and_escapes() {
         let notice = Notice {
             event: "alert.firing",
+            tone: Tone::Note,
             title: "Firing: High CPU".to_string(),
             body: "worker-1 · CPU: 96%\nCPU above 90% for 5m".to_string(),
             url: None,
             data: json!({}),
+            details: Details::default(),
         };
         assert_eq!(notice.summarize(), "Firing: High CPU · worker-1 · CPU: 96%");
         assert_eq!(escape_html("<a & \"b\">"), "&lt;a &amp; &quot;b&quot;&gt;");
@@ -222,6 +972,290 @@ mod tests {
             escape_markdown("[Open](https://evil) @everyone"),
             "\\[Open\\]\\(https://evil\\) \\@everyone"
         );
+    }
+
+    fn make_notice(details: Details) -> Notice {
+        Notice {
+            event: "alert.firing",
+            tone: Tone::Critical,
+            title: "Critical: InboxJot error spike".to_string(),
+            body: "Inboxjot Server · Logs: 11 lines".to_string(),
+            url: Some("https://daroyan.test/servers/server_1".to_string()),
+            data: json!({}),
+            details,
+        }
+    }
+
+    fn make_details() -> Details {
+        Details {
+            summary: Text::default().bold("11 error lines").plain(" in the last 5m."),
+            fields: vec![
+                Field::new("Server", "Inboxjot Server · production"),
+                Field::new("Source", "<!channel>"),
+            ],
+            snippet: Some(Snippet {
+                label: Some("Top errors".to_string()),
+                lines: vec!["11× HTTP export failed with status code: 404".to_string()],
+            }),
+            note: Text::default(),
+            links: vec![
+                Link::new("Open logs", "https://daroyan.test/logs").primary(),
+                Link::new("View alert", "https://daroyan.test/alerts/rule_1"),
+            ],
+            context: Some("Checked every 60 s".to_string()),
+        }
+    }
+
+    #[test]
+    fn builds_slack_blocks() {
+        let message = build_slack_message("C1", &make_notice(make_details()), None);
+
+        assert_eq!(
+            message["text"],
+            "🔴 Critical: InboxJot error spike: 11 error lines in the last 5m."
+        );
+        assert_eq!(
+            message["blocks"][0]["text"]["text"],
+            "*🔴 Critical: InboxJot error spike*"
+        );
+
+        let attachment = &message["attachments"][0];
+        assert_eq!(attachment["color"], "#D93025");
+
+        let blocks = attachment["blocks"].as_array().unwrap();
+        let types: Vec<&str> =
+            blocks.iter().map(|block| block["type"].as_str().unwrap()).collect();
+        assert_eq!(
+            types,
+            ["section", "section", "section", "section", "actions", "context"]
+        );
+
+        assert_eq!(blocks[0]["text"]["text"], "*11 error lines* in the last 5m.");
+        assert_eq!(blocks[1]["fields"][1]["text"], "*Source*\n&lt;!channel&gt;");
+        assert_eq!(blocks[2]["text"]["text"], "*Top errors*");
+        assert_eq!(
+            blocks[3]["text"]["text"],
+            "```11× HTTP export failed with status code: 404```"
+        );
+        assert_eq!(blocks[4]["elements"][0]["style"], "primary");
+        assert_eq!(blocks[4]["elements"][1].get("style"), None);
+        assert_eq!(blocks[4]["elements"][1]["url"], "https://daroyan.test/alerts/rule_1");
+    }
+
+    #[test]
+    fn falls_back_to_the_body_and_url() {
+        let message = build_slack_message("C1", &make_notice(Details::default()), None);
+        let blocks = message["attachments"][0]["blocks"].as_array().unwrap();
+
+        assert_eq!(blocks[0]["text"]["text"], "Inboxjot Server · Logs: 11 lines");
+        assert_eq!(blocks[1]["elements"][0]["text"]["text"], "Open in Daroyan");
+    }
+
+    #[test]
+    fn marks_the_parent_resolved() {
+        let original = build_slack_body(&make_notice(make_details()));
+        let resolved = Notice {
+            event: "alert.resolved",
+            tone: Tone::Resolved,
+            title: "Resolved: InboxJot error spike".to_string(),
+            details: Details {
+                summary: Text::from("Back to normal after ").bold("51 min").plain("."),
+                ..Details::default()
+            },
+            ..make_notice(Details::default())
+        };
+
+        let updated = mark_resolved(&original, &resolved);
+        assert_eq!(
+            updated["text"],
+            "✅ Resolved: InboxJot error spike: Back to normal after 51 min."
+        );
+        assert_eq!(
+            updated["blocks"][0]["text"]["text"],
+            "*✅ Resolved: InboxJot error spike*"
+        );
+
+        let attachment = &updated["attachments"][0];
+        assert_eq!(attachment["color"], "#1F8A4C");
+
+        let blocks = attachment["blocks"].as_array().unwrap();
+        assert_eq!(blocks[0], original["attachments"][0]["blocks"][0]);
+        assert_eq!(blocks.iter().filter(|block| block["type"] == "context").count(), 1);
+        assert_eq!(
+            blocks.last().unwrap()["elements"][0]["text"],
+            "Back to normal after *51 min*."
+        );
+    }
+
+    #[test]
+    fn stays_inside_slack_limits() {
+        let details = Details {
+            summary: Text::from("x".repeat(5000)),
+            fields: (0..120).map(|index| Field::new(format!("F{index}"), "v")).collect(),
+            snippet: Some(Snippet {
+                label: None,
+                lines: (0..100).map(|_| format!("```{}", "y".repeat(1000))).collect(),
+            }),
+            ..make_details()
+        };
+
+        let message = build_slack_message("C1", &make_notice(details), None);
+        let blocks = message["attachments"][0]["blocks"].as_array().unwrap();
+        assert!(blocks.len() < SLACK_MAX_BLOCKS);
+
+        for block in blocks {
+            if let Some(text) = block["text"]["text"].as_str() {
+                assert!(text.chars().count() <= SLACK_MAX_TEXT);
+            }
+            for field in block["fields"].as_array().into_iter().flatten() {
+                assert!(
+                    field["text"].as_str().unwrap().chars().count() <= SLACK_MAX_FIELD
+                );
+            }
+        }
+
+        let code =
+            format_code(&["a".repeat(1000), "```b".to_string()], str::to_string, 3000);
+        assert_eq!(code.lines().next().unwrap().chars().count(), MAX_LINE);
+        assert!(code.ends_with("``\u{200b}`b"));
+    }
+
+    #[test]
+    fn builds_discord_and_telegram_messages() {
+        let notice = make_notice(make_details());
+
+        let discord = build_discord_message(&notice);
+        let embed = &discord["embeds"][0];
+        assert_eq!(embed["description"], "**11 error lines** in the last 5m.");
+        assert_eq!(embed["fields"][1]["value"], "\\<!channel\\>");
+        assert_eq!(embed["fields"][2]["name"], "Top errors");
+        assert_eq!(
+            embed["fields"][3]["value"],
+            "[Open logs](https://daroyan.test/logs) · [View alert](https://daroyan.test/alerts/rule_1)"
+        );
+        assert_eq!(embed["footer"]["text"], "Checked every 60 s");
+
+        let telegram = build_telegram_message("42", &notice, None);
+        let text = telegram["text"].as_str().unwrap();
+        assert!(text.starts_with(
+            "<b>🔴 Critical: InboxJot error spike</b>\n\n<b>11 error lines</b>"
+        ));
+        assert!(text.contains("<b>Source</b>: &lt;!channel&gt;"));
+        assert!(text.contains("<b>Top errors</b>\n<pre>11× HTTP export"));
+        assert!(text.ends_with("<i>Checked every 60 s</i>"));
+    }
+
+    #[test]
+    fn drops_empty_fields_and_escapes_discord_link_urls() {
+        let mut details = make_details();
+        details.fields.push(Field::new("Error", " "));
+        details.links = vec![Link::new("Runbook", "https://wiki.test/a_(b)")];
+
+        let discord = build_discord_message(&make_notice(details.clone()));
+        let fields = discord["embeds"][0]["fields"].as_array().unwrap();
+        assert!(fields.iter().all(|field| field["name"] != "Error"));
+        assert_eq!(
+            fields.last().unwrap()["value"],
+            "[Runbook](https://wiki.test/a_%28b%29)"
+        );
+
+        let slack = build_slack_message("C1", &make_notice(details), None);
+        assert!(!slack.to_string().contains("*Error*"));
+    }
+
+    #[test]
+    fn keeps_telegram_messages_under_the_limit() {
+        let mut details = make_details();
+        details.summary = Text::from("s".repeat(5000));
+        details.fields = (0..40)
+            .map(|index| Field::new(format!("F{index}"), "v".repeat(400)))
+            .collect();
+        details.snippet = Some(Snippet {
+            label: None,
+            lines: (0..40).map(|_| "<".repeat(300)).collect(),
+        });
+
+        let telegram = build_telegram_message("42", &make_notice(details), None);
+        let text = telegram["text"].as_str().unwrap();
+
+        assert!(text.chars().count() <= TELEGRAM_MAX_TEXT);
+        assert!(text.starts_with("<b>🔴 Critical"));
+        assert!(text.ends_with("<i>Checked every 60 s</i>"));
+        assert_eq!(text.matches("<pre>").count(), text.matches("</pre>").count());
+    }
+
+    fn chat_message(channel_id: &str, message_id: &str) -> ChatMessage {
+        ChatMessage {
+            channel_id: channel_id.to_string(),
+            message_id: message_id.to_string(),
+            payload: None,
+        }
+    }
+
+    #[test]
+    fn replies_in_the_thread_of_the_same_channel() {
+        let notice = make_notice(Details::default());
+        let parent = chat_message("C1", "1730000000.000100");
+        let broadcast = Thread { parent: &parent, broadcast: true };
+
+        let reply = build_slack_message("C1", &notice, Some(broadcast));
+        assert_eq!(reply["thread_ts"], "1730000000.000100");
+        assert_eq!(reply["reply_broadcast"], true);
+
+        let quiet = build_slack_message(
+            "C1",
+            &notice,
+            Some(Thread { broadcast: false, ..broadcast }),
+        );
+        assert_eq!(quiet["thread_ts"], "1730000000.000100");
+        assert_eq!(quiet.get("reply_broadcast"), None);
+
+        let moved = build_slack_message("C2", &notice, Some(broadcast));
+        assert_eq!(moved.get("thread_ts"), None);
+
+        let parent = chat_message("42", "7");
+        let reply = build_telegram_message("42", &notice, Some(&parent));
+        assert_eq!(reply["reply_parameters"]["message_id"], 7);
+        assert_eq!(reply["reply_parameters"]["allow_sending_without_reply"], true);
+        assert_eq!(
+            build_telegram_message("43", &notice, Some(&parent)).get("reply_parameters"),
+            None
+        );
+    }
+
+    #[test]
+    fn reads_the_posted_message() {
+        let slack = IntegrationConfig::Slack {
+            api_url: "https://slack.com".to_string(),
+            bot_token: "xoxb-1".to_string(),
+            channel_id: "C1".to_string(),
+            channel_name: "alerts".to_string(),
+        };
+        let answer = json!({ "ok": true, "channel": "C1", "ts": "1.2" });
+        assert_eq!(
+            read_chat_message(&slack, &answer, Some(json!({ "text": "hi" }))),
+            Some(ChatMessage {
+                payload: Some(json!({ "text": "hi" })),
+                ..chat_message("C1", "1.2")
+            })
+        );
+        assert_eq!(read_chat_message(&slack, &json!({ "ok": true }), None), None);
+
+        let telegram = IntegrationConfig::Telegram {
+            bot_token: "1:token".to_string(),
+            chat_id: "42".to_string(),
+        };
+        assert_eq!(
+            read_chat_message(
+                &telegram,
+                &json!({ "ok": true, "result": { "message_id": 7 } }),
+                None
+            ),
+            Some(chat_message("42", "7"))
+        );
+
+        let webhook = IntegrationConfig::Webhook { url: "https://hook.test".to_string() };
+        assert_eq!(read_chat_message(&webhook, &json!({ "ts": "1.2" }), None), None);
     }
 
     #[tokio::test]
@@ -244,12 +1278,14 @@ mod tests {
         let config = IntegrationConfig::Webhook { url: format!("http://{address}/hook") };
         let notice = Notice {
             event: "test",
+            tone: Tone::Note,
             title: "Test".to_string(),
             body: String::new(),
             url: None,
             data: json!({}),
+            details: Details::default(),
         };
-        let error = send_notice(&config, &notice).await.unwrap_err();
+        let error = send_notice(&config, &notice, None).await.unwrap_err();
         assert!(error.starts_with("HTTP 500: xxx"));
     }
 }

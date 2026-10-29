@@ -10,6 +10,17 @@ pub struct Report {
     pub processes: Vec<ProcessState>,
     pub ports: Vec<PortState>,
     pub events: Vec<Event>,
+    #[serde(default)]
+    pub top: Vec<TopProcess>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct TopProcess {
+    pub name: String,
+    pub count: u32,
+    pub cpu: f32,
+    pub mem_used: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -74,6 +85,24 @@ pub struct ProcessState {
     pub write_speed: u64,
     #[serde(default)]
     pub controllable: bool,
+    #[serde(default)]
+    pub container: Option<Container>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct Container {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -105,6 +134,16 @@ pub enum EventKind {
     ProcessExited {
         name: String,
         code: Option<i32>,
+        #[serde(default)]
+        signal: Option<String>,
+        #[serde(default)]
+        oom: bool,
+        #[serde(default)]
+        stopped: bool,
+        #[serde(default)]
+        ran_secs: Option<u64>,
+        #[serde(default)]
+        restarts: Option<u32>,
     },
     ProcessRestarted {
         name: String,

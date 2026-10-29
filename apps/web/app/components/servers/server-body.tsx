@@ -7,6 +7,7 @@ import { FilesystemsSection } from '~/components/servers/filesystems-section';
 import { MetricsSection } from '~/components/servers/metrics-section';
 import { PortsSection } from '~/components/servers/ports-section';
 import { ProcessesSection } from '~/components/servers/processes-section';
+import { RestartProcessDialog } from '~/components/servers/restart-process-dialog';
 import { ServerStatusBadge } from '~/components/servers/server-status-badge';
 import { SpecGrid } from '~/components/servers/spec-grid';
 import { formatRelative } from '~/utils/format';
@@ -74,6 +75,7 @@ export function ServerBody(props: ServerBodyProps) {
         )}
 
         <AlertBanners serverId={server.id} />
+        <RestartProcessDialog server={server} />
 
         {host && <MetricsSection serverId={server.id} host={host} report={report} />}
         {report && <ProcessesSection serverId={server.id} processes={report.processes} />}

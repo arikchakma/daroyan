@@ -3,7 +3,8 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useId, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { FormSection, SelectField } from '~/components/alerts/rule-form';
+import { FormSection } from '~/components/alerts/form-section';
+import { SelectField } from '~/components/alerts/select-field';
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
 import { FieldRow } from '~/components/ui/field-row';

@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::alerts::integrations::IntegrationConfig;
-use crate::alerts::notify::{Notice, send_notice};
+use crate::alerts::notify::{Details, Notice, Tone, send_notice};
 use crate::config::Config;
 use crate::db::Database;
 use crate::db::queries::integrations::NewIntegration;
@@ -209,6 +209,7 @@ async fn save_telegram_start(
     states.finish(&start.state, integration.id);
     let notice = Notice {
         event: "test",
+        tone: Tone::Note,
         title: "Daroyan is connected".to_string(),
         body: format!(
             "Alerts for the rules you pick will arrive in {}.",
@@ -216,8 +217,9 @@ async fn save_telegram_start(
         ),
         url: None,
         data: Value::Null,
+        details: Details::default(),
     };
-    if let Err(error) = send_notice(&config, &notice).await {
+    if let Err(error) = send_notice(&config, &notice, None).await {
         tracing::warn!(error = %error, "send the telegram welcome");
     }
     Ok(())

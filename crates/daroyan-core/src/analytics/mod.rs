@@ -22,7 +22,9 @@ use crate::analytics::log_lines::{LogRow, append_logs, to_log_rows};
 use crate::analytics::server_events::{
     EventRow, append_events, to_event_row, to_event_rows,
 };
-use crate::analytics::server_states::{StateRow, append_states};
+use crate::analytics::server_states::{
+    DiskRow, StateRow, append_disks, append_states, to_disk_rows,
+};
 use crate::analytics::spans::{ExceptionRow, SpanRow, append_spans};
 use crate::error::{Error, ErrorName, Result};
 
@@ -52,6 +54,7 @@ pub struct Backup {
 #[derive(Default)]
 struct Pending {
     states: Vec<StateRow>,
+    disks: Vec<DiskRow>,
     events: Vec<EventRow>,
     logs: Vec<LogRow>,
     spans: Vec<SpanRow>,
@@ -96,17 +99,22 @@ impl Analytics {
 
     pub fn buffer_report(&self, server_id: &str, report: &Report) {
         let mut pending = lock(&self.pending);
-        if pending.states.len() + pending.events.len() >= MAX_PENDING_ROWS {
+        if pending.states.len() + pending.disks.len() + pending.events.len()
+            >= MAX_PENDING_ROWS
+        {
             tracing::warn!(server_id, "dropped a report, the write buffer is full");
             return;
         }
         pending.states.push(StateRow::from_state(server_id, &report.state));
+        pending.disks.extend(to_disk_rows(server_id, &report.state));
         pending.events.extend(to_event_rows(server_id, &report.events));
     }
 
     pub fn buffer_server_event(&self, server_id: &str, kind: &str) {
         let mut pending = lock(&self.pending);
-        if pending.states.len() + pending.events.len() >= MAX_PENDING_ROWS {
+        if pending.states.len() + pending.disks.len() + pending.events.len()
+            >= MAX_PENDING_ROWS
+        {
             tracing::warn!(
                 server_id,
                 kind,
@@ -161,6 +169,7 @@ impl Analytics {
         }
         self.write(move |conn| {
             append_states(conn, &pending.states)?;
+            append_disks(conn, &pending.disks)?;
             append_events(conn, &pending.events)?;
             append_logs(conn, &pending.logs)?;
             append_spans(conn, &pending.spans, &pending.exceptions)
@@ -171,6 +180,7 @@ impl Analytics {
     pub async fn purge_before(&self, cutoff_ms: i64, log_cutoff_ms: i64) -> Result<()> {
         self.write(move |conn| {
             conn.execute("DELETE FROM server_states WHERE taken_at < ?", [cutoff_ms])?;
+            conn.execute("DELETE FROM disk_states WHERE taken_at < ?", [cutoff_ms])?;
             conn.execute("DELETE FROM server_events WHERE occurred_at < ?", [cutoff_ms])?;
             conn.execute("DELETE FROM log_lines WHERE logged_at < ?", [log_cutoff_ms])?;
             conn.execute("DELETE FROM spans WHERE started_at < ?", [cutoff_ms * 1_000])?;
@@ -224,6 +234,7 @@ impl Analytics {
     pub async fn delete_server_rows(&self, server_id: String) -> Result<()> {
         self.write(move |conn| {
             conn.execute("DELETE FROM server_states WHERE server_id = ?", [&server_id])?;
+            conn.execute("DELETE FROM disk_states WHERE server_id = ?", [&server_id])?;
             conn.execute("DELETE FROM server_events WHERE server_id = ?", [&server_id])?;
             conn.execute("DELETE FROM log_lines WHERE server_id = ?", [&server_id])?;
             Ok(())

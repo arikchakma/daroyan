@@ -69,6 +69,7 @@ mod tests {
             },
             processes: Vec::new(),
             ports: Vec::new(),
+            top: Vec::new(),
         }
     }
 

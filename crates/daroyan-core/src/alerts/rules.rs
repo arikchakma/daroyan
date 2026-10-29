@@ -57,6 +57,28 @@ pub enum Target {
     Cron,
 }
 
+impl Target {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Server => "Server",
+            Self::Check => "Check",
+            Self::Cron => "Cron",
+        }
+    }
+
+    pub fn path(self) -> &'static str {
+        match self {
+            Self::Server => "servers",
+            Self::Check => "uptime",
+            Self::Cron => "crons",
+        }
+    }
+
+    pub fn url(self, app_url: &str, id: &str) -> String {
+        format!("{}/{}/{id}", app_url.trim_end_matches('/'), self.path())
+    }
+}
+
 impl Condition {
     pub fn target(&self) -> Target {
         match self {
@@ -168,6 +190,7 @@ pub struct QuietWindow {
 pub const MAX_REMINDERS: u32 = 10;
 pub const MAX_MESSAGE_LIMIT: u32 = 100;
 const MAX_QUIET_WINDOWS: usize = 5;
+const MAX_RUNBOOK_URL: usize = 2000;
 const DAY_MINUTES: u32 = 1440;
 const WEEK_MINUTES: u32 = 7 * DAY_MINUTES;
 
@@ -178,6 +201,20 @@ pub fn read_time_zone(name: Option<&str>) -> Tz {
 pub fn format_clock(at: DateTime<Utc>, time_zone: Tz) -> String {
     let clock = at.with_timezone(&time_zone).format("%H:%M").to_string();
     if time_zone == Tz::UTC { format!("{clock} UTC") } else { clock }
+}
+
+pub fn format_moment(at: DateTime<Utc>, now: DateTime<Utc>, time_zone: Tz) -> String {
+    let local = at.with_timezone(&time_zone);
+    let today = now.with_timezone(&time_zone).date_naive();
+
+    let day = match (today - local.date_naive()).num_days() {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        _ => local.format("%b %-d").to_string(),
+    };
+
+    let zone = if time_zone == Tz::UTC { " UTC" } else { "" };
+    format!("{day} at {}{zone}", local.format("%-I:%M %p"))
 }
 
 fn read_clock(text: &str) -> Option<u32> {
@@ -224,7 +261,7 @@ pub fn read_log_severity(level: &str) -> Option<u8> {
     }
 }
 
-fn describe_log_level(level: &str) -> &str {
+pub fn describe_log_level(level: &str) -> &str {
     match level {
         "warn" => "warning",
         other => other,
@@ -432,9 +469,11 @@ pub fn validate_options(
         return invalid("The time zone is unknown");
     }
     if let Some(url) = &options.runbook_url
-        && !(url.starts_with("https://") || url.starts_with("http://"))
+        && parse_runbook_url(url).is_none()
     {
-        return invalid("The runbook URL must start with http:// or https://");
+        return invalid(
+            "The runbook URL must be an http:// or https:// link under 2000 characters",
+        );
     }
     if options
         .severity_label
@@ -444,6 +483,17 @@ pub fn validate_options(
         return invalid("The severity label can be up to 20 characters");
     }
     Ok(())
+}
+
+pub fn parse_runbook_url(url: &str) -> Option<reqwest::Url> {
+    if url.len() > MAX_RUNBOOK_URL {
+        return None;
+    }
+
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let is_web = matches!(parsed.scheme(), "http" | "https") && parsed.host().is_some();
+
+    (is_web && parsed.as_str().len() <= MAX_RUNBOOK_URL).then_some(parsed)
 }
 
 pub fn describe_condition(condition: &Condition, for_secs: u32) -> String {

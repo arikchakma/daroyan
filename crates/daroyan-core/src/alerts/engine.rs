@@ -1,18 +1,24 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use daroyan_protocol::host::Host;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
 use crate::agents::Agents;
+use crate::alerts::deploys::{DEPLOY_WINDOW_SECS, DeployNote, DeployWatch};
 use crate::alerts::evaluate::{
-    Level, Reading, ServerSnapshot, find_readings, format_percent, is_past, make_reading,
-    rate,
+    Level, NO_DATA, Reading, ServerSnapshot, find_readings, format_percent, is_past,
+    make_reading, rate,
 };
+use crate::alerts::facts::{AlertFacts, CheckCount, FactSources};
 use crate::alerts::integrations::IntegrationConfig;
-use crate::alerts::notify::{Notice, send_notice};
+use crate::alerts::message::{AlertMessage, Moment};
+use crate::alerts::notify::{
+    ChatMessage, Details, Notice, Thread, Tone, send_notice, update_parent,
+};
 use crate::alerts::rules::{
     Condition, NoData, RuleOptions, Scope, Target, describe_rule, format_clock,
     format_duration, format_ms, read_log_severity, read_time_zone,
@@ -97,6 +103,11 @@ pub struct AlertEngine {
     sent: HashMap<String, Vec<DateTime<Utc>>>,
     limited: HashMap<String, DateTime<Utc>>,
     maintained: HashSet<String>,
+    labels: HashMap<String, Vec<String>>,
+    servers: HashMap<String, Server>,
+    checks: HashMap<String, UptimeCheck>,
+    down: HashSet<String>,
+    deploys: DeployWatch,
 }
 
 enum Slot {
@@ -162,6 +173,11 @@ impl AlertEngine {
             sent: HashMap::new(),
             limited: HashMap::new(),
             maintained: HashSet::new(),
+            labels: HashMap::new(),
+            servers: HashMap::new(),
+            checks: HashMap::new(),
+            down: HashSet::new(),
+            deploys: DeployWatch::default(),
         }
     }
 
@@ -380,6 +396,24 @@ impl AlertEngine {
                 .into_iter()
                 .collect();
         let facts: Vec<ServerFacts> = servers.iter().map(read_server_facts).collect();
+        self.labels = facts
+            .iter()
+            .map(|server| (server.server.id.clone(), server.labels.clone()))
+            .collect();
+        self.servers = servers
+            .iter()
+            .map(|server| (server.id.clone(), server.clone()))
+            .collect();
+        self.checks =
+            checks.iter().map(|check| (check.id.clone(), check.clone())).collect();
+        self.down = down.keys().cloned().collect();
+
+        for server in &facts {
+            if let Some(report) = &server.report {
+                self.deploys.observe(&server.server.id, &report.processes, now);
+            }
+        }
+
         let target_names: HashMap<String, String> = servers
             .iter()
             .map(|server| (server.id.clone(), server.name.clone()))
@@ -422,7 +456,7 @@ impl AlertEngine {
                     (None, NoData::Keep) => continue,
                     (None, NoData::Resolve) => (Vec::new(), false),
                     (None, NoData::Alert) => {
-                        (vec![make_reading("No data", 0.0, "No data".to_string())], true)
+                        (vec![make_reading(NO_DATA, 0.0, NO_DATA.to_string())], true)
                     }
                 };
                 evaluated.insert(pair);
@@ -441,7 +475,20 @@ impl AlertEngine {
                     breaching.insert(key.clone());
                     self.clearing.remove(&key);
                     let since = *self.pending.entry(key.clone()).or_insert(now);
-                    if (now - since).num_seconds() < for_secs {
+                    let hold =
+                        if matches!(parsed.condition, Condition::ProcessStopped { .. })
+                            && self.deploys.may_be_replaced(
+                                &target.id,
+                                &reading.subject,
+                                now,
+                            )
+                        {
+                            for_secs.max(DEPLOY_WINDOW_SECS)
+                        } else {
+                            for_secs
+                        };
+
+                    if (now - since).num_seconds() < hold {
                         continue;
                     }
                     match firing_by_key.get(&key) {
@@ -451,7 +498,6 @@ impl AlertEngine {
                                 &parsed,
                                 alert,
                                 &target.name,
-                                target.target,
                                 &reading,
                                 level,
                                 &integrations,
@@ -515,6 +561,7 @@ impl AlertEngine {
                 .await?;
         }
 
+        self.send_deploy_notes(&rules, &facts, &integrations, now);
         self.pending.retain(|key, _| breaching.contains(key));
         let open: HashSet<AlertKey> = firing.iter().map(to_alert_key).collect();
         self.clearing.retain(|key, _| open.contains(key));
@@ -534,20 +581,108 @@ impl AlertEngine {
     }
 
     fn get_target_url(&self, target: Target, id: &str) -> Option<String> {
-        let path = match target {
-            Target::Server => "servers",
-            Target::Check => "uptime",
-            Target::Cron => "crons",
-        };
-        self.app_url
-            .as_ref()
-            .map(|url| format!("{}/{path}/{id}", url.trim_end_matches('/')))
+        self.app_url.as_ref().map(|url| target.url(url, id))
     }
 
     fn make_title(parsed: &ParsedRule, prefix: &str, rule: &AlertRule) -> String {
         match &parsed.options.severity_label {
             Some(label) => format!("[{label}] {prefix}: {}", rule.name),
             None => format!("{prefix}: {}", rule.name),
+        }
+    }
+
+    fn count_server_checks(&self, server: &Server) -> Option<CheckCount> {
+        let host: Host = serde_json::from_value(server.host.clone()).ok()?;
+        let names: Vec<&str> = std::iter::once(host.hostname.as_str())
+            .chain(host.private_ip.as_deref())
+            .collect();
+        let checks: Vec<&UptimeCheck> = self
+            .checks
+            .values()
+            .filter(|check| !check.paused)
+            .filter(|check| {
+                reqwest::Url::parse(&check.target)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_string))
+                    .is_some_and(|host| names.contains(&host.as_str()))
+            })
+            .collect();
+
+        Some(CheckCount {
+            passing: checks.iter().filter(|check| !self.down.contains(&check.id)).count(),
+            total: checks.len(),
+        })
+    }
+
+    async fn gather_facts(
+        &self,
+        parsed: &ParsedRule,
+        alert: &Alert,
+        moment: Moment,
+        now: DateTime<Utc>,
+    ) -> AlertFacts {
+        let is_unused = alert.subject == NO_DATA
+            || (moment.is_resolved()
+                && !matches!(parsed.condition, Condition::Logs { .. }))
+            || self.is_silenced(&alert.rule_id, parsed, alert, now);
+        if is_unused {
+            return AlertFacts::None;
+        }
+
+        let server = alert.server_id.as_ref().and_then(|id| self.servers.get(id));
+        let sources = FactSources {
+            analytics: &self.analytics,
+            server,
+            check: alert.check_id.as_ref().and_then(|id| self.checks.get(id)),
+            server_checks: server.and_then(|server| self.count_server_checks(server)),
+        };
+
+        sources
+            .gather(&parsed.condition, alert, moment, now)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(alert_id = %alert.id, error = ?error, "gather alert facts");
+                AlertFacts::None
+            })
+    }
+
+    async fn make_alert_notice(
+        &self,
+        rule: &AlertRule,
+        parsed: &ParsedRule,
+        alert: &Alert,
+        target_name: &str,
+        moment: Moment,
+        prefix: &str,
+        body: String,
+    ) -> Notice {
+        let target_id = get_target_id(alert);
+        let target = get_target(alert);
+        let now = Utc::now();
+        let facts = self.gather_facts(parsed, alert, moment, now).await;
+
+        let message = AlertMessage {
+            rule,
+            condition: &parsed.condition,
+            options: &parsed.options,
+            alert,
+            facts: &facts,
+            target,
+            target_id: &target_id,
+            target_name,
+            labels: self.labels.get(&target_id).map_or(&[], Vec::as_slice),
+            app_url: self.app_url.as_deref(),
+            now,
+        };
+
+        Notice {
+            event: if moment.is_resolved() { "alert.resolved" } else { "alert.firing" },
+            tone: moment.tone(&alert.severity),
+            title: Self::make_title(parsed, prefix, rule),
+            body,
+            url: self.get_target_url(target, &target_id),
+            data: describe_alert(rule, target, &target_id, target_name, alert),
+            details: message.details(moment),
         }
     }
 
@@ -565,6 +700,7 @@ impl AlertEngine {
     ) -> Result<()> {
         tracing::info!(rule_id = %rule.id, target_id, subject = %reading.subject, level = level.as_str(), "alert firing");
         let target_of = |kind: Target| (target == kind).then(|| target_id.to_string());
+
         let alert = self
             .database
             .create_alert(NewAlert {
@@ -582,19 +718,26 @@ impl AlertEngine {
         self.database
             .mark_alert_rule_fired(&AlertRuleId::from(rule.id.as_str()), Utc::now())
             .await?;
+
         let prefix = if level == Level::Warning { "Warning" } else { "Critical" };
-        let notice = Notice {
-            event: "alert.firing",
-            title: Self::make_title(parsed, prefix, rule),
-            body: format!(
-                "{target_name} · {}: {}\n{}",
-                alert.subject,
-                alert.value,
-                self.describe(parsed, rule)
-            ),
-            url: self.get_target_url(target, target_id),
-            data: describe_alert(rule, target, target_id, target_name, &alert),
-        };
+        let body = format!(
+            "{target_name} · {}: {}\n{}",
+            alert.subject,
+            alert.value,
+            self.describe(parsed, rule)
+        );
+        let notice = self
+            .make_alert_notice(
+                rule,
+                parsed,
+                &alert,
+                target_name,
+                Moment::Firing,
+                prefix,
+                body,
+            )
+            .await;
+
         self.notify(
             parsed.recipients(level),
             integrations,
@@ -602,11 +745,14 @@ impl AlertEngine {
             rule,
             parsed,
             &alert,
+            None,
         )
         .await?;
+
         if self.maintained.contains(target_id) {
             return Ok(());
         }
+
         let fire = RuleFire {
             rule,
             target_kind: match target {
@@ -623,6 +769,7 @@ impl AlertEngine {
         {
             tracing::error!(rule_id = %rule.id, error = ?error, "declare an incident");
         }
+
         Ok(())
     }
 
@@ -632,7 +779,6 @@ impl AlertEngine {
         parsed: &ParsedRule,
         alert: &Alert,
         target_name: &str,
-        target: Target,
         reading: &Reading,
         level: Level,
         integrations: &[Integration],
@@ -646,26 +792,41 @@ impl AlertEngine {
                 now,
             )
             .await?;
+
         let escalated = Alert {
             severity: level.as_str().to_string(),
             value: reading.label.clone(),
             ..alert.clone()
         };
-        let target_id = get_target_id(alert);
-        let notice = Notice {
-            event: "alert.firing",
-            title: Self::make_title(parsed, "Critical", rule),
-            body: format!(
-                "{target_name} · {}: {} (was a warning)\n{}",
-                alert.subject,
-                reading.label,
-                self.describe(parsed, rule)
-            ),
-            url: self.get_target_url(target, &target_id),
-            data: describe_alert(rule, target, &target_id, target_name, &escalated),
-        };
-        self.notify(parsed.recipients(level), integrations, &notice, rule, parsed, alert)
-            .await
+
+        let body = format!(
+            "{target_name} · {}: {} (was a warning)\n{}",
+            alert.subject,
+            reading.label,
+            self.describe(parsed, rule)
+        );
+        let notice = self
+            .make_alert_notice(
+                rule,
+                parsed,
+                &escalated,
+                target_name,
+                Moment::Escalated,
+                "Critical",
+                body,
+            )
+            .await;
+
+        self.notify(
+            parsed.recipients(level),
+            integrations,
+            &notice,
+            rule,
+            parsed,
+            alert,
+            Some(Reply::Escalate),
+        )
+        .await
     }
 
     async fn remind(
@@ -680,6 +841,7 @@ impl AlertEngine {
         let Some(every) = parsed.options.remind_every_secs else {
             return Ok(());
         };
+
         let sent = u32::try_from(alert.reminders_sent).unwrap_or_default();
         let last = alert.last_notified_at.unwrap_or(alert.started_at);
         if sent >= parsed.options.remind_times
@@ -687,6 +849,7 @@ impl AlertEngine {
         {
             return Ok(());
         }
+
         self.database
             .mark_alert_reminded(
                 &AlertId::from(alert.id.as_str()),
@@ -694,28 +857,43 @@ impl AlertEngine {
                 now,
             )
             .await?;
+
         let level = Level::read(&alert.severity);
         let target_id = get_target_id(alert);
-        let target = get_target(alert);
         let target_name =
             names.get(&target_id).cloned().unwrap_or_else(|| target_id.clone());
         let lasted =
             u32::try_from((now - alert.started_at).num_seconds()).unwrap_or_default();
-        let notice = Notice {
-            event: "alert.firing",
-            title: Self::make_title(parsed, "Still firing", rule),
-            body: format!(
-                "{target_name} · {}: {} for {}\n{}",
-                alert.subject,
-                alert.value,
-                format_duration(lasted),
-                self.describe(parsed, rule)
-            ),
-            url: self.get_target_url(target, &target_id),
-            data: describe_alert(rule, target, &target_id, &target_name, alert),
-        };
-        self.notify(parsed.recipients(level), integrations, &notice, rule, parsed, alert)
-            .await
+
+        let body = format!(
+            "{target_name} · {}: {} for {}\n{}",
+            alert.subject,
+            alert.value,
+            format_duration(lasted),
+            self.describe(parsed, rule)
+        );
+        let notice = self
+            .make_alert_notice(
+                rule,
+                parsed,
+                alert,
+                &target_name,
+                Moment::Reminder { lasted_secs: lasted },
+                "Still firing",
+                body,
+            )
+            .await;
+
+        self.notify(
+            parsed.recipients(level),
+            integrations,
+            &notice,
+            rule,
+            parsed,
+            alert,
+            Some(Reply::Quiet),
+        )
+        .await
     }
 
     async fn resolve_alert(
@@ -731,6 +909,7 @@ impl AlertEngine {
         self.database
             .resolve_alert(&AlertId::from(alert.id.as_str()), now)
             .await?;
+
         let lasted =
             u32::try_from((now - alert.started_at).num_seconds()).unwrap_or_default();
         let resolved = Alert {
@@ -738,19 +917,24 @@ impl AlertEngine {
             status: "resolved".to_string(),
             ..alert.clone()
         };
-        let target_id = get_target_id(alert);
-        let target = get_target(alert);
-        let notice = Notice {
-            event: "alert.resolved",
-            title: Self::make_title(parsed, "Resolved", rule),
-            body: format!(
-                "{target_name} · {} is back to normal after {}",
-                alert.subject,
-                format_duration(lasted)
-            ),
-            url: self.get_target_url(target, &target_id),
-            data: describe_alert(rule, target, &target_id, target_name, &resolved),
-        };
+
+        let body = format!(
+            "{target_name} · {} is back to normal after {}",
+            alert.subject,
+            format_duration(lasted)
+        );
+        let notice = self
+            .make_alert_notice(
+                rule,
+                parsed,
+                &resolved,
+                target_name,
+                Moment::Resolved { lasted_secs: lasted },
+                "Resolved",
+                body,
+            )
+            .await;
+
         self.notify(
             parsed.recipients(Level::read(&alert.severity)),
             integrations,
@@ -758,6 +942,7 @@ impl AlertEngine {
             rule,
             parsed,
             alert,
+            Some(Reply::Resolve),
         )
         .await
     }
@@ -765,6 +950,18 @@ impl AlertEngine {
     fn is_muted(&self, rule_id: &str, alert: &Alert) -> bool {
         let target_id = get_target_id(alert);
         self.mutes.iter().any(|mute| mute.covers(rule_id, &target_id))
+    }
+
+    fn is_silenced(
+        &self,
+        rule_id: &str,
+        parsed: &ParsedRule,
+        alert: &Alert,
+        now: DateTime<Utc>,
+    ) -> bool {
+        self.is_muted(rule_id, alert)
+            || parsed.options.is_quiet(now)
+            || self.maintained.contains(&get_target_id(alert))
     }
 
     async fn end_mutes(
@@ -805,24 +1002,31 @@ impl AlertEngine {
                 if self.is_muted(&rule.id, alert) {
                     continue;
                 }
+
                 let target_id = get_target_id(alert);
-                let target = get_target(alert);
                 let target_name =
                     names.get(&target_id).cloned().unwrap_or_else(|| target_id.clone());
                 let lasted = u32::try_from((now - alert.started_at).num_seconds())
                     .unwrap_or_default();
-                let notice = Notice {
-                    event: "alert.firing",
-                    title: Self::make_title(&parsed, "Still firing", rule),
-                    body: format!(
-                        "{target_name} · {}: {} for {}\nThe mute ended and it is still firing.",
-                        alert.subject,
-                        alert.value,
-                        format_duration(lasted)
-                    ),
-                    url: self.get_target_url(target, &target_id),
-                    data: describe_alert(rule, target, &target_id, &target_name, alert),
-                };
+
+                let body = format!(
+                    "{target_name} · {}: {} for {}\nThe mute ended and it is still firing.",
+                    alert.subject,
+                    alert.value,
+                    format_duration(lasted)
+                );
+                let notice = self
+                    .make_alert_notice(
+                        rule,
+                        &parsed,
+                        alert,
+                        &target_name,
+                        Moment::MuteEnded { lasted_secs: lasted },
+                        "Still firing",
+                        body,
+                    )
+                    .await;
+
                 let level = Level::read(&alert.severity);
                 self.notify(
                     parsed.recipients(level),
@@ -831,6 +1035,7 @@ impl AlertEngine {
                     rule,
                     &parsed,
                     alert,
+                    Some(Reply::Broadcast),
                 )
                 .await?;
             }
@@ -838,18 +1043,105 @@ impl AlertEngine {
         Ok(())
     }
 
-    fn take_slot(&mut self, rule_id: &str, limit: u32, now: DateTime<Utc>) -> Slot {
+    fn send_deploy_notes(
+        &mut self,
+        rules: &[AlertRule],
+        facts: &[ServerFacts<'_>],
+        integrations: &[Integration],
+        now: DateTime<Utc>,
+    ) {
+        for (server_id, replacements) in self.deploys.take_ready(now) {
+            let Some(server) = facts.iter().find(|server| server.server.id == server_id)
+            else {
+                continue;
+            };
+            if self.maintained.contains(&server_id) {
+                continue;
+            }
+
+            let mut first: Option<&AlertRule> = None;
+            let mut recipients: Vec<String> = Vec::new();
+            for rule in rules {
+                if !rule.enabled {
+                    continue;
+                }
+
+                let Some(parsed) = parse_rule(rule) else { continue };
+                let Condition::ProcessStopped { name } = &parsed.condition else {
+                    continue;
+                };
+
+                let replaced = name.as_ref().is_none_or(|name| {
+                    replacements.iter().any(|replacement| &replacement.name == name)
+                });
+                if !replaced
+                    || !parsed.scope.includes(&server_id, &server.labels)
+                    || parsed.options.is_quiet(now)
+                    || self.mutes.iter().any(|mute| mute.covers(&rule.id, &server_id))
+                {
+                    continue;
+                }
+
+                if parsed
+                    .options
+                    .message_limit
+                    .is_some_and(|limit| !self.try_slot(&rule.id, limit, now))
+                {
+                    continue;
+                }
+
+                first.get_or_insert(rule);
+                for id in parsed.integration_ids {
+                    if !recipients.contains(&id) {
+                        recipients.push(id);
+                    }
+                }
+            }
+
+            let Some(first) = first else { continue };
+
+            let notice = DeployNote {
+                server_id: &server_id,
+                server_name: &server.server.name,
+                labels: &server.labels,
+                replacements: &replacements,
+                app_url: self.app_url.as_deref(),
+            }
+            .notice();
+
+            tracing::info!(server_id, count = replacements.len(), "deploy noted");
+            let log = DeliveryLog {
+                rule_id: first.id.clone(),
+                alert_id: None,
+                reply: None,
+            };
+            notify_integrations(&self.database, &recipients, integrations, &notice, &log);
+        }
+    }
+
+    fn try_slot(&mut self, rule_id: &str, limit: u32, now: DateTime<Utc>) -> bool {
         let sent = self.sent.entry(rule_id.to_string()).or_default();
         sent.retain(|at| (now - *at).num_seconds() < LIMIT_WINDOW_SECS);
-        if sent.len() < usize::try_from(limit).unwrap_or(usize::MAX) {
+        let is_free = sent.len() < usize::try_from(limit).unwrap_or(usize::MAX);
+        if is_free {
             sent.push(now);
+        }
+
+        is_free
+    }
+
+    fn take_slot(&mut self, rule_id: &str, limit: u32, now: DateTime<Utc>) -> Slot {
+        if self.try_slot(rule_id, limit, now) {
             return Slot::Send;
         }
         if self.limited.get(rule_id).is_some_and(|until| *until > now) {
             return Slot::Drop;
         }
-        let until = sent
-            .first()
+
+        let until = self
+            .sent
+            .get(rule_id)
+            .and_then(|sent| sent.first())
             .map_or(now, |at| *at + chrono::Duration::seconds(LIMIT_WINDOW_SECS));
         self.limited.insert(rule_id.to_string(), until);
         Slot::Summary(until)
@@ -863,22 +1155,24 @@ impl AlertEngine {
         rule: &AlertRule,
         parsed: &ParsedRule,
         alert: &Alert,
+        reply: Option<Reply>,
     ) -> Result<()> {
         let now = Utc::now();
-        if self.is_muted(&rule.id, alert)
-            || parsed.options.is_quiet(now)
-            || self.maintained.contains(&get_target_id(alert))
-        {
+        if self.is_silenced(&rule.id, parsed, alert, now) {
             return Ok(());
         }
+
         let log = DeliveryLog {
             rule_id: rule.id.clone(),
             alert_id: Some(alert.id.clone()),
+            reply,
         };
+
         let Some(limit) = parsed.options.message_limit else {
             notify_integrations(&self.database, recipients, integrations, notice, &log);
             return Ok(());
         };
+
         match self.take_slot(&rule.id, limit, now) {
             Slot::Send => {
                 notify_integrations(
@@ -894,9 +1188,11 @@ impl AlertEngine {
                 self.database
                     .mark_alert_rule_quiet(&AlertRuleId::from(rule.id.as_str()), until)
                     .await?;
+
                 let time_zone = read_time_zone(parsed.options.time_zone.as_deref());
                 let summary = Notice {
                     event: "alert.limited",
+                    tone: Tone::Warning,
                     title: Self::make_title(parsed, "Limit reached", rule),
                     body: format!(
                         "{limit} messages in the last hour, so this rule is quiet until {}\nSee every alert in Daroyan.",
@@ -909,8 +1205,14 @@ impl AlertEngine {
                         "rule": { "id": rule.id, "name": rule.name },
                         "quiet_until": until.format(crate::time::ISO_FORMAT).to_string(),
                     }),
+                    details: Details::default(),
                 };
-                let log = DeliveryLog { rule_id: rule.id.clone(), alert_id: None };
+
+                let log = DeliveryLog {
+                    rule_id: rule.id.clone(),
+                    alert_id: None,
+                    reply: None,
+                };
                 notify_integrations(
                     &self.database,
                     recipients,
@@ -920,6 +1222,7 @@ impl AlertEngine {
                 );
             }
         }
+
         Ok(())
     }
 }
@@ -928,6 +1231,21 @@ impl AlertEngine {
 pub struct DeliveryLog {
     pub rule_id: String,
     pub alert_id: Option<String>,
+    pub reply: Option<Reply>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reply {
+    Quiet,
+    Broadcast,
+    Escalate,
+    Resolve,
+}
+
+impl Reply {
+    fn updates_parent(self) -> bool {
+        matches!(self, Self::Escalate | Self::Resolve)
+    }
 }
 
 pub fn notify_integrations(
@@ -944,6 +1262,7 @@ pub fn notify_integrations(
         let integration = integration.clone();
         let notice = notice.clone();
         let log = log.clone();
+
         tokio::spawn(async move {
             if let Err(error) =
                 deliver_notice(&database, &integration, &notice, Some(log)).await
@@ -954,21 +1273,95 @@ pub fn notify_integrations(
     }
 }
 
+type DeliveryKey = (String, String);
+
+// One alert's messages to one integration go out in order, so a slow
+// escalation can't repaint the parent after its resolve.
+static ALERT_DELIVERIES: LazyLock<
+    Mutex<HashMap<DeliveryKey, Arc<tokio::sync::Mutex<()>>>>,
+> = LazyLock::new(Mutex::default);
+
 pub async fn deliver_notice(
     database: &Database,
     integration: &Integration,
     notice: &Notice,
     log: Option<DeliveryLog>,
 ) -> Result<(), String> {
-    let outcome =
-        match serde_json::from_value::<IntegrationConfig>(integration.config.clone()) {
-            Ok(config) => send_notice(&config, notice).await,
-            Err(_) => {
-                Err("The integration settings are unreadable. Edit and save it again"
-                    .to_string())
-            }
-        };
+    let Some(key) = log
+        .as_ref()
+        .and_then(|log| log.alert_id.clone())
+        .map(|alert_id| (alert_id, integration.id.clone()))
+    else {
+        return send_and_log(database, integration, notice, log).await;
+    };
+
+    let turn = Arc::clone(
+        ALERT_DELIVERIES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(key.clone())
+            .or_default(),
+    );
+
+    let outcome = {
+        let _guard = turn.lock().await;
+        send_and_log(database, integration, notice, log).await
+    };
+
+    let mut deliveries = ALERT_DELIVERIES.lock().unwrap_or_else(PoisonError::into_inner);
+    if Arc::strong_count(&turn) == 2 {
+        deliveries.remove(&key);
+    }
+
+    outcome
+}
+
+async fn send_and_log(
+    database: &Database,
+    integration: &Integration,
+    notice: &Notice,
+    log: Option<DeliveryLog>,
+) -> Result<(), String> {
+    let id = IntegrationId::from(integration.id.as_str());
+    let reply = log.as_ref().and_then(|log| log.reply);
+
+    let parent = match (&log, reply) {
+        (Some(DeliveryLog { alert_id: Some(alert_id), .. }), Some(_)) => {
+            find_thread(database, &AlertId::from(alert_id.as_str()), &id).await
+        }
+        _ => None,
+    };
+    let thread = parent
+        .as_ref()
+        .zip(reply)
+        .map(|((_, parent), reply)| Thread { parent, broadcast: reply != Reply::Quiet });
+
+    let config =
+        serde_json::from_value::<IntegrationConfig>(integration.config.clone()).ok();
+    let outcome = match &config {
+        Some(config) => send_notice(config, notice, thread).await,
+        None => {
+            Err("The integration settings are unreadable. Edit and save it again"
+                .to_string())
+        }
+    };
+
+    if let Some(config) = &config
+        && outcome.is_ok()
+        && let Some((parent_id, parent)) = &parent
+        && reply.is_some_and(Reply::updates_parent)
+    {
+        refresh_parent(database, integration, config, parent_id, parent, notice).await;
+    }
+
     if let Some(log) = log {
+        let starts_thread = parent.is_none()
+            && match reply {
+                None => notice.event == "alert.firing",
+                Some(reply) => reply == Reply::Escalate,
+            };
+
+        let posted = if starts_thread { outcome.clone().ok().flatten() } else { None };
         let delivery = NewAlertDelivery {
             id: new_id(Prefix::AlertDelivery),
             rule_id: log.rule_id,
@@ -978,18 +1371,72 @@ pub async fn deliver_notice(
             message: notice.summarize(),
             error: outcome.clone().err(),
             sent_at: Utc::now(),
+            chat_channel_id: posted.as_ref().map(|posted| posted.channel_id.clone()),
+            chat_payload: posted
+                .as_ref()
+                .and_then(|posted| posted.payload.as_ref())
+                .map(Value::to_string),
+            chat_message_id: posted.map(|posted| posted.message_id),
         };
+
         if let Err(error) = database.create_alert_delivery(delivery).await {
             tracing::error!(integration_id = %integration.id, error = %error, "log a delivery");
         }
     }
-    let id = IntegrationId::from(integration.id.as_str());
+
     if let Err(error) =
         database.record_integration_delivery(&id, outcome.clone().err()).await
     {
         tracing::error!(integration_id = %integration.id, error = %error, "record a delivery");
     }
-    outcome
+
+    outcome.map(|_| ())
+}
+
+async fn refresh_parent(
+    database: &Database,
+    integration: &Integration,
+    config: &IntegrationConfig,
+    parent_id: &str,
+    parent: &ChatMessage,
+    notice: &Notice,
+) {
+    let body = match update_parent(config, parent, notice).await {
+        Ok(Some(body)) => body,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(integration_id = %integration.id, error = %error, "update the alert message");
+            return;
+        }
+    };
+
+    if let Err(error) = database.update_chat_payload(parent_id, body.to_string()).await {
+        tracing::error!(integration_id = %integration.id, error = %error, "save the alert message");
+    }
+}
+
+async fn find_thread(
+    database: &Database,
+    alert_id: &AlertId,
+    integration_id: &IntegrationId,
+) -> Option<(String, ChatMessage)> {
+    let delivery = database
+        .find_alert_thread(alert_id, integration_id)
+        .await
+        .inspect_err(|error| {
+            tracing::error!(alert_id = %alert_id.as_str(), error = %error, "find the alert thread");
+        })
+        .ok()??;
+
+    let message = ChatMessage {
+        channel_id: delivery.chat_channel_id?,
+        message_id: delivery.chat_message_id?,
+        payload: delivery
+            .chat_payload
+            .and_then(|payload| serde_json::from_str(&payload).ok()),
+    };
+
+    Some((delivery.id, message))
 }
 
 fn read_server_facts(server: &Server) -> ServerFacts<'_> {
@@ -1015,7 +1462,7 @@ fn describe_alert(
     target_id: &str,
     target_name: &str,
     alert: &Alert,
-) -> serde_json::Value {
+) -> Value {
     let target_key = match target {
         Target::Server => "server",
         Target::Check => "check",

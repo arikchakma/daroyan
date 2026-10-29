@@ -3,9 +3,10 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use daroyan_core::alerts::backtest::backtest_rule;
 use daroyan_core::alerts::engine::{deliver_notice, parse_rule};
-use daroyan_core::alerts::notify::Notice;
+use daroyan_core::alerts::notify::{Details, Notice, Tone};
 use daroyan_core::alerts::rules::{
-    Condition, RuleOptions, Scope, describe_condition, validate_options,
+    Condition, RuleOptions, Scope, describe_condition, parse_runbook_url,
+    validate_options,
 };
 use daroyan_core::db::entities::alert_rules::Model as AlertRule;
 use daroyan_core::db::ids::AlertRuleId;
@@ -126,7 +127,10 @@ fn read_options(options: RuleOptions) -> RuleOptions {
             .filter(|text| !text.is_empty())
     };
     RuleOptions {
-        runbook_url: trim(options.runbook_url),
+        runbook_url: trim(options.runbook_url).map(|url| match parse_runbook_url(&url) {
+            Some(parsed) => parsed.to_string(),
+            None => url,
+        }),
         severity_label: trim(options.severity_label),
         ..options
     }
@@ -423,6 +427,7 @@ async fn test_alert_rule(
     check_integrations(&state, &body.integration_ids).await?;
     let notice = Notice {
         event: "test",
+        tone: Tone::Note,
         title: format!("Test: {}", read_name(&body.name)?),
         body: format!(
             "This is a test. Real alerts for this rule look like this.\n{}",
@@ -430,6 +435,7 @@ async fn test_alert_rule(
         ),
         url: state.config.app_url.clone(),
         data: json!({}),
+        details: Details::default(),
     };
     let integrations = state.database.list_integrations().await?;
     let mut failures = Vec::new();

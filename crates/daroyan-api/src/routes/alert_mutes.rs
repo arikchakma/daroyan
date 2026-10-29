@@ -5,7 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use daroyan_core::alerts::engine::{DeliveryLog, notify_integrations, parse_rule};
-use daroyan_core::alerts::notify::Notice;
+use daroyan_core::alerts::notify::{Details, Notice, Tone};
 use daroyan_core::alerts::rules::{format_clock, format_duration, read_time_zone};
 use daroyan_core::db::entities::users::Model as User;
 use daroyan_core::db::ids::{AlertMuteId, AlertRuleId, CronId};
@@ -182,6 +182,7 @@ async fn create_alert_mute(
         let reason = reason.map(|text| format!(" · {text}")).unwrap_or_default();
         let notice = Notice {
             event: "alert.muted",
+            tone: Tone::Note,
             title: format!("Muted: {}", rule.name),
             body: format!("{first_name} muted {target_name}{length}{reason}\n{resume}"),
             url: state
@@ -190,11 +191,13 @@ async fn create_alert_mute(
                 .as_ref()
                 .map(|url| format!("{}/alerts/{}", url.trim_end_matches('/'), rule.id)),
             data: json!({ "rule": { "id": rule.id, "name": rule.name }, "mute": AlertMuteView::new(mute.clone(), Some(UserView::from(current.user.clone()))) }),
+            details: Details::default(),
         };
         let integrations = state.database.list_integrations().await?;
         let log = DeliveryLog {
             rule_id: rule.id.clone(),
             alert_id: covered.first().map(|alert| alert.id.clone()),
+            reply: None,
         };
         notify_integrations(
             &state.database,

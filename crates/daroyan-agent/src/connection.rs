@@ -388,6 +388,7 @@ mod tests {
             processes: Vec::new(),
             ports: Vec::new(),
             events: Vec::new(),
+            top: Vec::new(),
         });
         outbox.queue.front_mut().unwrap().host = None;
         let (_reports_tx, mut reports) = mpsc::channel(1);

@@ -1,7 +1,10 @@
 pub mod backtest;
 pub mod connect;
+pub mod deploys;
 pub mod engine;
 pub mod evaluate;
+pub mod facts;
 pub mod integrations;
+pub mod message;
 pub mod notify;
 pub mod rules;

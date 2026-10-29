@@ -7,7 +7,7 @@ use tokio::task::JoinHandle;
 use utoipa::ToSchema;
 
 use crate::alerts::engine::deliver_notice;
-use crate::alerts::notify::Notice;
+use crate::alerts::notify::{Details, Notice, Tone};
 use crate::db::Database;
 use crate::db::entities::alert_rules::Model as AlertRule;
 use crate::db::entities::incidents::Model as Incident;
@@ -196,8 +196,16 @@ pub async fn notify_incident(
     if channel_ids.is_empty() {
         return Ok(());
     }
+
+    let (event, tone) = if is_closed(status) {
+        ("incident.resolved", Tone::Resolved)
+    } else {
+        ("incident.updated", Tone::Note)
+    };
+
     let notice = Notice {
-        event: if is_closed(status) { "incident.resolved" } else { "incident.updated" },
+        event,
+        tone,
         title: format!(
             "[{}] {} — {}",
             describe_kind(incident),
@@ -215,6 +223,7 @@ pub async fn notify_incident(
             "status": status,
             "severity": incident.severity,
         }),
+        details: Details::default(),
     };
     for integration in database
         .list_integrations()

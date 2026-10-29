@@ -1,7 +1,7 @@
 use chrono::Utc;
 use daroyan_protocol::report::{Event, EventKind};
-use duckdb::{Connection, params};
-use serde::Serialize;
+use duckdb::{Connection, OptionalExt, params};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -85,6 +85,40 @@ pub async fn list_recent_events(
                     })
                 })?
                 .collect()
+        })
+        .await
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ProcessExit {
+    pub code: Option<i32>,
+    pub signal: Option<String>,
+    pub oom: bool,
+    pub stopped: bool,
+    pub ran_secs: Option<u64>,
+    pub restarts: Option<u32>,
+}
+
+pub async fn find_last_exit(
+    analytics: &Analytics,
+    server_id: String,
+    name: String,
+    since_ms: i64,
+) -> Result<Option<ProcessExit>> {
+    analytics
+        .read(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT CAST(data AS VARCHAR) FROM server_events \
+                 WHERE server_id = ? AND kind = 'process_exited' AND json_extract_string(data, '$.name') = ? \
+                 AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT 1",
+            )?;
+
+            let data: Option<String> = statement
+                .query_row(params![server_id, name, since_ms], |row| row.get(0))
+                .optional()?;
+
+            Ok(data.and_then(|data| serde_json::from_str(&data).ok()))
         })
         .await
 }

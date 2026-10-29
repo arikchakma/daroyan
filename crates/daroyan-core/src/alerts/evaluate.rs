@@ -126,6 +126,8 @@ pub fn find_readings(
     Some(readings)
 }
 
+pub const NO_DATA: &str = "No data";
+
 pub fn make_reading(subject: &str, value: f64, label: String) -> Reading {
     Reading { subject: subject.to_string(), value, label }
 }
@@ -176,6 +178,7 @@ mod tests {
                 open: false,
                 latency_ms: None,
             }],
+            top: Vec::new(),
         }
     }
 
@@ -194,6 +197,7 @@ mod tests {
             read_speed: 0,
             write_speed: 0,
             controllable: true,
+            container: None,
         }
     }
 

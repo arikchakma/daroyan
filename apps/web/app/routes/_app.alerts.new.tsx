@@ -1,7 +1,7 @@
 import { useSearchParams } from 'react-router';
 
 import { RuleForm } from '~/components/alerts/rule-form';
-import type { RuleDraft } from '~/components/alerts/rule-form';
+import type { RuleDraft } from '~/utils/rule-form';
 
 export function meta() {
   return [{ title: 'New Rule · Daroyan' }];

@@ -1,5 +1,6 @@
 import type { Schemas } from '@daroyan/client';
 import { useQuery } from '@tanstack/react-query';
+import { cva } from 'class-variance-authority';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
@@ -79,6 +80,16 @@ function getWorstMetric(server: Schemas['ServerItem']) {
   ].filter((metric): metric is { label: string; value: number } => typeof metric.value === 'number');
   const worst = metrics.sort((a, b) => b.value - a.value)[0];
   return worst ? `${worst.label} ${Math.round(worst.value)}%` : '';
+}
+
+function describeCpu(points: Schemas['TrendPoint'][]) {
+  if (points.length === 0) {
+    return undefined;
+  }
+
+  const latest = points.reduce((a, b) => (b.at > a.at ? b : a));
+  const peak = points.reduce((a, b) => (b.value > a.value ? b : a));
+  return `CPU ${Math.round(latest.value)}% now, peak ${Math.round(peak.value)}% at ${formatClock(peak.at)}`;
 }
 
 function mergeDays(checks: Schemas['UptimeCheck'][]) {
@@ -290,24 +301,19 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
             </div>
           </DetailSection>
 
-          <EventsTile events={events} />
-
           <div className="grid grid-cols-2 gap-4 max-lg:grid-cols-1">
             <Tile
               title="Servers"
               href="/servers"
               linkLabel={`View all ${servers.length}`}
               value={`${servers.length - downServers.length} of ${servers.length} up`}
-              caption={
-                trends && trends.cpu.length > 0
-                  ? `avg CPU ${Math.round(trends.cpu.reduce((sum, point) => sum + point.value, 0) / trends.cpu.length)}%, last 24 hours`
-                  : undefined
-              }
+              caption={describeCpu(trends?.cpu ?? [])}
               chart={
                 <TrendBars
                   points={trends?.cpu ?? []}
                   label={(value) => `${Math.round(value)}% CPU`}
                   minScale={10}
+                  max={100}
                   fillClassName="bg-chart-primary"
                   warnAt={80}
                   criticalAt={95}
@@ -403,6 +409,8 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
               isSetUp={!!traceStatus?.last_span_at}
             />
           </div>
+
+          <EventsTile events={events} />
         </div>
       </div>
     </div>
@@ -491,6 +499,7 @@ type TrendBarsProps = {
   points: Schemas['TrendPoint'][];
   label: (value: number) => string;
   minScale: number;
+  max?: number;
   fillClassName: string;
   warnAt?: number;
   criticalAt?: number;
@@ -499,40 +508,73 @@ type TrendBarsProps = {
 const HOUR_MS = 3_600_000;
 const TREND_HOURS = 24;
 
+const trendBar = cva('absolute inset-x-0 bottom-0', {
+  variants: {
+    tone: {
+      normal: '',
+      warning: 'bg-toast-warning-icon',
+      critical: 'bg-brand',
+    },
+  },
+});
+
+type GetBarToneOptions = {
+  value: number;
+  warnAt?: number;
+  criticalAt?: number;
+};
+
+function getBarTone(options: GetBarToneOptions) {
+  const { value, warnAt, criticalAt } = options;
+
+  if (criticalAt !== undefined && value >= criticalAt) {
+    return 'critical';
+  }
+  if (warnAt !== undefined && value >= warnAt) {
+    return 'warning';
+  }
+
+  return 'normal';
+}
+
 function TrendBars(props: TrendBarsProps) {
-  const { points, label, minScale, fillClassName, warnAt, criticalAt } = props;
+  const { points, label, minScale, max, fillClassName, warnAt, criticalAt } = props;
 
   const byHour = new Map(points.map((point) => [point.at, point.value]));
   const lastHour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
   const hours = Array.from({ length: TREND_HOURS }, (_, index) => lastHour - (TREND_HOURS - 1 - index) * HOUR_MS);
-  const top = Math.max(minScale, ...points.map((point) => point.value)) * 1.25;
+  const top = max ?? Math.max(minScale, ...points.map((point) => point.value)) * 1.25;
 
   return (
-    <div className="flex h-7 items-stretch gap-0.5">
-      {hours.map((hour) => {
-        const value = byHour.get(hour);
-        return (
-          <span
-            key={hour}
-            title={value === undefined ? `${formatClock(hour)}: no data` : `${formatClock(hour)}: ${label(value)}`}
-            className="relative min-w-0.5 flex-1 overflow-hidden rounded-[1px] bg-surface-fill"
-          >
-            {value !== undefined && value > 0 && (
-              <span
-                className={cn(
-                  'absolute inset-x-0 bottom-0',
-                  criticalAt !== undefined && value >= criticalAt
-                    ? 'bg-brand'
-                    : warnAt !== undefined && value >= warnAt
-                      ? 'bg-toast-warning-icon'
-                      : fillClassName
-                )}
-                style={{ height: `${Math.max((value / top) * 100, 8)}%` }}
-              />
-            )}
-          </span>
-        );
-      })}
+    <div className="relative">
+      <div className="flex h-7 items-stretch gap-0.5">
+        {hours.map((hour) => {
+          const value = byHour.get(hour);
+          const tone = value === undefined ? 'normal' : getBarTone({ value, warnAt, criticalAt });
+
+          return (
+            <span
+              key={hour}
+              title={value === undefined ? `${formatClock(hour)}: no data` : `${formatClock(hour)}: ${label(value)}`}
+              className="relative min-w-0.5 flex-1 overflow-hidden rounded-[1px] bg-surface-fill"
+            >
+              {value !== undefined && value > 0 && (
+                <span
+                  className={cn(trendBar({ tone }), tone === 'normal' && fillClassName)}
+                  style={{ height: `${Math.max((value / top) * 100, 4)}%` }}
+                />
+              )}
+            </span>
+          );
+        })}
+      </div>
+      {max !== undefined && warnAt !== undefined && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 border-t border-dashed border-toast-warning-icon"
+          style={{ bottom: `${(warnAt / max) * 100}%` }}
+        />
+      )}
     </div>
   );
 }
