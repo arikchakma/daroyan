@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -1240,7 +1241,46 @@ pub fn notify_integrations(
     }
 }
 
+type DeliveryKey = (String, String);
+
+// One alert's messages to one integration go out in order, so a slow
+// escalation can't repaint the parent after its resolve.
+static ALERT_DELIVERIES: LazyLock<
+    Mutex<HashMap<DeliveryKey, Arc<tokio::sync::Mutex<()>>>>,
+> = LazyLock::new(Mutex::default);
+
 pub async fn deliver_notice(
+    database: &Database,
+    integration: &Integration,
+    notice: &Notice,
+    log: Option<DeliveryLog>,
+) -> Result<(), String> {
+    let Some(key) = log
+        .as_ref()
+        .and_then(|log| log.alert_id.clone())
+        .map(|alert_id| (alert_id, integration.id.clone()))
+    else {
+        return send_and_log(database, integration, notice, log).await;
+    };
+    let turn = Arc::clone(
+        ALERT_DELIVERIES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(key.clone())
+            .or_default(),
+    );
+    let outcome = {
+        let _guard = turn.lock().await;
+        send_and_log(database, integration, notice, log).await
+    };
+    let mut deliveries = ALERT_DELIVERIES.lock().unwrap_or_else(PoisonError::into_inner);
+    if Arc::strong_count(&turn) == 2 {
+        deliveries.remove(&key);
+    }
+    outcome
+}
+
+async fn send_and_log(
     database: &Database,
     integration: &Integration,
     notice: &Notice,
@@ -1285,7 +1325,11 @@ pub async fn deliver_notice(
         }
     }
     if let Some(log) = log {
-        let starts_thread = reply.is_none() && notice.event == "alert.firing";
+        let starts_thread = parent.is_none()
+            && match reply {
+                None => notice.event == "alert.firing",
+                Some(reply) => reply == Reply::Escalate,
+            };
         let posted = outcome.as_ref().ok().cloned().flatten().filter(|_| starts_thread);
         let delivery = NewAlertDelivery {
             id: new_id(Prefix::AlertDelivery),
