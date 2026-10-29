@@ -225,4 +225,22 @@ mod tests {
         record(&killed, "die", Some("137"));
         assert!(was_stopped(&killed.list_last_run("c1")));
     }
+
+    #[test]
+    fn counts_a_stop_with_the_image_stop_signal() {
+        for signal in ["3", "2"] {
+            let stopped = DockerEvents::default();
+            record_with(&stopped, "kill", &format!(r#","signal":"{signal}""#));
+            record(&stopped, "stop", None);
+            record(&stopped, "die", Some("0"));
+            assert!(was_stopped(&stopped.list_last_run("c1")), "{signal}");
+        }
+
+        let forced = DockerEvents::default();
+        record_with(&forced, "kill", r#","signal":"3""#);
+        record_with(&forced, "kill", r#","signal":"9""#);
+        record(&forced, "die", Some("137"));
+        record(&forced, "stop", None);
+        assert!(was_stopped(&forced.list_last_run("c1")));
+    }
 }
