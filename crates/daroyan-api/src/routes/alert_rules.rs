@@ -127,8 +127,10 @@ fn read_options(options: RuleOptions) -> RuleOptions {
             .filter(|text| !text.is_empty())
     };
     RuleOptions {
-        runbook_url: trim(options.runbook_url)
-            .map(|url| parse_runbook_url(&url).map_or(url, |parsed| parsed.to_string())),
+        runbook_url: trim(options.runbook_url).map(|url| match parse_runbook_url(&url) {
+            Some(parsed) => parsed.to_string(),
+            None => url,
+        }),
         severity_label: trim(options.severity_label),
         ..options
     }

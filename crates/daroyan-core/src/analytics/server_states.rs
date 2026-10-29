@@ -166,9 +166,15 @@ pub async fn fit_disk_trend(
                     Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                 })?;
 
-            Ok(slope.zip(window_ms).filter(|_| count >= 2).map(|(slope, window_ms)| {
-                DiskTrend { bytes_per_hour: slope * 3_600_000.0, window_ms }
-            }))
+            let (Some(slope), Some(window_ms)) = (slope, window_ms) else {
+                return Ok(None);
+            };
+
+            if count < 2 {
+                return Ok(None);
+            }
+
+            Ok(Some(DiskTrend { bytes_per_hour: slope * 3_600_000.0, window_ms }))
         })
         .await
 }

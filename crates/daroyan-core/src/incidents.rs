@@ -196,9 +196,16 @@ pub async fn notify_incident(
     if channel_ids.is_empty() {
         return Ok(());
     }
+
+    let (event, tone) = if is_closed(status) {
+        ("incident.resolved", Tone::Resolved)
+    } else {
+        ("incident.updated", Tone::Note)
+    };
+
     let notice = Notice {
-        event: if is_closed(status) { "incident.resolved" } else { "incident.updated" },
-        tone: if is_closed(status) { Tone::Resolved } else { Tone::Note },
+        event,
+        tone,
         title: format!(
             "[{}] {} — {}",
             describe_kind(incident),
