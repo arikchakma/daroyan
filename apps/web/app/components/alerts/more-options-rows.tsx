@@ -12,7 +12,7 @@ import {
   DECLARE_SEVERITY_OPTIONS,
   DECLARE_SHOWN_OPTIONS,
   getResolveGroups,
-  readNumber,
+  readRecovery,
   readTargetNoun,
 } from '~/utils/rule-form';
 import type { ChangedOptions, RuleFormChange, RuleFormState } from '~/utils/rule-form';
@@ -27,8 +27,8 @@ export function MoreOptionsRows(props: MoreOptionsRowsProps) {
   const { form, onChange, changed } = props;
 
   const { kind, quietHours } = form;
-  const recovery = readNumber(form.recovery);
-  const resolveValue = `${hasThreshold(kind) && recovery !== null ? recovery : 'limit'}:${form.resolveForSecs}`;
+  const recovery = readRecovery(form);
+  const resolveValue = `${recovery ?? 'limit'}:${form.resolveForSecs}`;
 
   const changeResolve = (value: string | null) => {
     const [nextRecovery, nextSecs] = (value ?? 'limit:0').split(':');

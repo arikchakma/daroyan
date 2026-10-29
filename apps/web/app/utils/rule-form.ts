@@ -158,6 +158,24 @@ export function readLimit(form: RuleFormState) {
   return value !== null && Number.isFinite(value) && value > 0 ? value : null;
 }
 
+function readRecoveryLimit(form: RuleFormState) {
+  const warning = readNumber(form.warning);
+  if (hasWarning(form.kind) && form.isWarningOpen && warning !== null && Number.isFinite(warning) && warning > 0) {
+    return warning;
+  }
+  return readLimit(form);
+}
+
+export function readRecovery(form: RuleFormState) {
+  const recovery = readNumber(form.recovery);
+  const limit = readRecoveryLimit(form);
+  if (!hasThreshold(form.kind) || recovery === null || !Number.isFinite(recovery) || limit === null) {
+    return null;
+  }
+  const isSafe = form.kind === 'cert_days' ? recovery >= limit : recovery <= limit;
+  return isSafe ? recovery : null;
+}
+
 export function isLimitValid(form: RuleFormState) {
   return !hasThreshold(form.kind) || readLimit(form) !== null;
 }
@@ -208,7 +226,7 @@ export function formatSpan(seconds: number) {
   return WINDOW_OPTIONS.find((option) => option.value === seconds)?.label ?? `${Math.round(seconds / 60)} minutes`;
 }
 
-export function describeMatches(names: string[], noun: string) {
+export function getMatchesText(names: string[], noun: string) {
   if (names.length === 0) {
     return `Matches no ${noun}s yet.`;
   }
@@ -373,7 +391,7 @@ export function readRuleOptions(options: ReadRuleOptionsOptions): Schemas['RuleO
     aggregation: form.aggregation,
     window_secs: hasAggregation(form.kind) ? form.windowSecs : 0,
     warning: hasWarning(form.kind) ? readNumber(form.warning) : null,
-    resolve_at: hasThreshold(form.kind) ? readNumber(form.recovery) : null,
+    resolve_at: readRecovery(form),
     resolve_for_secs: form.resolveForSecs,
     no_data: readTargetNoun(form.kind) === 'cron' ? 'keep' : form.noData,
     remind_every_secs: remindEvery,
@@ -413,14 +431,14 @@ function getRecoveryPresets(kind: ConditionKind, limit: number | null) {
   return [Math.round(limit * 0.8), Math.round(limit * 0.5)].filter((value) => value > 0 && value !== limit);
 }
 
-function describeRecovery(form: RuleFormState, value: number | null) {
+function getRecoveryLabel(form: RuleFormState, value: number | null) {
   const verb = form.kind === 'cert_days' ? 'Over' : 'Under';
-  const amount = value ?? readLimit(form);
+  const amount = value ?? readRecoveryLimit(form);
 
   return `${verb} ${amount === null ? 'the limit' : formatAmount(amount, getUnit(form.kind))}`;
 }
 
-function describeRecovered(kind: ConditionKind, secs: number) {
+function getRecoveredLabel(kind: ConditionKind, secs: number) {
   if (secs > 0) {
     return `${formatSpan(secs)} after it recovers`;
   }
@@ -429,15 +447,17 @@ function describeRecovered(kind: ConditionKind, secs: number) {
 
 export function getResolveGroups(form: RuleFormState) {
   if (!hasThreshold(form.kind)) {
-    return [RESOLVE_OPTIONS.map((option) => ({ value: `limit:${option.value}`, label: describeRecovered(form.kind, option.value) }))];
+    return [RESOLVE_OPTIONS.map((option) => ({ value: `limit:${option.value}`, label: getRecoveredLabel(form.kind, option.value) }))];
   }
 
-  const recovery = readNumber(form.recovery);
-  const choices = [...new Set([...getRecoveryPresets(form.kind, readLimit(form)), ...(recovery !== null ? [recovery] : [])])];
+  const recovery = readRecovery(form);
+  const choices = [
+    ...new Set([...getRecoveryPresets(form.kind, readRecoveryLimit(form)), ...(recovery !== null ? [recovery] : [])]),
+  ];
 
   return [null, ...choices].map((value) =>
     RESOLVE_OPTIONS.map((option) => {
-      const label = describeRecovery(form, value);
+      const label = getRecoveryLabel(form, value);
       return {
         value: `${value ?? 'limit'}:${option.value}`,
         label: option.value === 0 ? label : `${label} for ${formatSpan(option.value)}`,
@@ -450,7 +470,7 @@ export type ChangedOptions = ReturnType<typeof getChangedOptions>;
 
 export function getChangedOptions(form: RuleFormState) {
   return {
-    resolve: (hasThreshold(form.kind) && form.recovery !== '') || form.resolveForSecs !== 0,
+    resolve: readRecovery(form) !== null || form.resolveForSecs !== 0,
     noData: readTargetNoun(form.kind) !== 'cron' && form.noData !== 'keep',
     remind: form.remind !== 'off',
     messageLimit: form.messageLimit !== 'off',
@@ -460,22 +480,22 @@ export function getChangedOptions(form: RuleFormState) {
   };
 }
 
-function describeResolveSummary(form: RuleFormState) {
-  const recovery = readNumber(form.recovery);
+function getResolveSummary(form: RuleFormState) {
+  const recovery = readRecovery(form);
 
-  if (hasThreshold(form.kind) && recovery !== null) {
+  if (recovery !== null) {
     const span = form.resolveForSecs > 0 ? ` for ${formatSpan(form.resolveForSecs)}` : '';
-    return `Resolves ${describeRecovery(form, recovery).toLowerCase()}${span}`;
+    return `Resolves ${getRecoveryLabel(form, recovery).toLowerCase()}${span}`;
   }
-  return `Resolves ${describeRecovered(form.kind, form.resolveForSecs).toLowerCase()}`;
+  return `Resolves ${getRecoveredLabel(form.kind, form.resolveForSecs).toLowerCase()}`;
 }
 
-export function describeMoreOptions(form: RuleFormState) {
+export function getMoreOptionsSummary(form: RuleFormState) {
   const changed = getChangedOptions(form);
   const remind = REMIND_OPTIONS.find((option) => option.value === form.remind)?.label ?? 'while firing';
 
   return [
-    describeResolveSummary(form),
+    getResolveSummary(form),
     changed.noData && (form.noData === 'alert' ? 'Alerts when data stops' : 'Resolves when data stops'),
     form.remind === 'off' ? 'No reminders' : `Reminds ${remind.toLowerCase()}`,
     changed.messageLimit && `At most ${form.messageLimit} messages an hour`,
@@ -487,7 +507,7 @@ export function describeMoreOptions(form: RuleFormState) {
     .join(' · ');
 }
 
-export function describeChangedCount(count: number) {
+export function getChangedCountText(count: number) {
   if (count === 1) {
     return '1 setting differs from the defaults and is marked. Reset puts it back.';
   }

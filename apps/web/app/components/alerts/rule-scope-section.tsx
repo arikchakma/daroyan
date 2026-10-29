@@ -9,7 +9,7 @@ import { apiClient } from '~/lib/api-client';
 import { request } from '~/lib/http';
 import { listServersOptions } from '~/queries/servers';
 import { listUptimeChecksOptions } from '~/queries/uptime';
-import { describeMatches, readTargetNoun, readTargetNouns } from '~/utils/rule-form';
+import { getMatchesText, readTargetNoun, readTargetNouns } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState, ScopeKind } from '~/utils/rule-form';
 
 type RuleScopeSectionProps = {
@@ -34,7 +34,7 @@ export function RuleScopeSection(props: RuleScopeSectionProps) {
       : noun === 'cron'
         ? (crons ?? []).map((cron) => ({ id: cron.id, name: cron.name, detail: cron.expression ?? '', labels: [] }))
         : (servers ?? []).map((server) => ({ id: server.id, name: server.name, detail: server.labels.join(', '), labels: server.labels }));
-  const matches = describeMatches(
+  const matches = getMatchesText(
     targets.filter((target) => scopeKind === 'all' || target.labels.includes(form.label)).map((target) => target.name),
     noun
   );

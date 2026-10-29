@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { FormSection } from '~/components/alerts/form-section';
 import { MoreOptionsRows } from '~/components/alerts/more-options-rows';
 import { Button } from '~/components/ui/button';
-import { describeChangedCount, describeMoreOptions, DEFAULT_MORE_OPTIONS, getChangedOptions } from '~/utils/rule-form';
+import { DEFAULT_MORE_OPTIONS, getChangedCountText, getChangedOptions, getMoreOptionsSummary } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState } from '~/utils/rule-form';
 
 type RuleMoreOptionsProps = {
@@ -28,7 +28,7 @@ export function RuleMoreOptions(props: RuleMoreOptionsProps) {
         <div className="flex items-center gap-3 px-3.5 py-3">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="text-body font-medium">{changedCount === 0 ? 'Using Defaults' : 'Customized'}</span>
-            <span className="text-body text-text-secondary">{describeMoreOptions(form)}</span>
+            <span className="text-body text-text-secondary">{getMoreOptionsSummary(form)}</span>
           </div>
           <Button type="button" variant="tertiary" className="w-fit" onClick={() => setIsOpen(true)}>
             Show
@@ -45,7 +45,7 @@ export function RuleMoreOptions(props: RuleMoreOptionsProps) {
       title="More Options"
       description={
         marksChanges
-          ? describeChangedCount(changedCount)
+          ? getChangedCountText(changedCount)
           : 'Resolving, reminders, quiet hours, incidents and a runbook link. The defaults suit most rules.'
       }
       action={
