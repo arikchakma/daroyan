@@ -151,6 +151,20 @@ async fn opens_and_resolves_outages_as_a_site_goes_down_and_up() {
     let long_name: Value = long_name.json().await.unwrap();
     assert_eq!(long_name["message"], "Add a name of up to 100 characters");
 
+    let slow_retry = http
+        .post(format!("{base}/v1/uptime-checks"))
+        .json(&json!({
+            "name": "API",
+            "kind": "http",
+            "target": "https://example.com",
+            "interval_secs": 60,
+            "retry_interval_secs": 120
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(slow_retry.status(), StatusCode::BAD_REQUEST);
+
     let check: Value = http
         .post(format!("{base}/v1/uptime-checks"))
         .json(&json!({
@@ -215,11 +229,19 @@ async fn opens_and_resolves_outages_as_a_site_goes_down_and_up() {
 
     is_up.store(false, Ordering::SeqCst);
     let failed = run(&http, &base, &check_id).await;
-    assert_eq!(failed["status"], "down");
+    assert_eq!(failed["status"], "confirming");
     assert_eq!(failed["error"], "502 Bad Gateway");
-    run(&http, &base, &check_id).await;
+    assert_eq!(run(&http, &base, &check_id).await["status"], "confirming");
+    engine.check_alerts(Utc::now()).await.unwrap();
+    assert_eq!(run(&http, &base, &check_id).await["status"], "down");
     engine.check_alerts(Utc::now()).await.unwrap();
     is_up.store(true, Ordering::SeqCst);
+    run(&http, &base, &check_id).await;
+    engine.check_alerts(Utc::now()).await.unwrap();
+    assert_eq!(
+        common::count_rows(&database, "uptime_outages", "check_id", &check_id).await,
+        1
+    );
     run(&http, &base, &check_id).await;
     engine.check_alerts(Utc::now()).await.unwrap();
 
@@ -235,7 +257,7 @@ async fn opens_and_resolves_outages_as_a_site_goes_down_and_up() {
         .await
         .unwrap();
     assert_eq!(checks[0]["status"], "up");
-    assert_eq!(checks[0]["uptime"], 0.5);
+    assert_eq!(checks[0]["uptime"], 5.0 / 6.0);
     assert_eq!(checks[0]["days"].as_array().unwrap().len(), 30);
 
     let stats: Value = http
@@ -246,8 +268,8 @@ async fn opens_and_resolves_outages_as_a_site_goes_down_and_up() {
         .json()
         .await
         .unwrap();
-    assert_eq!(stats["stats"]["checks_today"], 4);
-    assert_eq!(stats["recent"].as_array().unwrap().len(), 4);
+    assert_eq!(stats["stats"]["checks_today"], 6);
+    assert_eq!(stats["recent"].as_array().unwrap().len(), 6);
     let outages = stats["outages"].as_array().unwrap();
     assert_eq!(outages.len(), 1);
     assert_eq!(outages[0]["cause"], "502 Bad Gateway");
@@ -349,14 +371,6 @@ async fn opens_and_resolves_outages_as_a_site_goes_down_and_up() {
             "[P2] Resolved: Slow Responses"
         ]
     );
-
-    is_up.store(false, Ordering::SeqCst);
-    let recover = Arc::clone(&is_up);
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        recover.store(true, Ordering::SeqCst);
-    });
-    assert_eq!(run(&http, &base, &check_id).await["status"], "up");
 
     assert!(
         common::count_rows(&database, "uptime_outages", "check_id", &check_id).await > 0

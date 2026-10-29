@@ -26,7 +26,7 @@ import { listAlertRulesOptions } from '~/queries/alerts';
 import { deleteUptimeCheckOptions, runUptimeCheckOptions, toCheckInput, updateUptimeCheckOptions, uptimeCheckStatsOptions } from '~/queries/uptime';
 import { cn } from '~/utils/classname';
 import { DAY_MS, formatDate } from '~/utils/format';
-import { describeExpect, describeTarget, formatInterval, formatLasted, formatMs, formatUptime, getUptime } from '~/utils/uptime';
+import { describeExpect, describeTarget, formatInterval, formatLasted, formatMs, formatStreak, formatUptime, getUptime } from '~/utils/uptime';
 
 type CheckBodyProps = {
   check: Schemas['UptimeCheck'];
@@ -48,7 +48,7 @@ export function CheckBody(props: CheckBodyProps) {
     meta: { errorMessage: 'The check could not run' },
     onSuccess: (result) => {
       refresh();
-      if (result.status === 'down') {
+      if (result.status === 'down' || result.status === 'confirming') {
         toast.error(result.error ?? 'The check failed');
       } else {
         toast.success(`${result.status === 'up' ? 'Up' : 'Degraded'} · ${formatMs(result.response_ms)}`);
@@ -207,6 +207,8 @@ export function CheckBody(props: CheckBodyProps) {
             {check.body_contains && <RailRow label="Body">contains "{check.body_contains}"</RailRow>}
             <RailRow label="Timeout">{check.timeout_secs} s</RailRow>
             <RailRow label="Interval">{formatInterval(check.interval_secs)}</RailRow>
+            <RailRow label="Down After">{formatStreak(check.failure_threshold, 'failure', 'failures')}</RailRow>
+            <RailRow label="Up After">{formatStreak(check.success_threshold, 'success', 'successes')}</RailRow>
             {isAdmin && (
               <Button nativeButton={false} variant="secondary" className="w-fit" render={<Link to={`/uptime/${check.id}/edit`} />}>
                 Edit Check

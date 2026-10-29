@@ -23,6 +23,13 @@ export function UptimeStatusBadge(props: UptimeStatusBadgeProps) {
           Degraded
         </Badge>
       );
+    case 'confirming':
+      return (
+        <Badge tone="warning">
+          <Icon name="hourglass" />
+          Confirming
+        </Badge>
+      );
     case 'down':
       return (
         <Badge tone="critical">

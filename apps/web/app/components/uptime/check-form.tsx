@@ -19,7 +19,7 @@ import { createAlertRuleOptions, listAlertRulesOptions, listIntegrationsOptions 
 import { createUptimeCheckOptions, updateUptimeCheckOptions } from '~/queries/uptime';
 import type { UptimeCheckInput } from '~/queries/uptime';
 import { joinNames } from '~/utils/alerts';
-import { INTERVAL_OPTIONS, TIMEOUT_OPTIONS } from '~/utils/uptime';
+import { formatStreak, INTERVAL_OPTIONS, RETRY_OPTIONS, STREAK_OPTIONS, TIMEOUT_OPTIONS } from '~/utils/uptime';
 
 type CheckKind = 'http' | 'tcp';
 
@@ -50,6 +50,10 @@ function readOptionalNumber(value: string) {
   return value.trim() === '' ? null : Number(value);
 }
 
+function getStreakItems(one: string, many: string) {
+  return STREAK_OPTIONS.map((count) => ({ value: count.toString(), label: formatStreak(count, one, many) }));
+}
+
 function CheckFormBody(props: CheckFormBodyProps) {
   const { check, onDiscard } = props;
 
@@ -64,11 +68,18 @@ function CheckFormBody(props: CheckFormBodyProps) {
   const [bodyContains, setBodyContains] = useState(check?.body_contains ?? '');
   const [intervalSecs, setIntervalSecs] = useState(check?.interval_secs ?? 60);
   const [timeoutSecs, setTimeoutSecs] = useState(check?.timeout_secs ?? 10);
+  const [failureThreshold, setFailureThreshold] = useState(check?.failure_threshold ?? 3);
+  const [successThreshold, setSuccessThreshold] = useState(check?.success_threshold ?? 2);
+  const [retrySecs, setRetrySecs] = useState(check?.retry_interval_secs ?? 30);
 
   const status = readOptionalNumber(expectedStatus);
   const isStatusValid = status === null || (Number.isInteger(status) && status >= 100 && status <= 599);
   const isTargetValid =
     kind === 'http' ? /^https?:\/\/\S+$/.test(target.trim()) : /^[^\s:]+:\d{1,5}$/.test(target.trim());
+
+  const timeout = Math.min(timeoutSecs, intervalSecs - 1);
+  const retryOptions = RETRY_OPTIONS.filter((option) => option.value > timeout && option.value <= intervalSecs);
+  const retry = retryOptions.some((option) => option.value === retrySecs) ? retrySecs : retryOptions[0].value;
 
   const body: UptimeCheckInput = {
     name: name.trim(),
@@ -78,8 +89,11 @@ function CheckFormBody(props: CheckFormBodyProps) {
     expected_status: kind === 'http' ? status : null,
     body_contains: kind === 'http' ? bodyContains.trim() || null : null,
     interval_secs: intervalSecs,
-    timeout_secs: Math.min(timeoutSecs, intervalSecs - 1),
+    timeout_secs: timeout,
     paused: check?.paused ?? false,
+    failure_threshold: failureThreshold,
+    success_threshold: successThreshold,
+    retry_interval_secs: retry,
   };
 
   const { data: rules } = useQuery(listAlertRulesOptions());
@@ -298,9 +312,32 @@ function CheckFormBody(props: CheckFormBodyProps) {
           </FormSection>
 
           <FormSection
-            title="Alerts"
-            description="Alert rules decide who hears about this check. A check is down after 2 failures in a row."
+            title="Confirmation"
+            description="A failed check is retried before it counts as down, so a short network blip does not open an outage."
           >
+            <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-3">
+              <SelectField
+                label="Down After"
+                value={failureThreshold.toString()}
+                onValueChange={(value) => setFailureThreshold(Number(value ?? 3))}
+                items={getStreakItems('failure', 'failures')}
+              />
+              <SelectField
+                label="Retry Every"
+                value={retry.toString()}
+                onValueChange={(value) => setRetrySecs(Number(value ?? 30))}
+                items={retryOptions.map((option) => ({ value: option.value.toString(), label: option.label }))}
+              />
+              <SelectField
+                label="Up After"
+                value={successThreshold.toString()}
+                onValueChange={(value) => setSuccessThreshold(Number(value ?? 2))}
+                items={getStreakItems('success', 'successes')}
+              />
+            </div>
+          </FormSection>
+
+          <FormSection title="Alerts" description="Alert rules decide who hears about this check.">
             {!check && (
               <AlertDownRow
                 name={name.trim() || 'Check'}

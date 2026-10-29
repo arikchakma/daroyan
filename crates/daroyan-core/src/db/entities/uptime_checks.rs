@@ -22,6 +22,9 @@ pub struct Model {
     pub timeout_secs: i32,
     pub interval_secs: i32,
     pub paused: bool,
+    pub failure_threshold: i32,
+    pub success_threshold: i32,
+    pub retry_interval_secs: i32,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     #[sea_orm(has_many)]

@@ -7356,6 +7356,9 @@
           "timeout_secs",
           "interval_secs",
           "paused",
+          "failure_threshold",
+          "success_threshold",
+          "retry_interval_secs",
           "status",
           "days",
           "created_at"
@@ -7382,6 +7385,10 @@
               "integer",
               "null"
             ],
+            "format": "int32"
+          },
+          "failure_threshold": {
+            "type": "integer",
             "format": "int32"
           },
           "id": {
@@ -7419,9 +7426,17 @@
           "paused": {
             "type": "boolean"
           },
+          "retry_interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
           "status": {
             "type": "string",
             "example": "up"
+          },
+          "success_threshold": {
+            "type": "integer",
+            "format": "int32"
           },
           "target": {
             "type": "string"
@@ -7460,6 +7475,10 @@
             ],
             "format": "int32"
           },
+          "failure_threshold": {
+            "type": "integer",
+            "format": "int32"
+          },
           "interval_secs": {
             "type": "integer",
             "format": "int32"
@@ -7476,6 +7495,14 @@
           },
           "paused": {
             "type": "boolean"
+          },
+          "retry_interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "success_threshold": {
+            "type": "integer",
+            "format": "int32"
           },
           "target": {
             "type": "string"

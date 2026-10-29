@@ -19,7 +19,7 @@ use crate::db::entities::servers::Model as Server;
 use crate::db::entities::uptime_checks::Model as UptimeCheck;
 use crate::error::Result;
 use crate::servers::report::LastReport;
-use crate::uptime::probe::STATUS_DOWN;
+use crate::uptime::probe::STATUS_UP;
 
 const TREND_WINDOW_MS: i64 = 6 * 3_600_000;
 const MIN_TREND_MS: i64 = 3_600_000;
@@ -265,10 +265,8 @@ impl FactSources<'_> {
                 let recent =
                     list_recent_results(self.analytics, check.id.clone(), RECENT_RESULTS)
                         .await?;
-                let failures = recent
-                    .iter()
-                    .take_while(|result| result.status == STATUS_DOWN)
-                    .count();
+                let failures =
+                    recent.iter().take_while(|result| result.status != STATUS_UP).count();
                 let last_up = find_last_up(self.analytics, check.id.clone()).await?;
 
                 AlertFacts::Check(CheckFacts {
@@ -393,6 +391,9 @@ mod tests {
             timeout_secs: 10,
             interval_secs: 60,
             paused: false,
+            failure_threshold: 3,
+            success_threshold: 2,
+            retry_interval_secs: 30,
             created_at: at(0, 0),
             updated_at: at(0, 0),
         }

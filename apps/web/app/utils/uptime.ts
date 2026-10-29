@@ -18,6 +18,20 @@ export const TIMEOUT_OPTIONS = [
   { value: 30, label: '30 seconds' },
 ];
 
+export const RETRY_OPTIONS = [
+  { value: 10, label: '10 seconds' },
+  { value: 20, label: '20 seconds' },
+  { value: 30, label: '30 seconds' },
+  { value: 60, label: '1 minute' },
+  { value: 300, label: '5 minutes' },
+];
+
+export const STREAK_OPTIONS = [1, 2, 3, 4, 5];
+
+export function formatStreak(count: number, one: string, many: string) {
+  return `${count} ${count === 1 ? one : many} in a row`;
+}
+
 export function formatEvery(secs: number) {
   if (secs < 60) {
     return `${secs}s`;

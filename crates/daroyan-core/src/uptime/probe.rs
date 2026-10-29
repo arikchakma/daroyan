@@ -19,6 +19,7 @@ use crate::net::resolve_reachable;
 
 pub const STATUS_UP: &str = "up";
 pub const STATUS_DOWN: &str = "down";
+pub const STATUS_CONFIRMING: &str = "confirming";
 
 const MAX_REDIRECTS: usize = 5;
 const MAX_BODY_BYTES: usize = 1024 * 1024;

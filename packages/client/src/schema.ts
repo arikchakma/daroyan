@@ -2416,6 +2416,8 @@ export interface components {
             days: components["schemas"]["UptimeDay"][];
             /** Format: int32 */
             expected_status?: number | null;
+            /** Format: int32 */
+            failure_threshold: number;
             id: string;
             /** Format: int32 */
             interval_secs: number;
@@ -2428,8 +2430,12 @@ export interface components {
             method: string;
             name: string;
             paused: boolean;
+            /** Format: int32 */
+            retry_interval_secs: number;
             /** @example up */
             status: string;
+            /** Format: int32 */
+            success_threshold: number;
             target: string;
             /** Format: int32 */
             timeout_secs: number;
@@ -2441,12 +2447,18 @@ export interface components {
             /** Format: int32 */
             expected_status?: number | null;
             /** Format: int32 */
+            failure_threshold?: number;
+            /** Format: int32 */
             interval_secs?: number;
             /** @example http */
             kind: string;
             method?: string;
             name: string;
             paused?: boolean;
+            /** Format: int32 */
+            retry_interval_secs?: number;
+            /** Format: int32 */
+            success_threshold?: number;
             target: string;
             /** Format: int32 */
             timeout_secs?: number;
