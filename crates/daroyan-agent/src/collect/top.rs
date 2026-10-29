@@ -73,13 +73,29 @@ fn find_script(cmd: &[OsString]) -> Option<String> {
     let mut args = cmd.iter().skip(1).map(|arg| arg.to_string_lossy());
     while let Some(arg) = args.next() {
         match arg.as_ref() {
-            "-m" | "-jar" => return args.next().map(|next| to_file_name(&next)),
-            "-c" | "-e" => return None,
+            "-m" | "-jar" => return to_script_name(&args.next()?),
+            "-c" | "-e" | "-E" | "-r" | "-p" | "--eval" | "--print" | "--command" => {
+                return None;
+            }
+            "-cp" | "-classpath" | "--class-path" | "-W" | "-X" | "-I" | "--require"
+            | "--import" | "--loader" => {
+                args.next();
+            }
             flag if flag.starts_with('-') => {}
-            script => return Some(to_file_name(script)),
+            script => return to_script_name(script),
         }
     }
     None
+}
+
+fn to_script_name(arg: &str) -> Option<String> {
+    let name = to_file_name(arg);
+    let is_name = !name.is_empty()
+        && name.len() <= 64
+        && !name.chars().any(|character| {
+            character.is_whitespace() || "'\"`;$(){}=".contains(character)
+        });
+    is_name.then_some(name)
 }
 
 fn to_file_name(path: &str) -> String {
@@ -122,6 +138,14 @@ mod tests {
             Some("billing.jar".to_string())
         );
         assert_eq!(find_script(&cmd(&["bash", "-c", "sleep 1"])), None);
+        assert_eq!(find_script(&cmd(&["php", "-r", "echo getenv('KEY');"])), None);
+        assert_eq!(find_script(&cmd(&["node", "--eval", "run()"])), None);
+        assert_eq!(find_script(&cmd(&["node", "-r", "dotenv/config", "app.js"])), None);
+        assert_eq!(
+            find_script(&cmd(&["java", "-cp", "/opt/x.jar", "com.acme.Main"])),
+            Some("com.acme.Main".to_string())
+        );
+        assert_eq!(find_script(&cmd(&["sh", "echo $TOKEN; run"])), None);
         assert_eq!(find_script(&cmd(&["node"])), None);
     }
 
