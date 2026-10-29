@@ -88,11 +88,8 @@ fn find_script(interpreter: &str, cmd: &[OsString]) -> Option<String> {
             "-c" | "-e" | "-E" | "-p" | "--eval" | "--print" | "--command" => {
                 return None;
             }
-            "-r" => {
-                args.next();
-            }
-            "-cp" | "-classpath" | "--class-path" | "-W" | "-X" | "-I" | "--require"
-            | "--import" | "--loader" => {
+            "-r" | "-cp" | "-classpath" | "--class-path" | "-W" | "-X" | "-I"
+            | "--require" | "--import" | "--loader" => {
                 args.next();
             }
             flag if flag.starts_with('-') => {}

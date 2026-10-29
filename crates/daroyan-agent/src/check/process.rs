@@ -140,12 +140,10 @@ impl ProcessWatch {
 
         if was_running && !is_running {
             let mut exit = controller.read_exit();
-            let actions = self
-                .docker
-                .as_ref()
-                .zip(self.last_containers.get(&check.name))
-                .map(|(docker, last)| docker.list_last_run(&last.id))
-                .unwrap_or_default();
+            let actions = match (&self.docker, self.last_containers.get(&check.name)) {
+                (Some(docker), Some(last)) => docker.list_last_run(&last.id),
+                _ => Vec::new(),
+            };
 
             exit.oom |= was_oom(&actions);
             exit.code = exit.code.or_else(|| read_exit_code(&actions));
@@ -251,28 +249,23 @@ impl ProcessWatch {
             return self.match_processes(check, system, cgroups, None);
         };
 
-        let cached = self.container_ids.get(container).cloned();
-        let id = self.find_container_id(container);
-        let matches = self.match_processes(check, system, cgroups, id.as_deref());
+        let cached = self.container_ids.remove(container);
+        let mut id = cached.clone().or_else(|| find_container_id(container));
+        let mut matches = self.match_processes(check, system, cgroups, id.as_deref());
 
-        if !matches.is_empty() {
-            return matches;
+        if matches.is_empty()
+            && let Some(cached) = &cached
+            && let Some(fresh) = find_container_id(container)
+            && fresh != *cached
+        {
+            matches = self.match_processes(check, system, cgroups, Some(&fresh));
+            id = Some(fresh);
         }
 
-        self.container_ids.remove(container);
-        if cached.is_none() {
-            return matches;
-        }
-
-        let fresh = self.find_container_id(container);
-        if fresh.is_none() || fresh == cached {
-            self.container_ids.remove(container);
-            return matches;
-        }
-
-        let matches = self.match_processes(check, system, cgroups, fresh.as_deref());
-        if matches.is_empty() {
-            self.container_ids.remove(container);
+        if !matches.is_empty()
+            && let Some(id) = id
+        {
+            self.container_ids.insert(container.clone(), id);
         }
 
         matches
@@ -323,15 +316,6 @@ impl ProcessWatch {
 
         self.containers.insert(id, info.clone());
         Some(info)
-    }
-
-    fn find_container_id(&mut self, container: &str) -> Option<String> {
-        if let Some(id) = self.container_ids.get(container) {
-            return Some(id.clone());
-        }
-        let id = find_container_id(container)?;
-        self.container_ids.insert(container.to_string(), id.clone());
-        Some(id)
     }
 
     fn restart_process(

@@ -98,16 +98,15 @@ impl DockerEvents {
         let Ok(event) = serde_json::from_str::<RawEvent>(line) else { return };
 
         let action = event.action.split(':').next().unwrap_or_default().to_string();
+        if !ACTIONS.contains(&action.as_str()) {
+            return;
+        }
+
         let exit_code = event
             .actor
             .attributes
             .get("exitCode")
             .and_then(|code| code.parse().ok());
-
-        if !ACTIONS.contains(&action.as_str()) {
-            return;
-        }
-
         let signal = event.actor.attributes.get("signal").cloned();
         let mut actions = lock(&self.actions);
 
