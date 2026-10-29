@@ -211,7 +211,7 @@ async fn publishes_incidents_and_maintenance_on_status_pages() {
     assert!(detail["postmortem"].is_null());
 
     let rss = anonymous
-        .get(format!("{base}/v1/status/acme/feed.rss"))
+        .get(format!("{base}/v1/status/acme/feed.xml"))
         .send()
         .await
         .unwrap();
@@ -220,12 +220,22 @@ async fn publishes_incidents_and_maintenance_on_status_pages() {
         rss.headers()["content-type"]
             .to_str()
             .unwrap()
-            .starts_with("application/rss+xml")
+            .starts_with("application/xml")
     );
     let rss = rss.text().await.unwrap();
     assert!(rss.contains("<title>API is slow</title>"));
     assert!(rss.contains("&lt;p&gt;Found it.&lt;/p&gt;"));
     assert!(rss.contains("https://daroyan.example/s/acme/incidents/"));
+    let legacy_rss = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .get(format!("{base}/v1/status/acme/feed.rss"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(legacy_rss.status(), StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(legacy_rss.headers()["location"], "/v1/status/acme/feed.xml");
     let atom = anonymous
         .get(format!("{base}/v1/status/acme/feed.atom"))
         .send()
@@ -466,7 +476,7 @@ async fn publishes_incidents_and_maintenance_on_status_pages() {
     )
     .await;
     assert_eq!(hidden["is_public"], false);
-    send(anonymous.get(format!("{base}/v1/status/acme/feed.rss")), StatusCode::NOT_FOUND)
+    send(anonymous.get(format!("{base}/v1/status/acme/feed.xml")), StatusCode::NOT_FOUND)
         .await;
     send(
         anonymous.get(format!("{base}/v1/status/acme/incidents/{incident_id}")),

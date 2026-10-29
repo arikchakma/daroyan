@@ -228,7 +228,7 @@ export function PublicFooterLinks(props: { slug: string }) {
       Powered by Daroyan
       <span aria-hidden="true">·</span>
       <a
-        href={`/v1/status/${slug}/feed.rss`}
+        href={`/v1/status/${slug}/feed.xml`}
         className="flex items-center gap-1 rounded-xs text-text-link outline-none hover:underline focus-visible:underline"
       >
         <Icon name="link" className="size-3.5" />

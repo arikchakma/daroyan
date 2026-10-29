@@ -998,7 +998,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/status/{slug}/feed.rss": {
+    "/v1/status/{slug}/feed.xml": {
         parameters: {
             query?: never;
             header?: never;
@@ -4430,7 +4430,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/atom+xml": string;
+                    "application/xml": string;
                 };
             };
         };
@@ -4451,7 +4451,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/rss+xml": string;
+                    "application/xml": string;
                 };
             };
         };

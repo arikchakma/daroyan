@@ -2256,7 +2256,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/atom+xml": {
+              "application/xml": {
                 "schema": {
                   "type": "string"
                 }
@@ -2266,7 +2266,7 @@
         }
       }
     },
-    "/v1/status/{slug}/feed.rss": {
+    "/v1/status/{slug}/feed.xml": {
       "get": {
         "operationId": "get_rss_feed",
         "parameters": [
@@ -2282,7 +2282,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/rss+xml": {
+              "application/xml": {
                 "schema": {
                   "type": "string"
                 }

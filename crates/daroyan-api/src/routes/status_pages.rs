@@ -4,6 +4,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
+use axum::routing::get;
 use chrono::{DateTime, Utc};
 use daroyan_core::analytics::cron_runs::summarize_cron_days;
 use daroyan_core::analytics::uptime_results::{
@@ -55,6 +56,7 @@ const KIND_CHECK: &str = "check";
 const KIND_CRON: &str = "cron";
 const PUBLIC_CACHE: &str = "public, max-age=30";
 const PRIVATE_CACHE: &str = "private, no-store";
+const FEED_CONTENT_TYPE: &str = "application/xml; charset=utf-8";
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -64,6 +66,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_public_incident))
         .routes(routes!(get_rss_feed))
         .routes(routes!(get_atom_feed))
+        .route("/v1/status/{slug}/feed.rss", get(redirect_rss_feed))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -920,9 +923,9 @@ async fn list_feed_items(
 
 #[utoipa::path(
     get,
-    path = "/v1/status/{slug}/feed.rss",
+    path = "/v1/status/{slug}/feed.xml",
     params(("slug" = String, Path)),
-    responses((status = 200, content_type = "application/rss+xml", body = String))
+    responses((status = 200, content_type = "application/xml", body = String))
 )]
 async fn get_rss_feed(
     State(state): State<AppState>,
@@ -957,18 +960,25 @@ async fn get_rss_feed(
     );
     Ok((
         [
-            (header::CONTENT_TYPE, "application/rss+xml; charset=utf-8"),
+            (header::CONTENT_TYPE, FEED_CONTENT_TYPE),
             (header::CACHE_CONTROL, PUBLIC_CACHE),
         ],
         xml,
     ))
 }
 
+async fn redirect_rss_feed(Path(slug): Path<String>) -> impl IntoResponse {
+    (
+        StatusCode::MOVED_PERMANENTLY,
+        [(header::LOCATION, format!("/v1/status/{slug}/feed.xml"))],
+    )
+}
+
 #[utoipa::path(
     get,
     path = "/v1/status/{slug}/feed.atom",
     params(("slug" = String, Path)),
-    responses((status = 200, content_type = "application/atom+xml", body = String))
+    responses((status = 200, content_type = "application/xml", body = String))
 )]
 async fn get_atom_feed(
     State(state): State<AppState>,
@@ -1005,7 +1015,7 @@ async fn get_atom_feed(
     );
     Ok((
         [
-            (header::CONTENT_TYPE, "application/atom+xml; charset=utf-8"),
+            (header::CONTENT_TYPE, FEED_CONTENT_TYPE),
             (header::CACHE_CONTROL, PUBLIC_CACHE),
         ],
         xml,
