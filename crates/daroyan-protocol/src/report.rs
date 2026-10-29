@@ -99,6 +99,10 @@ pub struct Container {
     pub project: Option<String>,
     #[serde(default)]
     pub service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

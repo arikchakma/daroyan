@@ -177,6 +177,8 @@ fn parse_container(output: &str) -> Option<Container> {
         image: details["Config"]["Image"].as_str().unwrap_or_default().to_string(),
         project: label("com.docker.compose.project"),
         service: label("com.docker.compose.service"),
+        image_id: details["Image"].as_str().map(str::to_string),
+        config_hash: label("com.docker.compose.config-hash"),
     })
 }
 
@@ -303,7 +305,7 @@ mod tests {
 
     #[test]
     fn reads_containers() {
-        let output = r#"{"Id":"4f2a9c","Name":"/inboxjot-api-1","Config":{"Image":"ghcr.io/inboxjot/api:0.0.19","Labels":{"com.docker.compose.project":"inboxjot","com.docker.compose.service":"api"}}}"#;
+        let output = r#"{"Id":"4f2a9c","Name":"/inboxjot-api-1","Image":"sha256:02b8","Config":{"Image":"ghcr.io/inboxjot/api:0.0.19","Labels":{"com.docker.compose.project":"inboxjot","com.docker.compose.service":"api","com.docker.compose.config-hash":"df47"}}}"#;
         assert_eq!(
             parse_container(output),
             Some(Container {
@@ -312,6 +314,8 @@ mod tests {
                 image: "ghcr.io/inboxjot/api:0.0.19".to_string(),
                 project: Some("inboxjot".to_string()),
                 service: Some("api".to_string()),
+                image_id: Some("sha256:02b8".to_string()),
+                config_hash: Some("df47".to_string()),
             })
         );
         assert_eq!(parse_container("[]"), None);
