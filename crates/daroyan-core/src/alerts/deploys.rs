@@ -9,6 +9,8 @@ use crate::alerts::notify::{Details, Link, Notice, Snippet, Text, Tone};
 
 pub const DEPLOY_WINDOW_SECS: i64 = 60;
 const QUIET_SECS: i64 = 20;
+const MAX_WAIT_SECS: i64 = 300;
+const RESTART_MEMORY_SECS: i64 = 900;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Replacement {
@@ -22,12 +24,18 @@ pub struct Replacement {
 struct Tracked {
     container: Container,
     stopped_at: Option<DateTime<Utc>>,
+    restarted_at: Option<DateTime<Utc>>,
+}
+
+struct Batch {
+    since: DateTime<Utc>,
+    replacements: Vec<Replacement>,
 }
 
 #[derive(Default)]
 pub struct DeployWatch {
     tracked: HashMap<(String, String), Tracked>,
-    pending: HashMap<String, Vec<Replacement>>,
+    pending: HashMap<String, Batch>,
 }
 
 impl DeployWatch {
@@ -41,26 +49,44 @@ impl DeployWatch {
             let key = (server_id.to_string(), process.name.clone());
             match &process.container {
                 Some(container) => {
-                    if let Some(tracked) = self.tracked.get(&key)
-                        && tracked.container.id != container.id
-                    {
-                        let gap =
-                            tracked.stopped_at.map_or(0, |at| (now - at).num_seconds());
-                        if gap <= DEPLOY_WINDOW_SECS {
-                            self.pending.entry(server_id.to_string()).or_default().push(
-                                Replacement {
-                                    name: process.name.clone(),
-                                    old: tracked.container.clone(),
-                                    new: container.clone(),
-                                    gap_secs: gap.unsigned_abs(),
-                                    at: now,
-                                },
-                            );
+                    let tracked = self.tracked.get(&key);
+                    let mut restarted_at =
+                        tracked.and_then(|tracked| tracked.restarted_at);
+                    if let Some(tracked) = tracked {
+                        if tracked.container.id == container.id {
+                            if tracked.stopped_at.is_some() {
+                                restarted_at = Some(now);
+                            }
+                        } else {
+                            let gap = tracked
+                                .stopped_at
+                                .map_or(0, |at| (now - at).num_seconds());
+                            if gap <= DEPLOY_WINDOW_SECS {
+                                queue(
+                                    &mut self
+                                        .pending
+                                        .entry(server_id.to_string())
+                                        .or_insert_with(|| Batch {
+                                            since: now,
+                                            replacements: Vec::new(),
+                                        })
+                                        .replacements,
+                                    &process.name,
+                                    &tracked.container,
+                                    container,
+                                    gap,
+                                    now,
+                                );
+                            }
                         }
                     }
                     self.tracked.insert(
                         key,
-                        Tracked { container: container.clone(), stopped_at: None },
+                        Tracked {
+                            container: container.clone(),
+                            stopped_at: None,
+                            restarted_at,
+                        },
                     );
                 }
                 None if process.count == 0 => {
@@ -73,26 +99,55 @@ impl DeployWatch {
         }
     }
 
-    pub fn is_container(&self, server_id: &str, name: &str) -> bool {
-        self.tracked.contains_key(&(server_id.to_string(), name.to_string()))
+    pub fn may_be_replaced(
+        &self,
+        server_id: &str,
+        name: &str,
+        now: DateTime<Utc>,
+    ) -> bool {
+        self.tracked
+            .get(&(server_id.to_string(), name.to_string()))
+            .is_some_and(|tracked| {
+                tracked
+                    .restarted_at
+                    .is_none_or(|at| (now - at).num_seconds() >= RESTART_MEMORY_SECS)
+            })
     }
 
     pub fn take_ready(&mut self, now: DateTime<Utc>) -> Vec<(String, Vec<Replacement>)> {
         let ready: Vec<String> = self
             .pending
             .iter()
-            .filter(|(_, list)| {
-                list.iter().all(|item| (now - item.at).num_seconds() >= QUIET_SECS)
+            .filter(|(_, batch)| {
+                (now - batch.since).num_seconds() >= MAX_WAIT_SECS
+                    || batch
+                        .replacements
+                        .iter()
+                        .all(|item| (now - item.at).num_seconds() >= QUIET_SECS)
             })
             .map(|(server_id, _)| server_id.clone())
             .collect();
         ready
             .into_iter()
             .filter_map(|server_id| {
-                let list = self.pending.remove(&server_id)?;
-                Some((server_id, list))
+                let list: Vec<Replacement> = self
+                    .pending
+                    .remove(&server_id)?
+                    .replacements
+                    .into_iter()
+                    .filter(|item| self.is_up(&server_id, item))
+                    .collect();
+                (!list.is_empty()).then_some((server_id, list))
             })
             .collect()
+    }
+
+    fn is_up(&self, server_id: &str, replacement: &Replacement) -> bool {
+        self.tracked
+            .get(&(server_id.to_string(), replacement.name.clone()))
+            .is_some_and(|tracked| {
+                tracked.container.id == replacement.new.id && tracked.stopped_at.is_none()
+            })
     }
 }
 
@@ -197,6 +252,27 @@ impl DeployNote<'_> {
     }
 }
 
+fn queue(
+    list: &mut Vec<Replacement>,
+    name: &str,
+    old: &Container,
+    new: &Container,
+    gap: i64,
+    now: DateTime<Utc>,
+) {
+    let earlier = list
+        .iter()
+        .position(|item| item.name == name)
+        .map(|index| list.remove(index));
+    list.push(Replacement {
+        name: name.to_string(),
+        old: earlier.map_or_else(|| old.clone(), |item| item.old),
+        new: new.clone(),
+        gap_secs: gap.unsigned_abs(),
+        at: now,
+    });
+}
+
 fn describe_versions(old: &str, new: &str) -> String {
     let split = |image: &str| -> (String, String) {
         let name_end = image.rfind('/').map_or(0, |index| index + 1);
@@ -270,7 +346,7 @@ mod tests {
         let blue = container("c1", "inboxjot-api-blue", "ghcr.io/inboxjot/api:0.0.18");
         let green = container("c2", "inboxjot-api-green", "ghcr.io/inboxjot/api:0.0.19");
         watch.observe("srv_1", &[process("Inboxjot API", Some(blue.clone()))], at(0));
-        assert!(watch.is_container("srv_1", "Inboxjot API"));
+        assert!(watch.may_be_replaced("srv_1", "Inboxjot API", at(0)));
         watch.observe("srv_1", &[process("Inboxjot API", None)], at(10));
         watch.observe("srv_1", &[process("Inboxjot API", Some(green.clone()))], at(24));
         assert!(watch.take_ready(at(30)).is_empty());
@@ -307,6 +383,61 @@ mod tests {
             later,
         );
         assert!(watch.take_ready(later + chrono::Duration::seconds(60)).is_empty());
+    }
+
+    #[test]
+    fn stops_holding_a_container_that_restarts_in_place() {
+        let mut watch = DeployWatch::default();
+        let api = container("c1", "api-1", "api:1");
+        watch.observe("srv_1", &[process("API", Some(api.clone()))], at(0));
+        assert!(watch.may_be_replaced("srv_1", "API", at(0)));
+        watch.observe("srv_1", &[process("API", None)], at(10));
+        watch.observe("srv_1", &[process("API", Some(api))], at(20));
+        assert!(!watch.may_be_replaced("srv_1", "API", at(30)));
+        let later = at(20) + chrono::Duration::seconds(RESTART_MEMORY_SECS);
+        assert!(watch.may_be_replaced("srv_1", "API", later));
+        assert!(watch.take_ready(at(59)).is_empty());
+    }
+
+    #[test]
+    fn keeps_one_replacement_per_name_and_skips_a_crashed_one() {
+        let mut watch = DeployWatch::default();
+        let ids = ["c1", "c2", "c3", "c4"];
+        for (index, id) in ids.iter().enumerate() {
+            let secs = u32::try_from(index).unwrap() * 10;
+            watch.observe(
+                "srv_1",
+                &[process("API", Some(container(id, "api-1", "api:1")))],
+                at(secs),
+            );
+        }
+        let ready = watch.take_ready(at(55));
+        assert_eq!(ready[0].1.len(), 1);
+        assert_eq!(ready[0].1[0].old.id, "c1");
+        assert_eq!(ready[0].1[0].new.id, "c4");
+
+        watch.observe(
+            "srv_1",
+            &[process("API", Some(container("c5", "api-1", "api:2")))],
+            at(56),
+        );
+        watch.observe("srv_1", &[process("API", None)], at(58));
+        assert!(watch.take_ready(at(56) + chrono::Duration::seconds(24)).is_empty());
+    }
+
+    #[test]
+    fn sends_a_busy_server_after_the_longest_wait() {
+        let mut watch = DeployWatch::default();
+        for step in 0..=(MAX_WAIT_SECS / 10 + 1) {
+            let now = at(0) + chrono::Duration::seconds(step * 10);
+            watch.observe(
+                "srv_1",
+                &[process("API", Some(container(&format!("c{step}"), "api-1", "api:1")))],
+                now,
+            );
+            let ready = watch.take_ready(now);
+            assert_eq!(ready.is_empty(), step * 10 < MAX_WAIT_SECS + 10, "{step}");
+        }
     }
 
     #[test]

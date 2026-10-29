@@ -474,7 +474,11 @@ impl AlertEngine {
                     let since = *self.pending.entry(key.clone()).or_insert(now);
                     let hold =
                         if matches!(parsed.condition, Condition::ProcessStopped { .. })
-                            && self.deploys.is_container(&target.id, &reading.subject)
+                            && self.deploys.may_be_replaced(
+                                &target.id,
+                                &reading.subject,
+                                now,
+                            )
                         {
                             for_secs.max(DEPLOY_WINDOW_SECS)
                         } else {
