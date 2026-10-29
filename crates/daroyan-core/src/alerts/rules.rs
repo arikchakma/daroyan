@@ -168,6 +168,7 @@ pub struct QuietWindow {
 pub const MAX_REMINDERS: u32 = 10;
 pub const MAX_MESSAGE_LIMIT: u32 = 100;
 const MAX_QUIET_WINDOWS: usize = 5;
+const MAX_RUNBOOK_URL: usize = 2000;
 const DAY_MINUTES: u32 = 1440;
 const WEEK_MINUTES: u32 = 7 * DAY_MINUTES;
 
@@ -444,9 +445,11 @@ pub fn validate_options(
         return invalid("The time zone is unknown");
     }
     if let Some(url) = &options.runbook_url
-        && !(url.starts_with("https://") || url.starts_with("http://"))
+        && parse_runbook_url(url).is_none()
     {
-        return invalid("The runbook URL must start with http:// or https://");
+        return invalid(
+            "The runbook URL must be an http:// or https:// link under 2000 characters",
+        );
     }
     if options
         .severity_label
@@ -456,6 +459,15 @@ pub fn validate_options(
         return invalid("The severity label can be up to 20 characters");
     }
     Ok(())
+}
+
+pub fn parse_runbook_url(url: &str) -> Option<reqwest::Url> {
+    if url.len() > MAX_RUNBOOK_URL {
+        return None;
+    }
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let is_web = matches!(parsed.scheme(), "http" | "https") && parsed.host().is_some();
+    (is_web && parsed.as_str().len() <= MAX_RUNBOOK_URL).then_some(parsed)
 }
 
 pub fn describe_condition(condition: &Condition, for_secs: u32) -> String {

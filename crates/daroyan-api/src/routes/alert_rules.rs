@@ -5,7 +5,8 @@ use daroyan_core::alerts::backtest::backtest_rule;
 use daroyan_core::alerts::engine::{deliver_notice, parse_rule};
 use daroyan_core::alerts::notify::{Details, Notice, Tone};
 use daroyan_core::alerts::rules::{
-    Condition, RuleOptions, Scope, describe_condition, validate_options,
+    Condition, RuleOptions, Scope, describe_condition, parse_runbook_url,
+    validate_options,
 };
 use daroyan_core::db::entities::alert_rules::Model as AlertRule;
 use daroyan_core::db::ids::AlertRuleId;
@@ -126,7 +127,8 @@ fn read_options(options: RuleOptions) -> RuleOptions {
             .filter(|text| !text.is_empty())
     };
     RuleOptions {
-        runbook_url: trim(options.runbook_url),
+        runbook_url: trim(options.runbook_url)
+            .map(|url| parse_runbook_url(&url).map_or(url, |parsed| parsed.to_string())),
         severity_label: trim(options.severity_label),
         ..options
     }

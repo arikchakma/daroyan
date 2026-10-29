@@ -11,7 +11,7 @@ use crate::alerts::facts::{
 use crate::alerts::notify::{Details, Field, Link, LinkStyle, Snippet, Text, Tone};
 use crate::alerts::rules::{
     Condition, RuleOptions, Target, describe_log_level, describe_rule, format_moment,
-    format_ms, read_time_zone,
+    format_ms, parse_runbook_url, read_time_zone,
 };
 use crate::analytics::log_lines::read_level;
 use crate::db::entities::alert_rules::Model as AlertRule;
@@ -676,6 +676,7 @@ impl AlertMessage<'_> {
             .options
             .runbook_url
             .as_deref()
+            .and_then(parse_runbook_url)
             .map(|url| Link::new("Runbook", url));
         std::iter::once(view).chain(runbook).collect()
     }
