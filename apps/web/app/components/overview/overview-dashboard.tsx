@@ -299,8 +299,6 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
             </div>
           </DetailSection>
 
-          <EventsTile events={events} />
-
           <div className="grid grid-cols-2 gap-4 max-lg:grid-cols-1">
             <Tile
               title="Servers"
@@ -409,6 +407,8 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
               isSetUp={!!traceStatus?.last_span_at}
             />
           </div>
+
+          <EventsTile events={events} />
         </div>
       </div>
     </div>
