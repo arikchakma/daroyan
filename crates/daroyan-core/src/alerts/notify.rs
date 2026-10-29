@@ -528,15 +528,17 @@ fn build_slack_text(notice: &Notice) -> String {
 }
 
 fn build_slack_body(notice: &Notice) -> Value {
-    let section = slack_section;
     let details = &notice.details;
-    let title =
-        section(format!("*{}{}*", notice.tone.emoji(), escape_slack(&notice.title)));
+    let title = slack_section(format!(
+        "*{}{}*",
+        notice.tone.emoji(),
+        escape_slack(&notice.title)
+    ));
 
     let mut blocks = Vec::new();
     let summary = notice.summary();
     if !summary.is_empty() {
-        blocks.push(section(summary.render_within(
+        blocks.push(slack_section(summary.render_within(
             escape_slack,
             "*",
             "*",
@@ -560,14 +562,14 @@ fn build_slack_body(notice: &Notice) -> Value {
 
     if let Some(snippet) = &details.snippet {
         if let Some(label) = &snippet.label {
-            blocks.push(section(format!("*{}*", escape_slack(label))));
+            blocks.push(slack_section(format!("*{}*", escape_slack(label))));
         }
         let code = format_code(&snippet.lines, escape_slack, SLACK_MAX_TEXT - 6);
-        blocks.push(section(format!("```{code}```")));
+        blocks.push(slack_section(format!("```{code}```")));
     }
 
     if !details.note.is_empty() {
-        blocks.push(section(details.note.render_within(
+        blocks.push(slack_section(details.note.render_within(
             escape_slack,
             "*",
             "*",

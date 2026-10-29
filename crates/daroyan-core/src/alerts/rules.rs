@@ -57,6 +57,28 @@ pub enum Target {
     Cron,
 }
 
+impl Target {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Server => "Server",
+            Self::Check => "Check",
+            Self::Cron => "Cron",
+        }
+    }
+
+    pub fn path(self) -> &'static str {
+        match self {
+            Self::Server => "servers",
+            Self::Check => "uptime",
+            Self::Cron => "crons",
+        }
+    }
+
+    pub fn url(self, app_url: &str, id: &str) -> String {
+        format!("{}/{}/{id}", app_url.trim_end_matches('/'), self.path())
+    }
+}
+
 impl Condition {
     pub fn target(&self) -> Target {
         match self {

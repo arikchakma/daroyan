@@ -581,14 +581,7 @@ impl AlertEngine {
     }
 
     fn get_target_url(&self, target: Target, id: &str) -> Option<String> {
-        let path = match target {
-            Target::Server => "servers",
-            Target::Check => "uptime",
-            Target::Cron => "crons",
-        };
-        self.app_url
-            .as_ref()
-            .map(|url| format!("{}/{path}/{id}", url.trim_end_matches('/')))
+        self.app_url.as_ref().map(|url| target.url(url, id))
     }
 
     fn make_title(parsed: &ParsedRule, prefix: &str, rule: &AlertRule) -> String {
@@ -1066,49 +1059,46 @@ impl AlertEngine {
                 continue;
             }
 
-            let watching: Vec<(&AlertRule, ParsedRule)> = rules
-                .iter()
-                .filter(|rule| rule.enabled)
-                .filter_map(|rule| Some((rule, parse_rule(rule)?)))
-                .filter(|(_, parsed)| match &parsed.condition {
-                    Condition::ProcessStopped { name } => {
-                        name.as_ref().is_none_or(|name| {
-                            replacements
-                                .iter()
-                                .any(|replacement| &replacement.name == name)
-                        })
-                    }
-                    _ => false,
-                })
-                .filter(|(rule, parsed)| {
-                    parsed.scope.includes(&server_id, &server.labels)
-                        && !parsed.options.is_quiet(now)
-                        && !self
-                            .mutes
-                            .iter()
-                            .any(|mute| mute.covers(&rule.id, &server_id))
-                })
-                .collect();
-
-            let watching: Vec<(&AlertRule, ParsedRule)> = watching
-                .into_iter()
-                .filter(|(rule, parsed)| {
-                    parsed
-                        .options
-                        .message_limit
-                        .is_none_or(|limit| self.try_slot(&rule.id, limit, now))
-                })
-                .collect();
-            let Some((first, _)) = watching.first() else { continue };
-
+            let mut first: Option<&AlertRule> = None;
             let mut recipients: Vec<String> = Vec::new();
-            for (_, parsed) in &watching {
-                for id in &parsed.integration_ids {
-                    if !recipients.contains(id) {
-                        recipients.push(id.clone());
+            for rule in rules {
+                if !rule.enabled {
+                    continue;
+                }
+
+                let Some(parsed) = parse_rule(rule) else { continue };
+                let Condition::ProcessStopped { name } = &parsed.condition else {
+                    continue;
+                };
+
+                let replaced = name.as_ref().is_none_or(|name| {
+                    replacements.iter().any(|replacement| &replacement.name == name)
+                });
+                if !replaced
+                    || !parsed.scope.includes(&server_id, &server.labels)
+                    || parsed.options.is_quiet(now)
+                    || self.mutes.iter().any(|mute| mute.covers(&rule.id, &server_id))
+                {
+                    continue;
+                }
+
+                if parsed
+                    .options
+                    .message_limit
+                    .is_some_and(|limit| !self.try_slot(&rule.id, limit, now))
+                {
+                    continue;
+                }
+
+                first.get_or_insert(rule);
+                for id in parsed.integration_ids {
+                    if !recipients.contains(&id) {
+                        recipients.push(id);
                     }
                 }
             }
+
+            let Some(first) = first else { continue };
 
             let notice = DeployNote {
                 server_id: &server_id,
@@ -1346,32 +1336,22 @@ async fn send_and_log(
         .zip(reply)
         .map(|((_, parent), reply)| Thread { parent, broadcast: reply != Reply::Quiet });
 
-    let config = serde_json::from_value::<IntegrationConfig>(integration.config.clone())
-        .map_err(|_| {
-            "The integration settings are unreadable. Edit and save it again".to_string()
-        });
+    let config =
+        serde_json::from_value::<IntegrationConfig>(integration.config.clone()).ok();
     let outcome = match &config {
-        Ok(config) => send_notice(config, notice, thread).await,
-        Err(error) => Err(error.clone()),
+        Some(config) => send_notice(config, notice, thread).await,
+        None => {
+            Err("The integration settings are unreadable. Edit and save it again"
+                .to_string())
+        }
     };
 
-    if let (Ok(config), Ok(_), Some((parent_id, parent)), Some(reply)) =
-        (&config, &outcome, &parent, reply)
-        && reply.updates_parent()
+    if let Some(config) = &config
+        && outcome.is_ok()
+        && let Some((parent_id, parent)) = &parent
+        && reply.is_some_and(Reply::updates_parent)
     {
-        match update_parent(config, parent, notice).await {
-            Ok(Some(body)) => {
-                if let Err(error) =
-                    database.update_chat_payload(parent_id, body.to_string()).await
-                {
-                    tracing::error!(integration_id = %integration.id, error = %error, "save the alert message");
-                }
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(integration_id = %integration.id, error = %error, "update the alert message");
-            }
-        }
+        refresh_parent(database, integration, config, parent_id, parent, notice).await;
     }
 
     if let Some(log) = log {
@@ -1381,7 +1361,7 @@ async fn send_and_log(
                 Some(reply) => reply == Reply::Escalate,
             };
 
-        let posted = outcome.as_ref().ok().cloned().flatten().filter(|_| starts_thread);
+        let posted = if starts_thread { outcome.clone().ok().flatten() } else { None };
         let delivery = NewAlertDelivery {
             id: new_id(Prefix::AlertDelivery),
             rule_id: log.rule_id,
@@ -1411,6 +1391,28 @@ async fn send_and_log(
     }
 
     outcome.map(|_| ())
+}
+
+async fn refresh_parent(
+    database: &Database,
+    integration: &Integration,
+    config: &IntegrationConfig,
+    parent_id: &str,
+    parent: &ChatMessage,
+    notice: &Notice,
+) {
+    let body = match update_parent(config, parent, notice).await {
+        Ok(Some(body)) => body,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(integration_id = %integration.id, error = %error, "update the alert message");
+            return;
+        }
+    };
+
+    if let Err(error) = database.update_chat_payload(parent_id, body.to_string()).await {
+        tracing::error!(integration_id = %integration.id, error = %error, "save the alert message");
+    }
 }
 
 async fn find_thread(

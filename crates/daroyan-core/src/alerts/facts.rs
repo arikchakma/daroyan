@@ -142,7 +142,7 @@ impl FactSources<'_> {
             Condition::Logs { level, within_secs, service, text, .. } => {
                 let Some(server) = self.server else { return Ok(AlertFacts::None) };
 
-                let matcher = || LogMatch {
+                let matcher = LogMatch {
                     min_severity: read_log_severity(level).unwrap_or(17),
                     service: service.clone(),
                     text: text.clone(),
@@ -154,7 +154,7 @@ impl FactSources<'_> {
                     let run = summarize_log_run(
                         self.analytics,
                         server.id.clone(),
-                        matcher(),
+                        matcher,
                         alert.started_at.timestamp_millis() - window_ms,
                         window_ms,
                     )
@@ -165,7 +165,7 @@ impl FactSources<'_> {
                     let top = list_top_messages(
                         self.analytics,
                         server.id.clone(),
-                        matcher(),
+                        matcher,
                         now_ms - window_ms,
                         TOP_MESSAGES,
                     )

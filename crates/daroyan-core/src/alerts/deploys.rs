@@ -6,6 +6,7 @@ use serde_json::json;
 
 use crate::alerts::message::format_span;
 use crate::alerts::notify::{Details, Link, Notice, Snippet, Text, Tone};
+use crate::alerts::rules::Target;
 
 pub const DEPLOY_WINDOW_SECS: i64 = 60;
 const QUIET_SECS: i64 = 20;
@@ -48,67 +49,61 @@ impl DeployWatch {
         for process in processes {
             let key = (server_id.to_string(), process.name.clone());
 
-            match &process.container {
-                Some(container) => {
-                    let tracked = self.tracked.get(&key);
-                    let mut restarted_at =
-                        tracked.and_then(|tracked| tracked.restarted_at);
-
-                    if let Some(tracked) = tracked {
-                        let is_replaced = tracked.container.id != container.id;
-                        let is_deploy = is_replaced
-                            && revision(&tracked.container) != revision(container);
-                        let came_back = is_replaced || tracked.stopped_at.is_some();
-                        let is_looping = !is_deploy
-                            && came_back
-                            && restarted_at.is_some_and(|at| {
-                                (now - at).num_seconds() < RESTART_MEMORY_SECS
-                            });
-
-                        if is_deploy {
-                            restarted_at = None;
-                        } else if came_back {
-                            restarted_at = Some(now);
-                        }
-
-                        let gap =
-                            tracked.stopped_at.map_or(0, |at| (now - at).num_seconds());
-
-                        if is_replaced && !is_looping && gap <= DEPLOY_WINDOW_SECS {
-                            queue(
-                                &mut self
-                                    .pending
-                                    .entry(server_id.to_string())
-                                    .or_insert_with(|| Batch {
-                                        since: now,
-                                        replacements: Vec::new(),
-                                    })
-                                    .replacements,
-                                &process.name,
-                                &tracked.container,
-                                container,
-                                gap,
-                                now,
-                            );
-                        }
-                    }
-
-                    self.tracked.insert(
-                        key,
-                        Tracked {
-                            container: container.clone(),
-                            stopped_at: None,
-                            restarted_at,
-                        },
-                    );
+            let Some(container) = &process.container else {
+                if process.count == 0
+                    && let Some(tracked) = self.tracked.get_mut(&key)
+                {
+                    tracked.stopped_at.get_or_insert(now);
                 }
-                None if process.count == 0 => {
-                    if let Some(tracked) = self.tracked.get_mut(&key) {
-                        tracked.stopped_at.get_or_insert(now);
-                    }
+                continue;
+            };
+
+            let tracked = self.tracked.get(&key);
+            let mut restarted_at = tracked.and_then(|tracked| tracked.restarted_at);
+
+            if let Some(tracked) = tracked {
+                let is_replaced = tracked.container.id != container.id;
+                let is_deploy =
+                    is_replaced && revision(&tracked.container) != revision(container);
+                let came_back = is_replaced || tracked.stopped_at.is_some();
+                let is_looping = !is_deploy
+                    && came_back
+                    && restarted_at
+                        .is_some_and(|at| (now - at).num_seconds() < RESTART_MEMORY_SECS);
+
+                if is_deploy {
+                    restarted_at = None;
+                } else if came_back {
+                    restarted_at = Some(now);
                 }
-                None => {}
+
+                let gap = tracked.stopped_at.map_or(0, |at| (now - at).num_seconds());
+
+                if is_replaced && !is_looping && gap <= DEPLOY_WINDOW_SECS {
+                    let replacement = Replacement {
+                        name: process.name.clone(),
+                        old: tracked.container.clone(),
+                        new: container.clone(),
+                        gap_secs: gap.unsigned_abs(),
+                        at: now,
+                    };
+
+                    self.pending
+                        .entry(server_id.to_string())
+                        .or_insert_with(|| Batch { since: now, replacements: Vec::new() })
+                        .replacements
+                        .push(replacement);
+                }
             }
+
+            self.tracked.insert(
+                key,
+                Tracked {
+                    container: container.clone(),
+                    stopped_at: None,
+                    restarted_at,
+                },
+            );
         }
     }
 
@@ -267,9 +262,7 @@ impl DeployNote<'_> {
     }
 
     fn server_url(&self) -> Option<String> {
-        self.app_url.map(|url| {
-            format!("{}/servers/{}", url.trim_end_matches('/'), self.server_id)
-        })
+        self.app_url.map(|url| Target::Server.url(url, self.server_id))
     }
 }
 
@@ -283,41 +276,22 @@ fn revision(container: &Container) -> (&str, &str) {
     }
 }
 
-fn queue(
-    list: &mut Vec<Replacement>,
-    name: &str,
-    old: &Container,
-    new: &Container,
-    gap: i64,
-    now: DateTime<Utc>,
-) {
-    list.push(Replacement {
-        name: name.to_string(),
-        old: old.clone(),
-        new: new.clone(),
-        gap_secs: gap.unsigned_abs(),
-        at: now,
-    });
-}
-
 fn describe_versions(old: &str, new: &str) -> String {
-    let split = |image: &str| -> (String, String) {
-        let name_end = image.rfind('/').map_or(0, |index| index + 1);
-        match image[name_end..].rfind(':') {
-            Some(index) => (
-                image[..name_end + index].to_string(),
-                image[name_end + index + 1..].to_string(),
-            ),
-            None => (image.to_string(), "latest".to_string()),
-        }
-    };
-
-    let ((old_repo, old_tag), (new_repo, new_tag)) = (split(old), split(new));
+    let ((old_repo, old_tag), (new_repo, new_tag)) = (split_image(old), split_image(new));
 
     match (old_repo == new_repo, old_tag == new_tag) {
         (true, true) => format!("{new_tag} (recreated)"),
         (true, false) => format!("{old_tag} → {new_tag}"),
         (false, _) => format!("{old} → {new}"),
+    }
+}
+
+fn split_image(image: &str) -> (&str, &str) {
+    let name_end = image.rfind('/').map_or(0, |index| index + 1);
+
+    match image[name_end..].rfind(':') {
+        Some(index) => (&image[..name_end + index], &image[name_end + index + 1..]),
+        None => (image, "latest"),
     }
 }
 

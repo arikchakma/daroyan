@@ -173,10 +173,7 @@ impl AlertMessage<'_> {
 
     fn usage(&self, facts: &UsageFacts) -> Details {
         let alert = self.alert;
-        let held = match self.for_secs() {
-            0 => String::new(),
-            secs => format!(" for {}", format_span(u64::from(secs))),
-        };
+        let held = self.held();
 
         let memory = get_percent(facts.mem_used, facts.mem_total);
 
@@ -239,41 +236,48 @@ impl AlertMessage<'_> {
         let name = self.alert.subject.as_str();
         let exit = facts.exit.clone().unwrap_or_default();
 
-        let summary = match (&exit.signal, exit.code) {
-            _ if exit.oom => Text::default()
-                .bold(name)
-                .plain(" ran out of memory, so the kernel killed it."),
-            _ if exit.stopped => Text::default().bold(name).plain(
-                " was stopped on purpose, with docker stop or docker kill. It has not started again.",
+        let (summary, reason) = match (&exit.signal, exit.code) {
+            _ if exit.oom => (
+                Text::default().bold(name).plain(" ran out of memory, so the kernel killed it."),
+                Some("Out of memory".to_string()),
             ),
-            (Some(signal), _) => Text::default()
-                .bold(name)
-                .plain(" was killed by ")
-                .bold(signal.as_str())
-                .plain(format!(". {}", explain_signal(signal))),
-            (None, Some(0)) => Text::default()
-                .bold(name)
-                .plain(" exited with code ")
-                .bold("0")
-                .plain(". It finished without an error, but it is no longer running."),
-            (None, Some(code)) => Text::default()
-                .bold(name)
-                .plain(" exited with code ")
-                .bold(code.to_string())
-                .plain(". Its last log lines usually show why."),
-            (None, None) => Text::default().bold(name).plain(" stopped."),
+            _ if exit.stopped => (
+                Text::default().bold(name).plain(
+                    " was stopped on purpose, with docker stop or docker kill. It has not started again.",
+                ),
+                Some("Stopped on purpose".to_string()),
+            ),
+            (Some(signal), code) => (
+                Text::default()
+                    .bold(name)
+                    .plain(" was killed by ")
+                    .bold(signal.as_str())
+                    .plain(format!(". {}", explain_signal(signal))),
+                Some(match code {
+                    Some(code) => format!("{signal} · code {code}"),
+                    None => signal.clone(),
+                }),
+            ),
+            (None, Some(0)) => (
+                Text::default()
+                    .bold(name)
+                    .plain(" exited with code ")
+                    .bold("0")
+                    .plain(". It finished without an error, but it is no longer running."),
+                Some("Code 0".to_string()),
+            ),
+            (None, Some(code)) => (
+                Text::default()
+                    .bold(name)
+                    .plain(" exited with code ")
+                    .bold(code.to_string())
+                    .plain(". Its last log lines usually show why."),
+                Some(format!("Code {code}")),
+            ),
+            (None, None) => (Text::default().bold(name).plain(" stopped."), None),
         };
 
         let mut fields = vec![self.target_field()];
-        let reason = match (exit.oom, &exit.signal, exit.code) {
-            (true, _, _) => Some("Out of memory".to_string()),
-            _ if exit.stopped => Some("Stopped on purpose".to_string()),
-            (false, Some(signal), Some(code)) => Some(format!("{signal} · code {code}")),
-            (false, Some(signal), None) => Some(signal.clone()),
-            (false, None, Some(code)) => Some(format!("Code {code}")),
-            (false, None, None) => None,
-        };
-
         if let Some(reason) = reason {
             fields.push(Field::new("Exit", reason));
         }
@@ -307,13 +311,10 @@ impl AlertMessage<'_> {
             && let Some(restart) =
                 self.target_link("Restart", "restart", &self.alert.subject)
         {
-            links = std::iter::once(restart.primary())
-                .chain(
-                    links
-                        .into_iter()
-                        .map(|link| Link { style: LinkStyle::Default, ..link }),
-                )
-                .collect();
+            for link in &mut links {
+                link.style = LinkStyle::Default;
+            }
+            links.insert(0, restart.primary());
         }
 
         if snippet.is_some() {
@@ -360,12 +361,11 @@ impl AlertMessage<'_> {
 
         let snippet = facts.latest.as_ref().map(|latest| {
             let is_https = facts.url.starts_with("https://");
-            let steps = [
-                Some(("DNS", latest.dns_ms)),
-                Some(("Connect", latest.connect_ms)),
-                is_https.then_some(("TLS", latest.tls_ms)),
-                Some(("First byte", latest.ttfb_ms)),
-            ];
+            let mut steps = vec![("DNS", latest.dns_ms), ("Connect", latest.connect_ms)];
+            if is_https {
+                steps.push(("TLS", latest.tls_ms));
+            }
+            steps.push(("First byte", latest.ttfb_ms));
 
             let failed = if latest
                 .error
@@ -378,7 +378,7 @@ impl AlertMessage<'_> {
             };
 
             let mut parts = Vec::new();
-            for (label, ms) in steps.into_iter().flatten() {
+            for (label, ms) in steps {
                 match ms {
                     Some(ms) => parts.push(format!("{label} {ms} ms")),
                     None => {
@@ -594,10 +594,7 @@ impl AlertMessage<'_> {
     }
 
     fn describe_trigger(&self) -> String {
-        let held = match self.for_secs() {
-            0 => String::new(),
-            secs => format!(" for {}", format_span(u64::from(secs))),
-        };
+        let held = self.held();
 
         match self.condition {
             Condition::Logs { count, within_secs, .. } => format!(
@@ -617,6 +614,13 @@ impl AlertMessage<'_> {
         }
     }
 
+    fn held(&self) -> String {
+        match self.for_secs() {
+            0 => String::new(),
+            secs => format!(" for {}", format_span(u64::from(secs))),
+        }
+    }
+
     fn for_secs(&self) -> u32 {
         u32::try_from(self.rule.for_secs).unwrap_or_default()
     }
@@ -633,18 +637,12 @@ impl AlertMessage<'_> {
     }
 
     fn target_field(&self) -> Field {
-        let kind = match self.target {
-            Target::Server => "Server",
-            Target::Check => "Check",
-            Target::Cron => "Cron",
-        };
-
         let label = std::iter::once(self.target_name)
             .chain(self.labels.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(" · ");
 
-        Field::new(kind, label)
+        Field::new(self.target.label(), label)
     }
 
     fn app_url(&self) -> Option<&str> {
@@ -652,13 +650,7 @@ impl AlertMessage<'_> {
     }
 
     fn target_url(&self) -> Option<String> {
-        let path = match self.target {
-            Target::Server => "servers",
-            Target::Check => "uptime",
-            Target::Cron => "crons",
-        };
-
-        Some(format!("{}/{path}/{}", self.app_url()?, self.target_id))
+        Some(self.target.url(self.app_url?, self.target_id))
     }
 
     fn target_link(&self, label: &str, param: &str, value: &str) -> Option<Link> {
@@ -667,11 +659,7 @@ impl AlertMessage<'_> {
     }
 
     fn open_target(&self) -> Vec<Link> {
-        let label = match self.target {
-            Target::Server => "Open server",
-            Target::Check => "Open check",
-            Target::Cron => "Open cron",
-        };
+        let label = format!("Open {}", self.target.label().to_lowercase());
 
         self.target_url()
             .map(|url| Link::new(label, url).primary())
@@ -686,13 +674,15 @@ impl AlertMessage<'_> {
             _ => self.target_link("Mute", "mute", id),
         };
 
-        let declare = (Level::read(&self.alert.severity) == Level::Critical
-            && matches!(self.condition, Condition::Logs { .. } | Condition::UptimeDown))
-        .then(|| self.target_link("Declare incident", "declare", id))
-        .flatten()
-        .map(Link::danger);
+        let mut links: Vec<Link> = mute.into_iter().collect();
+        if Level::read(&self.alert.severity) == Level::Critical
+            && matches!(self.condition, Condition::Logs { .. } | Condition::UptimeDown)
+            && let Some(link) = self.target_link("Declare incident", "declare", id)
+        {
+            links.push(link.danger());
+        }
 
-        mute.into_iter().chain(declare).collect()
+        links
     }
 
     fn logs_link(&self) -> Option<Link> {
@@ -732,7 +722,10 @@ impl AlertMessage<'_> {
             .and_then(parse_runbook_url)
             .map(|url| Link::new("Runbook", url));
 
-        std::iter::once(view).chain(runbook).collect()
+        let mut links = vec![view];
+        links.extend(runbook);
+
+        links
     }
 }
 
