@@ -54,12 +54,17 @@ impl DeployWatch {
                         tracked.and_then(|tracked| tracked.restarted_at);
                     if let Some(tracked) = tracked {
                         let is_replaced = tracked.container.id != container.id;
+                        let is_deploy = is_replaced
+                            && revision(&tracked.container) != revision(container);
                         let came_back = is_replaced || tracked.stopped_at.is_some();
-                        let is_looping = came_back
+                        let is_looping = !is_deploy
+                            && came_back
                             && restarted_at.is_some_and(|at| {
                                 (now - at).num_seconds() < RESTART_MEMORY_SECS
                             });
-                        if came_back {
+                        if is_deploy {
+                            restarted_at = None;
+                        } else if came_back {
                             restarted_at = Some(now);
                         }
                         let gap =
@@ -254,6 +259,16 @@ impl DeployNote<'_> {
     }
 }
 
+fn revision(container: &Container) -> (&str, &str) {
+    match (&container.image_id, &container.config_hash) {
+        (None, None) => (container.image.as_str(), ""),
+        (image_id, config_hash) => (
+            image_id.as_deref().unwrap_or_default(),
+            config_hash.as_deref().unwrap_or_default(),
+        ),
+    }
+}
+
 fn queue(
     list: &mut Vec<Replacement>,
     name: &str,
@@ -316,7 +331,102 @@ mod tests {
             image: image.to_string(),
             project: Some("inboxjot".to_string()),
             service: Some("api".to_string()),
+            image_id: None,
+            config_hash: None,
         }
+    }
+
+    fn revision_of(id: &str, image_id: &str) -> Container {
+        Container {
+            image_id: Some(image_id.to_string()),
+            config_hash: Some("hash".to_string()),
+            ..container(id, "api-1", "api:latest")
+        }
+    }
+
+    fn deploy(
+        watch: &mut DeployWatch,
+        old: Container,
+        new: Container,
+        start: DateTime<Utc>,
+    ) {
+        let seconds = |secs: i64| start + chrono::Duration::seconds(secs);
+        watch.observe("srv_1", &[process("API", Some(old))], start);
+        watch.observe("srv_1", &[process("API", None)], seconds(5));
+        assert!(watch.may_be_replaced("srv_1", "API", seconds(5)));
+        watch.observe("srv_1", &[process("API", Some(new))], seconds(15));
+    }
+
+    #[test]
+    fn keeps_the_grace_for_deploys_close_together() {
+        let mut watch = DeployWatch::default();
+        let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
+        deploy(
+            &mut watch,
+            revision_of("c1", "sha256:a"),
+            revision_of("c2", "sha256:b"),
+            at(0),
+        );
+        assert_eq!(watch.take_ready(seconds(40)).len(), 1);
+        deploy(
+            &mut watch,
+            revision_of("c2", "sha256:b"),
+            revision_of("c3", "sha256:c"),
+            seconds(300),
+        );
+        assert_eq!(watch.take_ready(seconds(340)).len(), 1);
+    }
+
+    #[test]
+    fn treats_a_repulled_latest_tag_as_a_deploy() {
+        let mut watch = DeployWatch::default();
+        let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
+        let (old, new) = (revision_of("c1", "sha256:a"), revision_of("c2", "sha256:b"));
+        assert_eq!(old.image, new.image);
+        deploy(&mut watch, old, new.clone(), at(0));
+        assert_eq!(watch.take_ready(seconds(40)).len(), 1);
+        deploy(&mut watch, new, revision_of("c3", "sha256:c"), seconds(120));
+        assert_eq!(watch.take_ready(seconds(160)).len(), 1);
+    }
+
+    #[test]
+    fn treats_the_same_revision_recreated_as_a_crash_loop() {
+        let mut watch = DeployWatch::default();
+        let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
+        for (index, id) in ["c1", "c2", "c3"].iter().enumerate() {
+            let up = seconds(i64::try_from(index).unwrap() * 40);
+            watch.observe(
+                "srv_1",
+                &[process("API", Some(revision_of(id, "sha256:a")))],
+                up,
+            );
+            watch.observe(
+                "srv_1",
+                &[process("API", None)],
+                up + chrono::Duration::seconds(30),
+            );
+        }
+        assert!(!watch.may_be_replaced("srv_1", "API", seconds(110)));
+    }
+
+    #[test]
+    fn falls_back_to_the_image_tag_for_older_agents() {
+        let mut watch = DeployWatch::default();
+        let seconds = |secs: i64| at(0) + chrono::Duration::seconds(secs);
+        deploy(
+            &mut watch,
+            container("c1", "api-1", "api:1"),
+            container("c2", "api-1", "api:2"),
+            at(0),
+        );
+        assert_eq!(watch.take_ready(seconds(40)).len(), 1);
+        deploy(
+            &mut watch,
+            container("c2", "api-1", "api:2"),
+            container("c3", "api-1", "api:3"),
+            seconds(60),
+        );
+        assert_eq!(watch.take_ready(seconds(100)).len(), 1);
     }
 
     fn process(name: &str, container: Option<Container>) -> ProcessState {
