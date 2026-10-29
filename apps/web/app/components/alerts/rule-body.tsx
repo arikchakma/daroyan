@@ -367,7 +367,7 @@ export function RuleBody(props: RuleBodyProps) {
               <Switch.Root
                 aria-labelledby="send-alerts"
                 checked={rule.enabled}
-                disabled={update.isPending}
+                disabled={!isAdmin || update.isPending}
                 onCheckedChange={(enabled) => update.mutate({ ruleId: rule.id, body: { enabled } })}
               >
                 <Switch.Thumb />

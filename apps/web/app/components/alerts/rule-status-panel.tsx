@@ -52,7 +52,7 @@ export function RuleStatusPanel(props: RuleStatusPanelProps) {
           <Switch.Root
             aria-labelledby="send-alerts"
             checked={rule.enabled}
-            disabled={toggle.isPending}
+            disabled={!isAdmin || toggle.isPending}
             onCheckedChange={(enabled) => toggle.mutate({ ruleId: rule.id, body: { enabled } })}
           >
             <Switch.Thumb />
