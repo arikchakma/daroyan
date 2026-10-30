@@ -194,7 +194,9 @@ export function CheckBody(props: CheckBodyProps) {
               {outages.length > 0 ? (
                 <OutagesTable outages={outages} onDeclare={() => setIsDeclareOpen(true)} />
               ) : (
-                <DetailEmpty title="No outages">One starts after 2 failed checks in a row.</DetailEmpty>
+                <DetailEmpty title="No outages">
+                  One starts after {formatStreak(check.failure_threshold, 'failed check', 'failed checks')}.
+                </DetailEmpty>
               )}
             </DetailCard>
           </DetailSection>
