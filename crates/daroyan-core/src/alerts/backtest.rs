@@ -4,7 +4,10 @@ use duckdb::params;
 
 use crate::alerts::rules::{Condition, Scope, Target, read_log_severity};
 use crate::analytics::Analytics;
-use crate::analytics::log_lines::{LogMatch, list_busy_windows};
+use crate::analytics::log_lines::{
+    LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_otlp_logs_by_service,
+    list_busy_windows,
+};
 use crate::db::Database;
 use crate::error::Result;
 use crate::servers::status::get_percent;
@@ -137,6 +140,40 @@ pub async fn backtest_rule(
             _ => {}
         }
     }
+    if let Condition::Logs { level, count, within_secs, service, text } = condition
+        && *scope == Scope::All
+    {
+        let matcher = LogMatch {
+            min_severity: read_log_severity(level).unwrap_or(17),
+            service: service.clone(),
+            text: text.clone(),
+        };
+        let window_ms = i64::from(*within_secs) * 1000;
+        for (service, _) in
+            count_otlp_logs_by_service(analytics, matcher.clone(), since).await?
+        {
+            let matcher = LogMatch { service: Some(service.clone()), ..matcher.clone() };
+            for (at, found) in list_busy_windows(
+                analytics,
+                OTLP_SERVER_ID.to_string(),
+                matcher,
+                since,
+                window_ms,
+                u64::from(*count),
+            )
+            .await?
+            {
+                hits.push(BacktestHit {
+                    server_id: OTLP_SERVER_ID.to_string(),
+                    server_name: OTLP_SERVER_NAME.to_string(),
+                    subject: service.clone(),
+                    value: format!("{found} {level} lines"),
+                    at,
+                });
+            }
+        }
+    }
+
     hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
     hits.truncate(MAX_HITS);
     Ok(Some(hits))

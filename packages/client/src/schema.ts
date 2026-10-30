@@ -1226,6 +1226,7 @@ export interface components {
             reason?: string | null;
             rule_id: string;
             server_id?: string | null;
+            subject?: string | null;
         };
         AlertRule: {
             condition: components["schemas"]["Condition"];
@@ -1382,6 +1383,7 @@ export interface components {
             reason?: string | null;
             rule_id: components["schemas"]["AlertRuleId"];
             server_id?: string | null;
+            subject?: string | null;
             time_zone?: string | null;
         };
         CreateAlertRuleBody: {

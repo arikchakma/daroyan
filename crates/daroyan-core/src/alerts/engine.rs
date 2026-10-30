@@ -11,7 +11,7 @@ use crate::agents::Agents;
 use crate::alerts::deploys::{DEPLOY_WINDOW_SECS, DeployNote, DeployWatch};
 use crate::alerts::evaluate::{
     Level, NO_DATA, Reading, ServerSnapshot, find_readings, format_percent, is_past,
-    make_reading, rate,
+    make_log_reading, make_reading, rate,
 };
 use crate::alerts::facts::{AlertFacts, CheckCount, FactSources};
 use crate::alerts::integrations::IntegrationConfig;
@@ -24,7 +24,10 @@ use crate::alerts::rules::{
     format_duration, format_ms, read_log_severity, read_time_zone,
 };
 use crate::analytics::Analytics;
-use crate::analytics::log_lines::{LogMatch, count_logs_by_server};
+use crate::analytics::log_lines::{
+    LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_server,
+    count_otlp_logs_by_service,
+};
 use crate::analytics::server_states::aggregate_server_metric;
 use crate::analytics::uptime_results::{aggregate_check_metric, list_cert_expiries};
 use crate::db::Database;
@@ -148,11 +151,27 @@ fn get_target_id(alert: &Alert) -> String {
 }
 
 fn get_target(alert: &Alert) -> Target {
-    match (&alert.check_id, &alert.cron_id) {
-        (Some(_), _) => Target::Check,
-        (_, Some(_)) => Target::Cron,
+    match (&alert.check_id, &alert.cron_id, alert.server_id.as_deref()) {
+        (Some(_), _, _) => Target::Check,
+        (_, Some(_), _) => Target::Cron,
+        (_, _, Some(OTLP_SERVER_ID)) => Target::Telemetry,
         _ => Target::Server,
     }
+}
+
+fn to_log_match(condition: &Condition, now: DateTime<Utc>) -> Option<(LogMatch, i64)> {
+    let Condition::Logs { level, within_secs, service, text, .. } = condition else {
+        return None;
+    };
+
+    let matcher = LogMatch {
+        min_severity: read_log_severity(level).unwrap_or(17),
+        service: service.clone(),
+        text: text.clone(),
+    };
+    let since = now.timestamp_millis() - i64::from(*within_secs) * 1000;
+
+    Some((matcher, since))
 }
 
 impl AlertEngine {
@@ -186,16 +205,43 @@ impl AlertEngine {
         condition: &Condition,
         now: DateTime<Utc>,
     ) -> Result<HashMap<String, u64>> {
-        let Condition::Logs { level, within_secs, service, text, .. } = condition else {
+        let Some((matcher, since)) = to_log_match(condition, now) else {
             return Ok(HashMap::new());
         };
-        let matcher = LogMatch {
-            min_severity: read_log_severity(level).unwrap_or(17),
-            service: service.clone(),
-            text: text.clone(),
-        };
-        let since = now.timestamp_millis() - i64::from(*within_secs) * 1000;
         count_logs_by_server(&self.analytics, matcher, since).await
+    }
+
+    // OpenTelemetry lines that match no server alert once per service, like a
+    // log monitor grouped by service.
+    async fn read_telemetry_target(
+        &self,
+        parsed: &ParsedRule,
+        now: DateTime<Utc>,
+    ) -> Result<Option<TargetReadings>> {
+        let Condition::Logs { level, within_secs, .. } = &parsed.condition else {
+            return Ok(None);
+        };
+        let Some((matcher, since)) = to_log_match(&parsed.condition, now) else {
+            return Ok(None);
+        };
+        if parsed.scope != Scope::All {
+            return Ok(None);
+        }
+
+        let readings = count_otlp_logs_by_service(&self.analytics, matcher, since)
+            .await?
+            .into_iter()
+            .map(|(service, found)| {
+                make_log_reading(&service, found, level, *within_secs)
+            })
+            .collect();
+
+        Ok(Some(TargetReadings {
+            id: OTLP_SERVER_ID.to_string(),
+            name: OTLP_SERVER_NAME.to_string(),
+            target: Target::Telemetry,
+            readings: Some(readings),
+        }))
     }
 
     async fn aggregate_servers(
@@ -318,7 +364,7 @@ impl AlertEngine {
         }
         let log_counts = self.count_logs(&parsed.condition, now).await?;
         let aggregates = self.aggregate_servers(parsed, now).await?;
-        Ok(facts
+        let mut targets: Vec<TargetReadings> = facts
             .iter()
             .filter(|server| parsed.scope.includes(&server.server.id, &server.labels))
             .map(|server| {
@@ -366,7 +412,11 @@ impl AlertEngine {
                     readings,
                 }
             })
-            .collect())
+            .collect();
+
+        targets.extend(self.read_telemetry_target(parsed, now).await?);
+
+        Ok(targets)
     }
 
     pub async fn check_alerts(&mut self, now: DateTime<Utc>) -> Result<()> {
@@ -419,6 +469,7 @@ impl AlertEngine {
             .map(|server| (server.id.clone(), server.name.clone()))
             .chain(checks.iter().map(|check| (check.id.clone(), check.name.clone())))
             .chain(crons.iter().map(|cron| (cron.id.clone(), cron.name.clone())))
+            .chain([(OTLP_SERVER_ID.to_string(), OTLP_SERVER_NAME.to_string())])
             .collect();
         self.end_mutes(&rules, &firing, &target_names, &integrations, now)
             .await?;
@@ -706,7 +757,8 @@ impl AlertEngine {
             .create_alert(NewAlert {
                 id: new_id(Prefix::Alert),
                 rule_id: rule.id.clone(),
-                server_id: target_of(Target::Server),
+                server_id: target_of(Target::Server)
+                    .or_else(|| target_of(Target::Telemetry)),
                 check_id: target_of(Target::Check),
                 cron_id: target_of(Target::Cron),
                 subject: reading.subject,
@@ -755,13 +807,13 @@ impl AlertEngine {
 
         let fire = RuleFire {
             rule,
-            target_kind: match target {
-                Target::Server => "server",
-                Target::Check => "check",
-                Target::Cron => "cron",
-            },
+            target_kind: target.kind(),
             target_id,
-            target_name,
+            target_name: if target == Target::Telemetry {
+                &alert.subject
+            } else {
+                target_name
+            },
             integration_ids: &parsed.integration_ids,
         };
         if let Err(error) =
@@ -949,7 +1001,9 @@ impl AlertEngine {
 
     fn is_muted(&self, rule_id: &str, alert: &Alert) -> bool {
         let target_id = get_target_id(alert);
-        self.mutes.iter().any(|mute| mute.covers(rule_id, &target_id))
+        self.mutes
+            .iter()
+            .any(|mute| mute.covers(rule_id, &target_id, Some(&alert.subject)))
     }
 
     fn is_silenced(
@@ -976,7 +1030,13 @@ impl AlertEngine {
         let covered = |mute: &AlertMute| -> Vec<&Alert> {
             firing
                 .iter()
-                .filter(|alert| mute.covers(&alert.rule_id, &get_target_id(alert)))
+                .filter(|alert| {
+                    mute.covers(
+                        &alert.rule_id,
+                        &get_target_id(alert),
+                        Some(&alert.subject),
+                    )
+                })
                 .collect()
         };
         let (ended, active): (Vec<AlertMute>, Vec<AlertMute>) =
@@ -1077,7 +1137,10 @@ impl AlertEngine {
                 if !replaced
                     || !parsed.scope.includes(&server_id, &server.labels)
                     || parsed.options.is_quiet(now)
-                    || self.mutes.iter().any(|mute| mute.covers(&rule.id, &server_id))
+                    || self
+                        .mutes
+                        .iter()
+                        .any(|mute| mute.covers(&rule.id, &server_id, None))
                 {
                     continue;
                 }
@@ -1463,11 +1526,7 @@ fn describe_alert(
     target_name: &str,
     alert: &Alert,
 ) -> Value {
-    let target_key = match target {
-        Target::Server => "server",
-        Target::Check => "check",
-        Target::Cron => "cron",
-    };
+    let target_key = target.kind();
     json!({
         "id": alert.id,
         "status": alert.status,

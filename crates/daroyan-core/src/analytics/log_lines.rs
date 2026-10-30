@@ -29,6 +29,7 @@ const MAX_NAME_BYTES: usize = 200;
 const AGENT_SERVICE: &str = "Daroyan agent";
 const LINE_OVERHEAD: u64 = 64;
 pub const OTLP_SERVER_ID: &str = "otlp";
+pub const OTLP_SERVER_NAME: &str = "OpenTelemetry";
 const LEVEL_KEYS: [&str; 4] = ["level", "severity", "status", "log.level"];
 
 pub struct LogRow {
@@ -493,6 +494,7 @@ pub async fn list_log_sources(analytics: &Analytics) -> Result<Vec<LogSource>> {
         .await
 }
 
+#[derive(Clone)]
 pub struct LogMatch {
     pub min_severity: u8,
     pub service: Option<String>,
@@ -525,6 +527,30 @@ pub async fn count_logs_by_server(
             let mut values = vec![SqlValue::BigInt(since)];
             push_match(&mut sql, &mut values, &matcher);
             sql.push_str(" GROUP BY server_id");
+            let mut statement = conn.prepare(&sql)?;
+            statement
+                .query_map(params_from_iter(values), |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?
+                .collect()
+        })
+        .await
+}
+
+pub async fn count_otlp_logs_by_service(
+    analytics: &Analytics,
+    matcher: LogMatch,
+    since: i64,
+) -> Result<Vec<(String, u64)>> {
+    analytics
+        .read(move |conn| {
+            let mut sql = String::from(
+                "SELECT service, count(*) FROM log_lines WHERE server_id = ? AND logged_at >= ?",
+            );
+            let mut values =
+                vec![SqlValue::Text(OTLP_SERVER_ID.to_string()), SqlValue::BigInt(since)];
+            push_match(&mut sql, &mut values, &matcher);
+            sql.push_str(" GROUP BY service ORDER BY service");
             let mut statement = conn.prepare(&sql)?;
             statement
                 .query_map(params_from_iter(values), |row| {

@@ -2,9 +2,12 @@ mod common;
 
 use std::io::Write;
 use std::net::SocketAddr;
+use std::path::Path;
 
 use axum::Router;
+use daroyan_api::AppState;
 use daroyan_api::app::{build_app, open_state};
+use daroyan_core::alerts::engine::AlertEngine;
 use daroyan_core::config::Config;
 use daroyan_core::db::queries::servers::NewServer;
 use flate2::Compression;
@@ -50,11 +53,19 @@ fn now_nanos() -> u64 {
 }
 
 fn sample_request(host_name: &str, records: Vec<LogRecord>) -> ExportLogsServiceRequest {
+    make_request("inboxjot-api", host_name, records)
+}
+
+fn make_request(
+    service: &str,
+    host_name: &str,
+    records: Vec<LogRecord>,
+) -> ExportLogsServiceRequest {
     ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource {
                 attributes: vec![
-                    text("service.name", "inboxjot-api"),
+                    text("service.name", service),
                     text("host.name", host_name),
                 ],
                 ..Default::default()
@@ -72,10 +83,7 @@ fn sample_request(host_name: &str, records: Vec<LogRecord>) -> ExportLogsService
     }
 }
 
-#[tokio::test]
-async fn ingests_otlp_logs_and_links_them_to_traces() {
-    let dir =
-        std::env::temp_dir().join(format!("daroyan-otlp-logs-{}", std::process::id()));
+async fn open_test_state(dir: &Path) -> AppState {
     let state = open_state(Config {
         host: "127.0.0.1".parse().unwrap(),
         port: 0,
@@ -117,6 +125,14 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
         })
         .await
         .unwrap();
+    state
+}
+
+#[tokio::test]
+async fn ingests_otlp_logs_and_links_them_to_traces() {
+    let dir =
+        std::env::temp_dir().join(format!("daroyan-otlp-logs-{}", std::process::id()));
+    let state = open_test_state(&dir).await;
     let analytics = state.analytics.clone();
     let http = common::sign_in(&state.database).await;
     let anonymous = Client::new();
@@ -444,6 +460,157 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
         .await
         .unwrap();
     assert_eq!(traces[0]["server_id"], Value::Null);
+
+    std::fs::remove_dir_all(dir).ok();
+}
+
+fn error_lines(count: usize, message: &str) -> Vec<LogRecord> {
+    (0..count)
+        .map(|_| LogRecord {
+            time_unix_nano: now_nanos(),
+            severity_number: 17,
+            body: Some(AnyValue {
+                value: Some(AnyValueKind::StringValue(message.to_string())),
+            }),
+            ..Default::default()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn alerts_once_per_service_on_otlp_lines_without_a_server() {
+    let dir = std::env::temp_dir()
+        .join(format!("daroyan-otlp-log-alerts-{}", std::process::id()));
+    let state = open_test_state(&dir).await;
+    let analytics = state.analytics.clone();
+    let mut engine = AlertEngine::new(
+        state.database.clone(),
+        state.agents.clone(),
+        state.analytics.clone(),
+        state.config.app_url.clone(),
+    );
+    let http = common::sign_in(&state.database).await;
+    let base = serve(build_app(state)).await;
+    let endpoint = format!("{base}/v1/otlp/v1/logs");
+
+    let created: Value = http
+        .post(format!("{base}/v1/ingest-tokens"))
+        .json(&json!({ "name": "inboxjot" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = created["token"].as_str().unwrap().to_string();
+
+    let rule: Value = http
+        .post(format!("{base}/v1/alert-rules"))
+        .json(&json!({
+            "name": "Errors in Logs",
+            "condition": { "kind": "logs", "level": "error", "count": 3, "within_secs": 300 },
+            "scope": { "kind": "all" },
+            "integration_ids": []
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(rule["id"].is_string(), "{rule}");
+
+    let batches = [
+        make_request("inboxjot-api", "laptop", error_lines(3, "SES SendEmail failed")),
+        make_request("inboxjot-worker", "laptop", error_lines(2, "job failed")),
+        make_request("inboxjot-smtp", "inboxjot", error_lines(3, "relay refused")),
+    ];
+    for batch in batches {
+        let response = Client::new()
+            .post(&endpoint)
+            .bearer_auth(&token)
+            .header("content-type", "application/x-protobuf")
+            .body(batch.encode_to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    analytics.flush().await.unwrap();
+
+    let now = chrono::Utc::now();
+    engine.check_alerts(now).await.unwrap();
+    let mut firing: Vec<Value> = http
+        .get(format!("{base}/v1/alerts?status=firing"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    firing.sort_by_key(|alert| alert["server_id"].as_str().unwrap().to_string());
+    assert_eq!(firing.len(), 2, "{firing:?}");
+    assert_eq!(firing[0]["server_id"], "otlp");
+    assert_eq!(firing[0]["target_name"], "OpenTelemetry");
+    assert_eq!(firing[0]["subject"], "inboxjot-api");
+    assert_eq!(firing[0]["value"], "3 error lines in 5m");
+    assert_eq!(firing[1]["server_id"], "srv_inboxjot");
+    assert_eq!(firing[1]["subject"], "Logs");
+
+    let backtest: Value = http
+        .post(format!("{base}/v1/alert-rules/backtest"))
+        .json(&json!({
+            "condition": { "kind": "logs", "level": "error", "count": 3, "within_secs": 300 },
+            "scope": { "kind": "all" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut hits: Vec<(&str, &str)> = backtest["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|hit| (hit["server_id"].as_str().unwrap(), hit["subject"].as_str().unwrap()))
+        .collect();
+    hits.sort_unstable();
+    assert_eq!(hits, [("otlp", "inboxjot-api"), ("srv_inboxjot", "Logs")]);
+
+    let without_target = http
+        .post(format!("{base}/v1/alert-mutes"))
+        .json(&json!({ "rule_id": rule["id"], "subject": "inboxjot-api" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(without_target.status(), StatusCode::BAD_REQUEST);
+
+    let muted: Value = http
+        .post(format!("{base}/v1/alert-mutes"))
+        .json(&json!({ "rule_id": rule["id"], "server_id": "otlp", "subject": "inboxjot-api" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(muted["server_id"], "otlp");
+    assert_eq!(muted["subject"], "inboxjot-api");
+
+    engine
+        .check_alerts(now + chrono::Duration::seconds(400))
+        .await
+        .unwrap();
+    let firing: Vec<Value> = http
+        .get(format!("{base}/v1/alerts?status=firing"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(firing.is_empty(), "{firing:?}");
 
     std::fs::remove_dir_all(dir).ok();
 }

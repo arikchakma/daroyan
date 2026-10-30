@@ -13,6 +13,7 @@ pub struct AlertMuteView {
     pub server_id: Option<String>,
     pub check_id: Option<String>,
     pub cron_id: Option<String>,
+    pub subject: Option<String>,
     #[serde(with = "daroyan_core::time::option")]
     pub ends_at: Option<DateTime<Utc>>,
     pub reason: Option<String>,
@@ -30,6 +31,7 @@ impl AlertMuteView {
             server_id: mute.server_id,
             check_id: mute.check_id,
             cron_id: mute.cron_id,
+            subject: mute.subject,
             ends_at: mute.ends_at,
             reason: mute.reason,
             creator_id: mute.creator_id,

@@ -141,7 +141,9 @@ impl AlertMessage<'_> {
         let lines = format!("{found} {} lines", describe_log_level(level));
 
         let mut fields = vec![self.target_field()];
-        if let Some(service) = service {
+        if self.target == Target::Telemetry {
+            fields.push(Field::new("Service", &self.alert.subject));
+        } else if let Some(service) = service {
             fields.push(Field::new("Source", service));
         }
         fields.push(self.started_field());
@@ -697,8 +699,13 @@ impl AlertMessage<'_> {
                     _ => "all",
                 };
 
+                let service = match self.target {
+                    Target::Telemetry => Some(&self.alert.subject),
+                    _ => service.as_ref(),
+                };
+
                 params.push(("level", view.to_string()));
-                params.extend(service.iter().map(|service| ("service", service.clone())));
+                params.extend(service.map(|service| ("service", service.clone())));
                 params.extend(text.iter().map(|text| ("q", text.clone())));
             }
             Condition::ProcessStopped { .. } => {
@@ -887,6 +894,8 @@ mod tests {
         alert: Alert,
         facts: AlertFacts,
         target: Target,
+        target_id: &'static str,
+        target_name: &'static str,
         labels: Vec<String>,
     }
 
@@ -899,6 +908,8 @@ mod tests {
                 alert,
                 facts,
                 target: Target::Server,
+                target_id: "server_1",
+                target_name: "Inboxjot Server",
                 labels: vec!["production".to_string()],
             }
         }
@@ -911,8 +922,8 @@ mod tests {
                 alert: &self.alert,
                 facts: &self.facts,
                 target: self.target,
-                target_id: "server_1",
-                target_name: "Inboxjot Server",
+                target_id: self.target_id,
+                target_name: self.target_name,
                 labels: &self.labels,
                 app_url: Some("https://daroyan.test/"),
                 now: at(9, 0),
@@ -975,6 +986,42 @@ mod tests {
             details.links[0].url,
             "https://daroyan.test/logs?server_id=server_1&range=1h&level=error&service=Inboxjot+API"
         );
+    }
+
+    #[test]
+    fn builds_an_error_spike_from_an_opentelemetry_service() {
+        let mut case = Case::new(
+            Condition::Logs {
+                level: "error".to_string(),
+                count: 10,
+                within_secs: 300,
+                service: None,
+                text: None,
+            },
+            make_alert("inboxjot-api", "11 error lines in 5m"),
+            AlertFacts::Logs(LogFacts { top: Vec::new(), run: None }),
+        );
+        case.target = Target::Telemetry;
+        case.target_id = "otlp";
+        case.target_name = "OpenTelemetry";
+        case.labels = Vec::new();
+        let details = case.details(Moment::Firing);
+
+        assert_eq!(
+            details.fields,
+            vec![
+                Field::new("Source", "OpenTelemetry"),
+                Field::new("Service", "inboxjot-api"),
+                Field::new("Started", "Today at 8:54 AM UTC"),
+                Field::new("Rule", "InboxJot error spike"),
+            ]
+        );
+        assert_eq!(
+            details.links[0].url,
+            "https://daroyan.test/logs?server_id=otlp&range=1h&level=error&service=inboxjot-api"
+        );
+        let mute = details.links.iter().find(|link| link.label == "Mute").unwrap();
+        assert!(mute.url.starts_with("https://daroyan.test/logs?server_id=otlp&mute="));
     }
 
     #[test]

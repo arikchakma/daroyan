@@ -16,6 +16,7 @@ import { createAlertMuteOptions } from '~/queries/alerts';
 import { formatMinutesLong } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
 import { formatClock } from '~/utils/format';
+import { OTLP_SERVER_ID } from '~/utils/logs';
 
 export type MuteLength = '1h' | '4h' | 'tomorrow' | 'resolves' | 'custom';
 
@@ -23,12 +24,36 @@ export type MuteTarget = {
   serverId?: string | null;
   checkId?: string | null;
   cronId?: string | null;
+  subject?: string | null;
   name: string;
 };
 
 const HOUR_MS = 3_600_000;
 const SHORT_DAY = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const MONTH_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+
+function getTargetIcon(target: MuteTarget): IconName {
+  if (target.checkId) {
+    return 'activity';
+  }
+  if (target.cronId) {
+    return 'clock';
+  }
+  return target.serverId === OTLP_SERVER_ID ? 'terminal' : 'server';
+}
+
+function getTargetDetail(target: MuteTarget) {
+  if (target.checkId) {
+    return 'The alert firing on this check now';
+  }
+  if (target.cronId) {
+    return 'The alert firing on this cron now';
+  }
+  if (target.serverId === OTLP_SERVER_ID) {
+    return 'The alert firing on this OpenTelemetry service now';
+  }
+  return 'The alert firing on this server now';
+}
 
 function getTomorrowMorning() {
   const morning = new Date();
@@ -111,6 +136,7 @@ export function MuteDialog(props: MuteDialogProps) {
         server_id: isWholeRule ? null : target?.serverId,
         check_id: isWholeRule ? null : target?.checkId,
         cron_id: isWholeRule ? null : target?.cronId,
+        subject: isWholeRule ? null : target?.subject,
         ends_at: endsAt,
         reason: reason.trim() || null,
         time_zone: getBrowserTimeZone(),
@@ -138,9 +164,9 @@ export function MuteDialog(props: MuteDialogProps) {
               {target && (
                 <ChoiceGroup label="Mute">
                   <Choice
-                    icon={target.checkId ? 'activity' : target.cronId ? 'clock' : 'server'}
+                    icon={getTargetIcon(target)}
                     title={`Only ${target.name}`}
-                    detail={`The alert firing on this ${target.checkId ? 'check' : target.cronId ? 'cron' : 'server'} now`}
+                    detail={getTargetDetail(target)}
                     isSelected={!isWholeRule}
                     onSelect={() => setIsWholeRule(false)}
                   />

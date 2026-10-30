@@ -13,7 +13,7 @@ import { useSortParams } from '~/hooks/use-sort-params';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { listAlertMutesOptions, listAlertsOptions } from '~/queries/alerts';
 import { listCronsOptions } from '~/queries/crons';
-import { describeMuteEnd, findMute } from '~/utils/alerts';
+import { describeMuteEnd, getAlertMute } from '~/utils/alerts';
 
 type StatusView = 'all' | 'ok' | 'late' | 'failed' | 'paused';
 
@@ -64,7 +64,7 @@ export default function CronsPage() {
   const term = search.trim().toLowerCase();
   const rows: CronRow[] = (crons ?? []).map((cron) => {
     const alerts = firing.filter((alert) => alert.cron_id === cron.id);
-    const mutesOfCron = alerts.map((alert) => findMute(mutes, alert.rule_id, cron.id));
+    const mutesOfCron = alerts.map((alert) => getAlertMute(mutes, alert));
     const isMuted = alerts.length > 0 && mutesOfCron.every(Boolean);
     return isMuted && mutesOfCron[0] ? { ...cron, mutedUntil: describeMuteEnd(mutesOfCron[0]) } : cron;
   });

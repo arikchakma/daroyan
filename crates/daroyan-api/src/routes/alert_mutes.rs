@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use daroyan_core::alerts::engine::{DeliveryLog, notify_integrations, parse_rule};
 use daroyan_core::alerts::notify::{Details, Notice, Tone};
 use daroyan_core::alerts::rules::{format_clock, format_duration, read_time_zone};
+use daroyan_core::analytics::log_lines::{OTLP_SERVER_ID, OTLP_SERVER_NAME};
 use daroyan_core::db::entities::users::Model as User;
 use daroyan_core::db::ids::{AlertMuteId, AlertRuleId, CronId};
 use daroyan_core::db::queries::alert_mutes::NewAlertMute;
@@ -38,6 +39,7 @@ struct CreateAlertMuteBody {
     server_id: Option<String>,
     check_id: Option<String>,
     cron_id: Option<String>,
+    subject: Option<String>,
     ends_at: Option<DateTime<Utc>>,
     reason: Option<String>,
     time_zone: Option<String>,
@@ -95,6 +97,13 @@ async fn create_alert_mute(
         return Err(invalid("Mute one server, check or cron, not several"));
     }
     let target_id = targets.into_iter().find_map(Clone::clone);
+    let subject = body
+        .subject
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    if subject.is_some() && target_id.is_none() {
+        return Err(invalid("Pick a server, check or cron to mute one subject on"));
+    }
     let firing = state.database.list_firing_alerts().await?;
     let covered: Vec<_> = firing
         .iter()
@@ -105,11 +114,13 @@ async fn create_alert_mute(
                 || alert.check_id == target_id
                 || alert.cron_id == target_id
         })
+        .filter(|alert| subject.as_ref().is_none_or(|subject| &alert.subject == subject))
         .collect();
     if body.ends_at.is_none() && covered.is_empty() {
         return Err(invalid("Nothing is firing, so pick how long to mute for"));
     }
     let target_name = match (&body.server_id, &body.check_id, &body.cron_id) {
+        (Some(id), _, _) if id == OTLP_SERVER_ID => OTLP_SERVER_NAME.to_string(),
         (Some(id), _, _) => state
             .database
             .list_servers()
@@ -134,6 +145,10 @@ async fn create_alert_mute(
             .ok_or_else(|| invalid("The cron does not exist"))?,
         _ => "every target".to_string(),
     };
+    let target_name = match &subject {
+        Some(subject) => format!("{target_name} · {subject}"),
+        None => target_name,
+    };
     let reason = body
         .reason
         .map(|text| text.trim().to_string())
@@ -156,6 +171,7 @@ async fn create_alert_mute(
             server_id: body.server_id,
             check_id: body.check_id,
             cron_id: body.cron_id,
+            subject,
             ends_at: body.ends_at,
             reason: reason.clone(),
             creator_id: current.user.id.clone(),

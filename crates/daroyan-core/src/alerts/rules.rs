@@ -55,6 +55,7 @@ pub enum Target {
     Server,
     Check,
     Cron,
+    Telemetry,
 }
 
 impl Target {
@@ -63,19 +64,27 @@ impl Target {
             Self::Server => "Server",
             Self::Check => "Check",
             Self::Cron => "Cron",
+            Self::Telemetry => "Source",
         }
     }
 
-    pub fn path(self) -> &'static str {
+    pub fn kind(self) -> &'static str {
         match self {
-            Self::Server => "servers",
-            Self::Check => "uptime",
-            Self::Cron => "crons",
+            Self::Server => "server",
+            Self::Check => "check",
+            Self::Cron => "cron",
+            Self::Telemetry => "telemetry",
         }
     }
 
     pub fn url(self, app_url: &str, id: &str) -> String {
-        format!("{}/{}/{id}", app_url.trim_end_matches('/'), self.path())
+        let app_url = app_url.trim_end_matches('/');
+        match self {
+            Self::Server => format!("{app_url}/servers/{id}"),
+            Self::Check => format!("{app_url}/uptime/{id}"),
+            Self::Cron => format!("{app_url}/crons/{id}"),
+            Self::Telemetry => format!("{app_url}/logs?server_id={id}"),
+        }
     }
 }
 

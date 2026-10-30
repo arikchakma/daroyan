@@ -7,7 +7,8 @@ use crate::alerts::message::Moment;
 use crate::alerts::rules::{Condition, read_log_severity};
 use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
-    LogMatch, LogRun, list_last_lines, list_top_messages, summarize_log_run,
+    LogMatch, LogRun, OTLP_SERVER_ID, list_last_lines, list_top_messages,
+    summarize_log_run,
 };
 use crate::analytics::server_events::{ProcessExit, find_last_exit};
 use crate::analytics::server_states::{DiskTrend, fit_disk_trend};
@@ -140,11 +141,17 @@ impl FactSources<'_> {
 
         let facts = match condition {
             Condition::Logs { level, within_secs, service, text, .. } => {
-                let Some(server) = self.server else { return Ok(AlertFacts::None) };
+                let Some(server_id) = alert.server_id.clone() else {
+                    return Ok(AlertFacts::None);
+                };
 
+                let service = match server_id.as_str() {
+                    OTLP_SERVER_ID => Some(alert.subject.clone()),
+                    _ => service.clone(),
+                };
                 let matcher = LogMatch {
                     min_severity: read_log_severity(level).unwrap_or(17),
-                    service: service.clone(),
+                    service,
                     text: text.clone(),
                 };
 
@@ -153,7 +160,7 @@ impl FactSources<'_> {
                 if moment.is_resolved() {
                     let run = summarize_log_run(
                         self.analytics,
-                        server.id.clone(),
+                        server_id,
                         matcher,
                         alert.started_at.timestamp_millis() - window_ms,
                         window_ms,
@@ -164,7 +171,7 @@ impl FactSources<'_> {
                 } else {
                     let top = list_top_messages(
                         self.analytics,
-                        server.id.clone(),
+                        server_id,
                         matcher,
                         now_ms - window_ms,
                         TOP_MESSAGES,

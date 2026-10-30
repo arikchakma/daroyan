@@ -2895,6 +2895,12 @@
               "string",
               "null"
             ]
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3513,6 +3519,12 @@
             "$ref": "#/components/schemas/AlertRuleId"
           },
           "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
             "type": [
               "string",
               "null"

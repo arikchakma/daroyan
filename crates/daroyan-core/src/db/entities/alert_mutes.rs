@@ -16,6 +16,8 @@ pub struct Model {
     pub check_id: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub cron_id: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub subject: Option<String>,
     pub ends_at: Option<DateTimeUtc>,
     #[sea_orm(column_type = "Text", nullable)]
     pub reason: Option<String>,

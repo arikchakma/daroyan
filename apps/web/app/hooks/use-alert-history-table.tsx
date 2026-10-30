@@ -7,7 +7,7 @@ import { Icon } from '~/components/icons/icon';
 import { Badge } from '~/components/ui/badge';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
-import { findMute, formatAlertDuration, getAlertTargetId, getAlertTargetPath } from '~/utils/alerts';
+import { formatAlertDuration, getAlertMute, getAlertTargetPath } from '~/utils/alerts';
 import { formatDate, formatClock } from '~/utils/format';
 
 const helper = createColumnHelper<DataTableFeatures, Schemas['Alert']>();
@@ -60,7 +60,7 @@ export function useAlertHistoryTable(alerts: Schemas['Alert'][], mutes: Schemas[
           enableSorting: false,
           meta: { width: 110, skeleton: 'badge' },
           cell: ({ getValue, row }) =>
-            getValue() === 'firing' && findMute(mutes, row.original.rule_id, getAlertTargetId(row.original)) ? (
+            getValue() === 'firing' && getAlertMute(mutes, row.original) ? (
               <Badge tone="neutral">
                 <Icon name="bell-off" className="size-3.5" />
                 Muted

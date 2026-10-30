@@ -61,11 +61,12 @@ pub fn find_readings(
     server: &ServerSnapshot,
 ) -> Option<Vec<Reading>> {
     if let Condition::Logs { level, within_secs, service, .. } = condition {
-        let found = server.log_count;
-        return Some(vec![make_reading(
-            service.as_deref().unwrap_or("Logs"),
-            found as f64,
-            format!("{found} {level} lines in {}", format_duration(*within_secs)),
+        let subject = service.as_deref().unwrap_or("Logs");
+        return Some(vec![make_log_reading(
+            subject,
+            server.log_count,
+            level,
+            *within_secs,
         )]);
     }
     let report = server.report?;
@@ -130,6 +131,19 @@ pub const NO_DATA: &str = "No data";
 
 pub fn make_reading(subject: &str, value: f64, label: String) -> Reading {
     Reading { subject: subject.to_string(), value, label }
+}
+
+pub fn make_log_reading(
+    subject: &str,
+    found: u64,
+    level: &str,
+    within_secs: u32,
+) -> Reading {
+    make_reading(
+        subject,
+        found as f64,
+        format!("{found} {level} lines in {}", format_duration(within_secs)),
+    )
 }
 
 pub fn format_percent(value: f64) -> String {
