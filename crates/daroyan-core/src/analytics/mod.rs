@@ -18,7 +18,7 @@ use daroyan_protocol::report::Report;
 use duckdb::Connection;
 use tokio::task::{JoinHandle, spawn_blocking};
 
-use crate::analytics::log_lines::{LogRow, append_logs, to_log_rows};
+use crate::analytics::log_lines::{LogRow, OTLP_SERVER_ID, append_logs, to_log_rows};
 use crate::analytics::server_events::{
     EventRow, append_events, to_event_row, to_event_rows,
 };
@@ -140,6 +140,22 @@ impl Analytics {
         pending.logs.extend(rows);
     }
 
+    pub fn has_log_room(&self) -> bool {
+        lock(&self.pending).logs.len() < MAX_PENDING_ROWS
+    }
+
+    pub fn buffer_log_rows(&self, rows: Vec<LogRow>) -> Result<()> {
+        let mut pending = lock(&self.pending);
+        if pending.logs.len() >= MAX_PENDING_ROWS {
+            return Err(Error::new(
+                ErrorName::RateLimitExceeded,
+                "Too many log records at once. Retry in a few seconds",
+            ));
+        }
+        pending.logs.extend(rows);
+        Ok(())
+    }
+
     pub fn buffer_spans(
         &self,
         spans: Vec<SpanRow>,
@@ -236,7 +252,15 @@ impl Analytics {
             conn.execute("DELETE FROM server_states WHERE server_id = ?", [&server_id])?;
             conn.execute("DELETE FROM disk_states WHERE server_id = ?", [&server_id])?;
             conn.execute("DELETE FROM server_events WHERE server_id = ?", [&server_id])?;
+            conn.execute(
+                "UPDATE log_lines SET server_id = ? WHERE server_id = ? AND stream = 'otlp'",
+                [OTLP_SERVER_ID, &server_id],
+            )?;
             conn.execute("DELETE FROM log_lines WHERE server_id = ?", [&server_id])?;
+            conn.execute(
+                "UPDATE spans SET server_id = NULL WHERE server_id = ?",
+                [&server_id],
+            )?;
             Ok(())
         })
         .await

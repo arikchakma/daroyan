@@ -55,6 +55,12 @@ struct UptimeCheckBody {
     interval_secs: i32,
     #[serde(default)]
     paused: bool,
+    #[serde(default = "default_failure_threshold")]
+    failure_threshold: i32,
+    #[serde(default = "default_success_threshold")]
+    success_threshold: i32,
+    #[serde(default = "default_retry_interval")]
+    retry_interval_secs: i32,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -76,6 +82,18 @@ fn default_timeout() -> i32 {
 
 fn default_interval() -> i32 {
     60
+}
+
+fn default_failure_threshold() -> i32 {
+    3
+}
+
+fn default_success_threshold() -> i32 {
+    2
+}
+
+fn default_retry_interval() -> i32 {
+    30
 }
 
 fn invalid(message: &str) -> Error {
@@ -148,6 +166,18 @@ fn read_fields(body: UptimeCheckBody) -> Result<UptimeCheckFields> {
             "The timeout must be 1 to 60 seconds and shorter than the interval",
         ));
     }
+    if !(1..=10).contains(&body.failure_threshold)
+        || !(1..=10).contains(&body.success_threshold)
+    {
+        return Err(invalid("The failures and successes in a row must be 1 to 10"));
+    }
+    if body.retry_interval_secs <= body.timeout_secs
+        || body.retry_interval_secs > body.interval_secs
+    {
+        return Err(invalid(
+            "The retry interval must be longer than the timeout and no longer than the interval",
+        ));
+    }
     let is_http = body.kind == "http";
     Ok(UptimeCheckFields {
         name,
@@ -159,6 +189,9 @@ fn read_fields(body: UptimeCheckBody) -> Result<UptimeCheckFields> {
         timeout_secs: body.timeout_secs,
         interval_secs: body.interval_secs,
         paused: body.paused,
+        failure_threshold: body.failure_threshold,
+        success_threshold: body.success_threshold,
+        retry_interval_secs: body.retry_interval_secs,
     })
 }
 

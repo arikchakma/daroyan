@@ -68,6 +68,8 @@ SQLite holds the rows people see: servers, install tokens, commands, each server
 
 `/openapi.json` serves the full spec, and `packages/client` is the typed client generated from it. Dashboard routes take the `daroyan_session` cookie that Google sign-in sets, or an MCP token (see MCP). Routes that change servers, checks, crons, alert rules, status pages, integrations, backups, tokens or members need an admin (see Sign In). The agent enrolls at `POST /v1/agent/enroll` with an install token and then keeps `GET /v1/agent/connect` open with its server token; the API pings it every 20 seconds.
 
+OpenTelemetry SDKs send traces to `POST /v1/otlp/v1/traces` and logs to `POST /v1/otlp/v1/logs` with an ingest token, over HTTP as protobuf or JSON, gzip allowed, up to 16 MB and 10,000 log records a request. Failures carry a `google.rpc.Status` body in the request's encoding, as OTLP/HTTP requires. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to `<app url>/v1/otlp` and the SDK picks both paths. When the `host.name` resource attribute matches an enrolled server's hostname, with or without its domain, the span or log line belongs to that server. A short name only matches when one server owns it, and IP addresses and `localhost` never match. Inside Docker the SDK reports the container ID, so set `OTEL_RESOURCE_ATTRIBUTES=host.name=<server hostname>` on the container. Log lines that match no server are stored with the server id `otlp` and show as "OpenTelemetry" on the Logs page.
+
 A server is `pending` until its first report and `down` while its socket is closed. It is `warning` when CPU, memory or a disk is at 90% or more, a watched process is not running, or a watched port is closed. Otherwise it is `healthy`.
 
 ## MCP
@@ -134,6 +136,7 @@ All limits live in memory in `daroyan-core/src/limits.rs`. That is safe because 
 | `POST /v1/agent/enroll`, 10/min | client IP | `429` |
 | `GET /v1/agent/connect`, 1 every 10 s, burst 10 | server id | `429`, and the agent backs off |
 | Agent messages, 2/s, burst 120 | the socket | The API closes the socket. The burst lets an agent flush 10 minutes of queued reports |
+| OTLP log data, `OTLP_LOG_BUDGET_KB` (1 MB) a minute | ingest token | `429` with `Retry-After` until the minute resets, so the SDK sends the batch again. Settings → Telemetry counts the throttled records. A full write buffer answers `503` with `Retry-After: 5` |
 
 ### Client IP Behind Cloudflare and Caddy
 

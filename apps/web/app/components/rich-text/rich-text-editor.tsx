@@ -1,4 +1,6 @@
+import { mergeAttributes } from '@tiptap/core';
 import type { Editor, JSONContent } from '@tiptap/core';
+import { Heading } from '@tiptap/extension-heading';
 import { Placeholder } from '@tiptap/extensions';
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import { StarterKit } from '@tiptap/starter-kit';
@@ -7,7 +9,8 @@ import type { ReactNode } from 'react';
 
 import { Icon } from '~/components/icons/icon';
 import type { IconName } from '~/components/icons/icon-paths';
-import { RICH_TEXT_CLASS_NAME } from '~/components/rich-text/rich-text';
+import { getRichTextClassName, getRichTextNodeClassNames } from '~/components/rich-text/rich-text';
+import type { RichTextNodeClassNames, RichTextSize } from '~/components/rich-text/rich-text';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Menu } from '~/components/ui/menu';
@@ -103,12 +106,25 @@ function applyTextStyle(editor: Editor, style: TextStyle) {
   }
 }
 
+function getHeadingExtension(classNames: RichTextNodeClassNames) {
+  return Heading.extend({
+    renderHTML({ node, HTMLAttributes }) {
+      if (node.attrs.level === 3) {
+        return ['h3', mergeAttributes(HTMLAttributes, { class: classNames.heading3 }), 0];
+      }
+
+      return ['h2', mergeAttributes(HTMLAttributes, { class: classNames.heading2 }), 0];
+    },
+  }).configure({ levels: [2, 3] });
+}
+
 type RichTextEditorProps = {
   content?: JSONContent | null;
   onChange: (content: JSONContent) => void;
   placeholder: string;
   label: string;
   hasHeadings?: boolean;
+  size?: RichTextSize;
   autoFocus?: boolean;
   className?: string;
   toolbarClassName?: string;
@@ -123,6 +139,7 @@ export function RichTextEditor(props: RichTextEditorProps) {
     placeholder,
     label,
     hasHeadings = false,
+    size = 'body',
     autoFocus = false,
     className,
     toolbarClassName,
@@ -130,20 +147,33 @@ export function RichTextEditor(props: RichTextEditorProps) {
     toolbarEnd,
   } = props;
 
+  const classNames = getRichTextNodeClassNames(size);
+
   const editor = useEditor({
     immediatelyRender: false,
     autofocus: autoFocus ? 'end' : false,
     extensions: [
       StarterKit.configure({
-        heading: hasHeadings ? { levels: [2, 3] } : false,
+        heading: false,
         underline: false,
+        paragraph: { HTMLAttributes: { class: classNames.paragraph } },
+        bulletList: { HTMLAttributes: { class: classNames.bulletList } },
+        orderedList: { HTMLAttributes: { class: classNames.orderedList } },
+        listItem: { HTMLAttributes: { class: classNames.listItem } },
+        blockquote: { HTMLAttributes: { class: classNames.blockquote } },
+        codeBlock: { HTMLAttributes: { class: classNames.codeBlock } },
+        horizontalRule: { HTMLAttributes: { class: classNames.horizontalRule } },
+        bold: { HTMLAttributes: { class: classNames.bold } },
+        code: { HTMLAttributes: { class: classNames.code } },
         link: {
           openOnClick: false,
           autolink: true,
           defaultProtocol: 'https',
           isAllowedUri: (url) => isSafeHref(url),
+          HTMLAttributes: { class: classNames.link },
         },
       }),
+      ...(hasHeadings ? [getHeadingExtension(classNames)] : []),
       Placeholder.configure({ placeholder }),
     ],
     content: content ?? undefined,
@@ -171,7 +201,7 @@ export function RichTextEditor(props: RichTextEditorProps) {
       <EditorContent
         editor={editor}
         className={cn(
-          RICH_TEXT_CLASS_NAME,
+          getRichTextClassName(size),
           'min-h-16 cursor-text px-3 py-3 text-text-primary [&_.ProseMirror]:min-h-[inherit] [&_.ProseMirror]:outline-none',
           '[&_.is-editor-empty:first-child]:before:pointer-events-none [&_.is-editor-empty:first-child]:before:float-left [&_.is-editor-empty:first-child]:before:h-0 [&_.is-editor-empty:first-child]:before:text-text-tertiary [&_.is-editor-empty:first-child]:before:content-[attr(data-placeholder)]',
           contentClassName

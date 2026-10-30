@@ -117,6 +117,7 @@ async fn delete_server(
     }
     state.database.remove_target_from_rules(server_id.as_str()).await?;
     state.agents.disconnect(server_id.as_str());
+    state.hosts.forget();
     state.analytics.delete_server_rows(server_id.to_string()).await?;
     Ok(StatusCode::NO_CONTENT)
 }

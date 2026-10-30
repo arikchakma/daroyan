@@ -1,8 +1,10 @@
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { SpanRail } from '~/components/traces/span-rail';
+import { TraceLogs } from '~/components/traces/trace-logs';
 import { WaterfallRow } from '~/components/traces/waterfall-row';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -11,6 +13,7 @@ import { PageBar } from '~/components/ui/page-bar';
 import { useCopyToClipboard } from '~/hooks/use-copy-to-clipboard';
 import { ServiceDot } from '~/hooks/use-traces-table';
 import { toast } from '~/lib/toast';
+import { listServersOptions } from '~/queries/servers';
 import { TICKS, formatMicros, formatMicrosClock, getServiceColor, getTraceStatus, stringify } from '~/utils/traces';
 import type { SpanNode } from '~/utils/traces';
 
@@ -35,6 +38,8 @@ export function TraceDetail(props: TraceDetailProps) {
   const errorCount = nodes.filter((node) => node.status === 'error').length;
   const status = getTraceStatus({ http_status: root.http_status, error_count: errorCount, duration_us: root.duration_us });
   const host = readText(root.resource, 'host.name');
+  const { data: servers } = useQuery(listServersOptions());
+  const server = servers?.find((item) => item.id === root.server_id);
 
   return (
     <div className="flex min-h-full flex-col bg-surface-page">
@@ -80,7 +85,7 @@ export function TraceDetail(props: TraceDetailProps) {
               value={errorCount.toString()}
               valueClassName={errorCount > 0 ? 'text-tone-critical-fg' : undefined}
             />
-            <Stat label="Server" value={host ?? '—'} />
+            <Stat label="Server" value={server?.name ?? host ?? '—'} />
             <Stat label="Started" value={formatMicrosClock(root.started_at)} />
           </StatStrip>
 
@@ -140,6 +145,8 @@ export function TraceDetail(props: TraceDetailProps) {
               </div>
             </div>
           </section>
+
+          <TraceLogs traceId={traceId} startedAt={root.started_at / 1_000} />
         </div>
 
         <SpanRail span={selected} />

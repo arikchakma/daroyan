@@ -12,6 +12,7 @@ export const cn = createCn({
         'title-section',
         'title-card',
         'body',
+        'prose',
         'small',
         'caption',
         'stat',

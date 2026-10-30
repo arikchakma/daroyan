@@ -14,6 +14,7 @@ import { toast } from '~/lib/toast';
 import { logContextOptions } from '~/queries/logs';
 import { cn } from '~/utils/classname';
 import { formatLogClock, formatLogStamp } from '~/utils/format';
+import { getLogOrigin, OTLP_SERVER_ID } from '~/utils/logs';
 
 type LogSheetProps = {
   line?: LogRow;
@@ -79,9 +80,11 @@ export function LogSheet(props: LogSheetProps) {
                     >
                       Copy JSON
                     </ActionPill>
-                    <ActionPill icon="bell" tone="light" onClick={() => navigate(buildAlertLink(line))}>
-                      Alert on This
-                    </ActionPill>
+                    {line.server_id !== OTLP_SERVER_ID && (
+                      <ActionPill icon="bell" tone="light" onClick={() => navigate(buildAlertLink(line))}>
+                        Alert on This
+                      </ActionPill>
+                    )}
                   </>
                 )}
               </div>
@@ -125,15 +128,14 @@ function LogBody(props: LogBodyProps) {
   const request = describeRequest(line);
   const duration = formatDuration(values['duration_ms']);
   const attributes = Object.entries(values).filter(([key]) => !HTTP_KEYS.includes(key) && key !== 'stack.lines');
+  const resource = Object.entries((line.resource ?? {}) as Record<string, unknown>);
 
   return (
     <div className="flex pb-16 max-lg:flex-col">
       <div className="flex min-w-0 flex-1 flex-col gap-6 px-10 pt-6 max-lg:px-4">
         <div className="flex flex-wrap items-center gap-3">
           <LevelBadge level={line.level} />
-          <p className="text-body text-text-secondary">
-            {line.service} wrote this to {line.stream} on {line.serverName}.
-          </p>
+          <p className="text-body text-text-secondary">{getLogOrigin(line)}</p>
         </div>
 
         <section className="flex flex-col gap-2.5">
@@ -222,19 +224,31 @@ function LogBody(props: LogBodyProps) {
             )}
           </dl>
         </div>
-        {attributes.length > 0 && (
-          <div className="flex flex-col gap-2">
-            <h2 className="text-body font-medium">Attributes</h2>
-            <dl className="flex flex-col gap-2 text-body">
-              {attributes.map(([key, value]) => (
-                <RailRow key={key} label={key} mono>
-                  {typeof value === 'string' ? value : JSON.stringify(value)}
-                </RailRow>
-              ))}
-            </dl>
-          </div>
-        )}
+        {attributes.length > 0 && <AttributeList title="Attributes" entries={attributes} />}
+        {resource.length > 0 && <AttributeList title="Resource" entries={resource} />}
       </aside>
+    </div>
+  );
+}
+
+type AttributeListProps = {
+  title: string;
+  entries: [string, unknown][];
+};
+
+function AttributeList(props: AttributeListProps) {
+  const { title, entries } = props;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <h2 className="text-body font-medium">{title}</h2>
+      <dl className="flex flex-col gap-2 text-body">
+        {entries.map(([key, value]) => (
+          <RailRow key={key} label={key} mono>
+            {typeof value === 'string' ? value : JSON.stringify(value)}
+          </RailRow>
+        ))}
+      </dl>
     </div>
   );
 }

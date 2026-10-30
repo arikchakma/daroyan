@@ -17,6 +17,7 @@ const SOCKET_PER_SECOND: NonZeroU32 = NonZeroU32::new(20).unwrap();
 const SOCKET_BURST: NonZeroU32 = NonZeroU32::new(200).unwrap();
 const AUTH_FAILURE_LIMIT: u32 = 10;
 const AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
+const LOG_BUDGET_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct Limits {
@@ -110,6 +111,43 @@ pub fn new_socket_limiter() -> DefaultDirectRateLimiter {
     RateLimiter::direct(Quota::per_second(SOCKET_PER_SECOND).allow_burst(SOCKET_BURST))
 }
 
+#[derive(Clone)]
+pub struct LogBudgets {
+    limit: u64,
+    windows: Arc<Mutex<HashMap<String, BudgetWindow>>>,
+}
+
+struct BudgetWindow {
+    started_at: Instant,
+    used: u64,
+}
+
+impl LogBudgets {
+    pub fn new(limit: u64) -> Self {
+        Self { limit, windows: Arc::default() }
+    }
+
+    pub fn spend(&self, key: &str, size: u64) -> Result<(), Duration> {
+        let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
+        let window = windows
+            .entry(key.to_string())
+            .or_insert(BudgetWindow { started_at: Instant::now(), used: 0 });
+        let elapsed = window.started_at.elapsed();
+        if elapsed >= LOG_BUDGET_WINDOW {
+            *window = BudgetWindow { started_at: Instant::now(), used: 0 };
+        }
+
+        // A batch bigger than the whole budget still goes through at the start
+        // of a window, or its client would retry it forever.
+        if window.used > 0 && window.used + size > self.limit {
+            return Err(LOG_BUDGET_WINDOW.saturating_sub(window.started_at.elapsed()));
+        }
+
+        window.used += size;
+        Ok(())
+    }
+}
+
 fn too_many_requests() -> Error {
     Error::new(ErrorName::RateLimitExceeded, "Too many requests. Please try again later.")
 }
@@ -150,6 +188,21 @@ mod tests {
             allowed += 1;
         }
         assert_eq!(allowed, SOCKET_BURST.get());
+    }
+
+    #[test]
+    fn refuses_a_batch_over_the_budget_until_the_window_resets() {
+        let budgets = LogBudgets::new(10);
+        assert!(budgets.spend("ing_1", 8).is_ok());
+
+        let retry_after = budgets.spend("ing_1", 4).unwrap_err();
+        assert!(
+            retry_after <= LOG_BUDGET_WINDOW && retry_after > Duration::from_secs(55)
+        );
+        assert!(budgets.spend("ing_1", 2).is_ok());
+
+        assert!(budgets.spend("ing_2", 50).is_ok());
+        assert!(budgets.spend("ing_2", 1).is_err());
     }
 
     #[test]

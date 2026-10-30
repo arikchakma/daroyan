@@ -13,6 +13,7 @@ pub struct Config {
     pub duckdb_path: PathBuf,
     pub retention_days: u32,
     pub log_retention_days: u32,
+    pub otlp_log_budget: u64,
     pub backup_dir: Option<PathBuf>,
     pub trusted_proxies: Vec<IpNet>,
     pub client_ip_header: String,
@@ -40,6 +41,7 @@ impl Config {
                 .map_or_else(|_| PathBuf::from("data/daroyan.duckdb"), PathBuf::from),
             retention_days: read_number("RETENTION_DAYS", 30)?,
             log_retention_days: read_number("LOG_RETENTION_DAYS", 7)?,
+            otlp_log_budget: read_number::<u64>("OTLP_LOG_BUDGET_KB", 1024)? * 1024,
             backup_dir: read_optional("DUCKDB_BACKUP_DIR").map(PathBuf::from),
             trusted_proxies: parse_trusted_proxies(
                 &env::var("TRUSTED_PROXIES")

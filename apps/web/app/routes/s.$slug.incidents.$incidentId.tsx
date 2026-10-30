@@ -133,7 +133,7 @@ export default function PublicIncidentRoute() {
                   )}
                 </div>
                 <div className="flex flex-col overflow-hidden rounded-2xl border border-border-ring bg-surface-default shadow-card [&>*+*]:border-t [&>*+*]:border-border-row">
-                  <RichText content={toDocument(incident.postmortem)} className="px-5 py-4" />
+                  <RichText content={toDocument(incident.postmortem)} size="prose" className="px-5 py-4" />
                   {incident.follow_ups.length > 0 && (
                     <div className="flex flex-col gap-1.5 px-5 py-4">
                       <h3 className="text-body font-medium">Follow-Ups</h3>

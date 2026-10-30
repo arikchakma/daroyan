@@ -78,7 +78,9 @@ export default function TraceSetupPage() {
   const env = `OTEL_SERVICE_NAME=api
 OTEL_EXPORTER_OTLP_ENDPOINT=${window.location.origin}/v1/otlp
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ${token ?? '<token>'}`;
+OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ${token ?? '<token>'}
+# In Docker, name the server so logs and traces land on it
+OTEL_RESOURCE_ATTRIBUTES=host.name=<server hostname>`;
 
   return (
     <div className="flex min-h-full flex-col bg-surface-page">
@@ -99,7 +101,8 @@ OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ${token ?? '<token>'}`;
           <div className="flex flex-col gap-1">
             <h1 className="text-title-page font-semibold text-text-primary">Set Up Traces</h1>
             <p className="text-body text-text-secondary">
-              Send traces from your services with OpenTelemetry. Errors inside them show up in Issues.
+              Send traces and logs from your services with OpenTelemetry. Errors inside them show up in Issues, and
+              each log line links to its trace.
             </p>
           </div>
 
@@ -123,7 +126,7 @@ OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ${token ?? '<token>'}`;
 
           <Step
             title="2. Point the Exporter at Daroyan"
-            description="Set these on the service. The token is shown once, so copy it before you leave."
+            description="Set these on the service. The same endpoint takes traces and logs. The token is shown once, so copy it before you leave."
           >
             <CodeBlock label="Exporter variables" code={env} language="shellscript" />
             {!token &&
@@ -156,6 +159,7 @@ OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ${token ?? '<token>'}`;
             <RailRow label="Traces">Each request, span by span</RailRow>
             <RailRow label="Issues">Errors grouped by cause</RailRow>
             <RailRow label="Slow endpoints">p95 per route</RailRow>
+            <RailRow label="Logs">Linked to their trace</RailRow>
           </RailSection>
           <RailSection title="Works With">
             <RailRow label="SDK">Any OpenTelemetry SDK</RailRow>

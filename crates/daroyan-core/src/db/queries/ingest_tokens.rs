@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::{Expr, ExprTrait};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter,
     QueryOrder,
@@ -23,6 +24,7 @@ impl Database {
             hint: Set(hint),
             created_at: Set(Utc::now()),
             last_used_at: Set(None),
+            throttled_log_records: Set(0),
         }
         .insert(&self.conn)
         .await
@@ -55,6 +57,23 @@ impl Database {
         .update(&self.conn)
         .await
         .map(|_| ())
+    }
+
+    pub async fn add_throttled_log_records(
+        &self,
+        id: &str,
+        count: u64,
+    ) -> Result<(), DbErr> {
+        Entity::update_many()
+            .col_expr(
+                Column::ThrottledLogRecords,
+                Expr::col(Column::ThrottledLogRecords)
+                    .add(i64::try_from(count).unwrap_or(i64::MAX)),
+            )
+            .filter(Column::Id.eq(id))
+            .exec(&self.conn)
+            .await
+            .map(|_| ())
     }
 
     pub async fn delete_ingest_token(&self, id: &IngestTokenId) -> Result<bool, DbErr> {

@@ -998,7 +998,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/status/{slug}/feed.rss": {
+    "/v1/status/{slug}/feed.xml": {
         parameters: {
             query?: never;
             header?: never;
@@ -1364,6 +1364,15 @@ export interface components {
         } | {
             /** @enum {string} */
             kind: "cron_failed";
+        };
+        Container: {
+            config_hash?: string | null;
+            id: string;
+            image: string;
+            image_id?: string | null;
+            name: string;
+            project?: string | null;
+            service?: string | null;
         };
         CreateAlertMuteBody: {
             check_id?: string | null;
@@ -1758,6 +1767,8 @@ export interface components {
             /** Format: date-time */
             last_used_at?: string | null;
             name: string;
+            /** Format: int64 */
+            throttled_log_records: number;
         };
         IngestTokenBody: {
             name: string;
@@ -1852,6 +1863,7 @@ export interface components {
             ports: components["schemas"]["PortState"][];
             processes: components["schemas"]["ProcessState"][];
             state: components["schemas"]["State"];
+            top?: components["schemas"]["TopProcess"][];
         };
         LogLine: {
             /** Format: int64 */
@@ -1860,6 +1872,7 @@ export interface components {
             level: string;
             message: string;
             raw?: string | null;
+            resource?: Record<string, never> | null;
             server_id: string;
             service: string;
             /** Format: int32 */
@@ -1970,6 +1983,7 @@ export interface components {
             } | null;
         };
         ProcessState: {
+            container?: components["schemas"]["Container"] | null;
             controllable?: boolean;
             /** Format: int32 */
             count: number;
@@ -2303,6 +2317,15 @@ export interface components {
         TestIntegrationBody: {
             config: components["schemas"]["IntegrationConfig"];
         };
+        TopProcess: {
+            /** Format: int32 */
+            count: number;
+            /** Format: float */
+            cpu: number;
+            /** Format: int64 */
+            mem_used: number;
+            name: string;
+        };
         TraceService: {
             /** Format: int64 */
             error_count: number;
@@ -2327,6 +2350,7 @@ export interface components {
             name: string;
             parent_span_id?: string | null;
             resource: Record<string, never>;
+            server_id?: string | null;
             service: string;
             span_id: string;
             /** Format: int64 */
@@ -2349,6 +2373,7 @@ export interface components {
             /** Format: int32 */
             http_status?: number | null;
             name: string;
+            server_id?: string | null;
             service: string;
             services: string[];
             /** Format: int64 */
@@ -2391,6 +2416,8 @@ export interface components {
             days: components["schemas"]["UptimeDay"][];
             /** Format: int32 */
             expected_status?: number | null;
+            /** Format: int32 */
+            failure_threshold: number;
             id: string;
             /** Format: int32 */
             interval_secs: number;
@@ -2403,8 +2430,12 @@ export interface components {
             method: string;
             name: string;
             paused: boolean;
+            /** Format: int32 */
+            retry_interval_secs: number;
             /** @example up */
             status: string;
+            /** Format: int32 */
+            success_threshold: number;
             target: string;
             /** Format: int32 */
             timeout_secs: number;
@@ -2416,12 +2447,18 @@ export interface components {
             /** Format: int32 */
             expected_status?: number | null;
             /** Format: int32 */
+            failure_threshold?: number;
+            /** Format: int32 */
             interval_secs?: number;
             /** @example http */
             kind: string;
             method?: string;
             name: string;
             paused?: boolean;
+            /** Format: int32 */
+            retry_interval_secs?: number;
+            /** Format: int32 */
+            success_threshold?: number;
             target: string;
             /** Format: int32 */
             timeout_secs?: number;
@@ -4405,7 +4442,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/atom+xml": string;
+                    "application/xml": string;
                 };
             };
         };
@@ -4426,7 +4463,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/rss+xml": string;
+                    "application/xml": string;
                 };
             };
         };
@@ -4461,6 +4498,8 @@ export interface operations {
                 /** @description Only traces with a span before this time in ms */
                 until?: number;
                 service?: string;
+                /** @description Only traces whose `host.name` matches this server */
+                server_id?: string;
                 /** @description `error` keeps traces with an error span */
                 status?: string;
                 min_duration_ms?: number;

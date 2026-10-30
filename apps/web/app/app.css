@@ -139,6 +139,9 @@
   --text-body: 13px;
   --text-body--line-height: 20px;
   --text-body--letter-spacing: -0.01em;
+  --text-prose: 15px;
+  --text-prose--line-height: 24px;
+  --text-prose--letter-spacing: -0.01em;
   --text-caption: 12px;
   --text-caption--line-height: 16px;
   --text-stat: 20px;

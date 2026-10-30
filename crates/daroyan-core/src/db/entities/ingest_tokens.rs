@@ -16,6 +16,7 @@ pub struct Model {
     pub hint: String,
     pub created_at: DateTimeUtc,
     pub last_used_at: Option<DateTimeUtc>,
+    pub throttled_log_records: i64,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

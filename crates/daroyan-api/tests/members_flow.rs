@@ -23,6 +23,7 @@ async fn admins_invite_and_remove_members() {
         duckdb_path: dir.join("daroyan.duckdb"),
         retention_days: 30,
         log_retention_days: 7,
+        otlp_log_budget: 1024 * 1024,
         backup_dir: None,
         trusted_proxies: Vec::new(),
         client_ip_header: "cf-connecting-ip".to_string(),

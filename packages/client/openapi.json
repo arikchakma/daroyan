@@ -2256,7 +2256,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/atom+xml": {
+              "application/xml": {
                 "schema": {
                   "type": "string"
                 }
@@ -2266,7 +2266,7 @@
         }
       }
     },
-    "/v1/status/{slug}/feed.rss": {
+    "/v1/status/{slug}/feed.xml": {
       "get": {
         "operationId": "get_rss_feed",
         "parameters": [
@@ -2282,7 +2282,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/rss+xml": {
+              "application/xml": {
                 "schema": {
                   "type": "string"
                 }
@@ -2353,6 +2353,15 @@
           {
             "name": "service",
             "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "server_id",
+            "in": "query",
+            "description": "Only traces whose `host.name` matches this server",
             "required": false,
             "schema": {
               "type": "string"
@@ -3425,6 +3434,49 @@
             }
           }
         ]
+      },
+      "Container": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "image"
+        ],
+        "properties": {
+          "config_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "image_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "CreateAlertMuteBody": {
         "type": "object",
@@ -4881,7 +4933,8 @@
           "id",
           "name",
           "hint",
-          "created_at"
+          "created_at",
+          "throttled_log_records"
         ],
         "properties": {
           "created_at": {
@@ -4903,6 +4956,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "throttled_log_records": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -5258,6 +5315,12 @@
           },
           "state": {
             "$ref": "#/components/schemas/State"
+          },
+          "top": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TopProcess"
+            }
           }
         }
       },
@@ -5292,6 +5355,12 @@
           "raw": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "resource": {
+            "type": [
+              "object",
               "null"
             ]
           },
@@ -5702,6 +5771,16 @@
           "write_speed"
         ],
         "properties": {
+          "container": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Container"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "controllable": {
             "type": "boolean"
           },
@@ -6892,6 +6971,34 @@
           }
         }
       },
+      "TopProcess": {
+        "type": "object",
+        "required": [
+          "name",
+          "count",
+          "cpu",
+          "mem_used"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "cpu": {
+            "type": "number",
+            "format": "float"
+          },
+          "mem_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "TraceService": {
         "type": "object",
         "required": [
@@ -6987,6 +7094,12 @@
           "resource": {
             "type": "object"
           },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "service": {
             "type": "string"
           },
@@ -7068,6 +7181,12 @@
           },
           "name": {
             "type": "string"
+          },
+          "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "service": {
             "type": "string"
@@ -7237,6 +7356,9 @@
           "timeout_secs",
           "interval_secs",
           "paused",
+          "failure_threshold",
+          "success_threshold",
+          "retry_interval_secs",
           "status",
           "days",
           "created_at"
@@ -7263,6 +7385,10 @@
               "integer",
               "null"
             ],
+            "format": "int32"
+          },
+          "failure_threshold": {
+            "type": "integer",
             "format": "int32"
           },
           "id": {
@@ -7300,9 +7426,17 @@
           "paused": {
             "type": "boolean"
           },
+          "retry_interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
           "status": {
             "type": "string",
             "example": "up"
+          },
+          "success_threshold": {
+            "type": "integer",
+            "format": "int32"
           },
           "target": {
             "type": "string"
@@ -7341,6 +7475,10 @@
             ],
             "format": "int32"
           },
+          "failure_threshold": {
+            "type": "integer",
+            "format": "int32"
+          },
           "interval_secs": {
             "type": "integer",
             "format": "int32"
@@ -7357,6 +7495,14 @@
           },
           "paused": {
             "type": "boolean"
+          },
+          "retry_interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "success_threshold": {
+            "type": "integer",
+            "format": "int32"
           },
           "target": {
             "type": "string"

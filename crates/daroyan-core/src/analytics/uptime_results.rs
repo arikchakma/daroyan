@@ -108,24 +108,6 @@ pub async fn append_result(
         .await
 }
 
-pub async fn count_recent(
-    analytics: &Analytics,
-    check_id: String,
-    status: &'static str,
-    last: u32,
-) -> Result<u32> {
-    analytics
-        .read(move |conn| {
-            conn.query_row(
-                "SELECT count(*) FILTER (WHERE status = ?) FROM \
-                 (SELECT status FROM uptime_results WHERE check_id = ? ORDER BY checked_at DESC LIMIT ?)",
-                params![status, check_id, last],
-                |row| row.get(0),
-            )
-        })
-        .await
-}
-
 pub struct WindowSource {
     pub table: &'static str,
     pub id_column: &'static str,

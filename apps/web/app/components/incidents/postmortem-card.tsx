@@ -170,6 +170,7 @@ export function PostmortemCard(props: PostmortemCardProps) {
         {isEditing ? (
           <RichTextEditor
             hasHeadings
+            size="prose"
             label="Postmortem"
             placeholder="Write what happened, the impact and the root cause."
             content={saved ?? TEMPLATE}
@@ -178,7 +179,7 @@ export function PostmortemCard(props: PostmortemCardProps) {
             toolbarClassName="border-b-0 px-3"
           />
         ) : (
-          <RichText content={saved} className="px-5 py-4" />
+          <RichText content={saved} size="prose" className="px-5 py-4" />
         )}
 
         <FollowUps followUps={incident.follow_ups} users={users} onChange={setFollowUps} canEdit={isEditing} />

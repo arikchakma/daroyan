@@ -19,6 +19,9 @@ pub struct UptimeCheckFields {
     pub timeout_secs: i32,
     pub interval_secs: i32,
     pub paused: bool,
+    pub failure_threshold: i32,
+    pub success_threshold: i32,
+    pub retry_interval_secs: i32,
 }
 
 impl Database {
@@ -92,6 +95,9 @@ fn to_active_model(
         timeout_secs: Set(fields.timeout_secs),
         interval_secs: Set(fields.interval_secs),
         paused: Set(fields.paused),
+        failure_threshold: Set(fields.failure_threshold),
+        success_threshold: Set(fields.success_threshold),
+        retry_interval_secs: Set(fields.retry_interval_secs),
         created_at,
         updated_at: Set(Utc::now()),
     }

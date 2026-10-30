@@ -8,6 +8,7 @@ const REFRESH_MS = 30_000;
 export type TraceFilters = {
   rangeMs: number;
   service?: string;
+  server_id?: string;
   status?: string;
   min_duration_ms?: number;
   q?: string;

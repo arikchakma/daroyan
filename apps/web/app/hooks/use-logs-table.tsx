@@ -51,12 +51,21 @@ export function describeRequest(line: Schemas['LogLine']) {
   return method && path ? `${method} ${path}${status ? ` ${status}` : ''}` : '';
 }
 
+// OpenTelemetry SDKs add where the line was logged. It is useful in the
+// detail view but would crowd out the app's own fields in the row.
+const TRAILING_PREFIXES = ['code.', 'otel.'];
+
+function isTrailing(key: string) {
+  return TRAILING_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
 export function formatAttributes(attributes: Schemas['LogLine']['attributes']) {
   if (!attributes) {
     return '';
   }
   return Object.entries(attributes)
     .filter(([key]) => !HIDDEN_KEYS.has(key))
+    .sort(([left], [right]) => Number(isTrailing(left)) - Number(isTrailing(right)))
     .map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`)
     .join(' ');
 }

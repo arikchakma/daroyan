@@ -12,10 +12,11 @@ use utoipa::ToSchema;
 
 use crate::analytics::{Analytics, clamp_future_us};
 use crate::error::Result;
+use crate::servers::hosts::HostIndex;
 
-const MAX_TEXT_CHARS: usize = 4096;
+pub(crate) const MAX_TEXT_CHARS: usize = 4096;
 const MAX_STACKTRACE_CHARS: usize = 16_384;
-const UNKNOWN_SERVICE: &str = "unknown_service";
+pub(crate) const UNKNOWN_SERVICE: &str = "unknown_service";
 const EXCEPTION_EVENT: &str = "exception";
 
 pub struct SpanRow {
@@ -36,6 +37,7 @@ pub struct SpanRow {
     pub resource: Option<Arc<str>>,
     pub events: Option<String>,
     pub received_at: i64,
+    pub server_id: Option<Arc<str>>,
 }
 
 pub struct ExceptionRow {
@@ -49,14 +51,14 @@ pub struct ExceptionRow {
     pub occurred_at: i64,
 }
 
-fn truncate(text: &str, max: usize) -> String {
+pub(crate) fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
     }
     text.chars().take(max).collect()
 }
 
-fn to_json_value(value: &AnyValue) -> Value {
+pub(crate) fn to_json_value(value: &AnyValue) -> Value {
     match &value.value {
         Some(AnyValueKind::StringValue(text)) => json!(truncate(text, MAX_TEXT_CHARS)),
         Some(AnyValueKind::BoolValue(flag)) => json!(flag),
@@ -71,7 +73,7 @@ fn to_json_value(value: &AnyValue) -> Value {
     }
 }
 
-fn to_json_map(attributes: &[KeyValue]) -> Value {
+pub(crate) fn to_json_map(attributes: &[KeyValue]) -> Value {
     Value::Object(
         attributes
             .iter()
@@ -93,7 +95,7 @@ fn find<'a>(attributes: &'a [KeyValue], keys: &[&str]) -> Option<&'a AnyValue> {
     })
 }
 
-fn find_text(attributes: &[KeyValue], keys: &[&str]) -> Option<String> {
+pub(crate) fn find_text(attributes: &[KeyValue], keys: &[&str]) -> Option<String> {
     match &find(attributes, keys)?.value {
         Some(AnyValueKind::StringValue(text)) if !text.is_empty() => {
             Some(truncate(text, MAX_TEXT_CHARS))
@@ -118,7 +120,7 @@ fn double_to_i64(number: f64) -> Option<i64> {
     in_range.then_some(number as i64)
 }
 
-fn to_hex(bytes: &[u8]) -> Option<String> {
+pub(crate) fn to_hex(bytes: &[u8]) -> Option<String> {
     (!bytes.is_empty() && bytes.iter().any(|byte| *byte != 0)).then(|| hex::encode(bytes))
 }
 
@@ -194,6 +196,7 @@ fn to_exception(
 
 pub fn to_span_rows(
     request: &ExportTraceServiceRequest,
+    hosts: &HostIndex,
     received_at: i64,
 ) -> (Vec<SpanRow>, Vec<ExceptionRow>) {
     let mut spans = Vec::new();
@@ -211,6 +214,8 @@ pub fn to_span_rows(
             serde_json::to_string(&to_json_map(resource_attributes))
                 .ok()
                 .map(Into::into);
+        let server_id: Option<Arc<str>> = find_text(resource_attributes, &["host.name"])
+            .and_then(|host_name| hosts.find(&host_name).map(Into::into));
         for scope_spans in &resource_spans.scope_spans {
             for span in &scope_spans.spans {
                 let Some(trace_id) = to_hex(&span.trace_id) else { continue };
@@ -267,6 +272,7 @@ pub fn to_span_rows(
                         .then(|| serde_json::to_string(&events).ok())
                         .flatten(),
                     received_at,
+                    server_id: server_id.clone(),
                     trace_id: trace_id.clone(),
                     span_id,
                 });
@@ -311,6 +317,7 @@ pub fn append_spans(
             row.resource.as_deref(),
             row.events,
             row.received_at,
+            row.server_id.as_deref(),
         ])?;
     }
     appender.flush()?;
@@ -335,6 +342,7 @@ pub struct TraceQuery {
     pub since: i64,
     pub until: Option<i64>,
     pub service: Option<String>,
+    pub server_id: Option<String>,
     pub is_error: bool,
     pub min_duration_us: Option<i64>,
     pub search: Option<String>,
@@ -357,6 +365,7 @@ pub struct TraceSummary {
     pub http_status: Option<i32>,
     pub services: Vec<String>,
     pub host: Option<String>,
+    pub server_id: Option<String>,
 }
 
 pub async fn list_traces(
@@ -377,7 +386,8 @@ pub async fn list_traces(
                         arg_min(http_route, (parent_span_id IS NOT NULL, started_at)),
                         arg_min(http_status, (parent_span_id IS NOT NULL, started_at)),
                         string_agg(DISTINCT service, '\n' ORDER BY service),
-                        arg_min(json_extract_string(resource, '$.\"host.name\"'), (parent_span_id IS NOT NULL, started_at))
+                        arg_min(json_extract_string(resource, '$.\"host.name\"'), (parent_span_id IS NOT NULL, started_at)),
+                        arg_min(server_id, (parent_span_id IS NOT NULL, started_at))
                  FROM spans
                  WHERE trace_id IN (
                      SELECT DISTINCT trace_id FROM spans
@@ -385,6 +395,7 @@ pub async fn list_traces(
                        AND (?2 IS NULL OR started_at < ?2)
                        AND (?3 IS NULL OR service = ?3)
                        AND (?4 IS NULL OR name ILIKE '%' || ?4 || '%' OR http_route ILIKE '%' || ?4 || '%' OR trace_id = ?4)
+                       AND (?9 IS NULL OR server_id = ?9)
                  )
                  GROUP BY trace_id
                  HAVING (NOT ?5 OR count(*) FILTER (WHERE status = 'error') > 0)
@@ -402,6 +413,7 @@ pub async fn list_traces(
                     query.min_duration_us,
                     query.limit,
                     query.offset,
+                    query.server_id,
                 ],
                 |row| {
                     Ok(TraceSummary {
@@ -420,6 +432,7 @@ pub async fn list_traces(
                             .map(|services| services.split('\n').map(str::to_string).collect())
                             .unwrap_or_default(),
                         host: row.get(11)?,
+                        server_id: row.get(12)?,
                     })
                 },
             )?;
@@ -449,6 +462,7 @@ pub struct SpanItem {
     pub resource: Value,
     #[schema(value_type = Vec<Object>)]
     pub events: Value,
+    pub server_id: Option<String>,
 }
 
 fn read_json(text: Option<String>) -> Value {
@@ -462,7 +476,7 @@ pub async fn get_trace(analytics: &Analytics, trace_id: String) -> Result<Vec<Sp
             let mut statement = conn.prepare(
                 "SELECT span_id, parent_span_id, service, name, kind, started_at, duration_us, status,
                         status_message, http_method, http_route, http_status,
-                        attributes::VARCHAR, resource::VARCHAR, events::VARCHAR
+                        attributes::VARCHAR, resource::VARCHAR, events::VARCHAR, server_id
                  FROM spans WHERE trace_id = ? ORDER BY started_at, span_id",
             )?;
             let rows = statement.query_map([trace_id], |row| {
@@ -482,6 +496,7 @@ pub async fn get_trace(analytics: &Analytics, trace_id: String) -> Result<Vec<Sp
                     attributes: read_json(row.get(12)?),
                     resource: read_json(row.get(13)?),
                     events: read_json(row.get(14)?),
+                    server_id: row.get(15)?,
                 })
             })?;
             rows.collect()
@@ -712,7 +727,7 @@ mod tests {
                 ..Default::default()
             }],
         };
-        let (spans, exceptions) = to_span_rows(&request, 5);
+        let (spans, exceptions) = to_span_rows(&request, &HostIndex::default(), 5);
         let span = &spans[0];
         assert_eq!(span.trace_id, "01010101010101010101010101010101");
         assert_eq!(span.parent_span_id, None);
@@ -757,7 +772,7 @@ mod tests {
                 ..Default::default()
             }],
         };
-        let (spans, _) = to_span_rows(&request, 5);
+        let (spans, _) = to_span_rows(&request, &HostIndex::default(), 5);
         assert!(Arc::ptr_eq(&spans[0].service, &spans[1].service));
         assert!(Arc::ptr_eq(
             spans[0].resource.as_ref().unwrap(),

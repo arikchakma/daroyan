@@ -17,6 +17,7 @@ use database::{read_mysql, read_mysql_slow_query, read_postgres_duration};
 use http::{
     read_apache_error, read_haproxy, read_nginx_access, read_quoted_request, read_request,
 };
+pub(crate) use json::read_level_value;
 pub use json::{normalize_json_line, take_json_time};
 use json::{read_fields, split_logfmt};
 use php::{read_laravel, read_php_error, read_php_fpm};
@@ -43,7 +44,7 @@ pub struct ParsedLine {
     pub attributes: Map<String, Value>,
 }
 
-fn read_level_word(word: &str) -> Option<u8> {
+pub(crate) fn read_level_word(word: &str) -> Option<u8> {
     match word.to_ascii_lowercase().as_str() {
         "fatal" | "panic" | "crit" | "critical" | "emerg" | "alert" => {
             Some(SEVERITY_FATAL)

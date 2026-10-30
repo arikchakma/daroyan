@@ -81,5 +81,8 @@ export function toCheckInput(check: Schemas['UptimeCheck']): UptimeCheckInput {
     timeout_secs: check.timeout_secs,
     interval_secs: check.interval_secs,
     paused: check.paused,
+    failure_threshold: check.failure_threshold,
+    success_threshold: check.success_threshold,
+    retry_interval_secs: check.retry_interval_secs,
   };
 }

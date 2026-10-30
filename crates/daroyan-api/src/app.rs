@@ -15,8 +15,9 @@ use daroyan_core::config::Config;
 use daroyan_core::crons::Crons;
 use daroyan_core::db::connect_database;
 use daroyan_core::error::{Error, ErrorName};
-use daroyan_core::limits::Limits;
+use daroyan_core::limits::{Limits, LogBudgets};
 use daroyan_core::net::allow_private_targets;
+use daroyan_core::servers::hosts::HostCache;
 use daroyan_core::uptime::Uptime;
 use daroyan_migration::duckdb::run_duckdb_migrations;
 use daroyan_migration::{Migrator, MigratorTrait};
@@ -45,6 +46,8 @@ pub async fn open_state(config: Config) -> anyhow::Result<AppState> {
     let uptime = Uptime::new(database.clone(), analytics.clone());
     let crons = Crons::new(database.clone(), analytics.clone());
     Ok(AppState {
+        log_budgets: LogBudgets::new(config.otlp_log_budget),
+        hosts: HostCache::default(),
         config: Arc::new(config),
         database,
         analytics,

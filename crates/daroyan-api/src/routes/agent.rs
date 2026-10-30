@@ -59,6 +59,7 @@ async fn enroll_agent(
                 state.limits.record_auth_failure(ip);
             }
         })?;
+    state.hosts.forget();
     tracing::info!(server_id = %enrolled.server.id, name = %enrolled.server.name, "server enrolled");
     Ok(Json(EnrollResponse {
         server_id: enrolled.server.id,

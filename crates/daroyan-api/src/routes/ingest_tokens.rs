@@ -34,6 +34,7 @@ struct IngestTokenView {
     created_at: DateTime<Utc>,
     #[serde(with = "daroyan_core::time::option")]
     last_used_at: Option<DateTime<Utc>>,
+    throttled_log_records: i64,
 }
 
 impl From<IngestToken> for IngestTokenView {
@@ -44,6 +45,7 @@ impl From<IngestToken> for IngestTokenView {
             hint: token.hint,
             created_at: token.created_at,
             last_used_at: token.last_used_at,
+            throttled_log_records: token.throttled_log_records,
         }
     }
 }
