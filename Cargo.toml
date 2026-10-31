@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
-version = "0.0.8"
+version = "0.0.9"
 publish = false
 license = "FSL-1.1-ALv2"
 
