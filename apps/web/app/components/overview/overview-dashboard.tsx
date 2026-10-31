@@ -1,17 +1,19 @@
 import type { Schemas } from '@daroyan/client';
 import { useQuery } from '@tanstack/react-query';
 import { cva } from 'class-variance-authority';
-import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
 import { CronRunBars } from '~/components/crons/cron-run-bars';
 import { CronStatusBadge } from '~/components/crons/cron-status-badge';
 import { Icon } from '~/components/icons/icon';
 import { EventsTile } from '~/components/overview/events-tile';
+import { TelemetryTile } from '~/components/overview/telemetry-tile';
+import { Tile } from '~/components/overview/tile';
+import { TileRow } from '~/components/overview/tile-row';
+import { TrendBars } from '~/components/overview/trend-bars';
 import type { IconName } from '~/components/icons/icon-paths';
 import { DetailSection } from '~/components/servers/detail-table';
 import { ServerStatusBadge } from '~/components/servers/server-status-badge';
-import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Menu } from '~/components/ui/menu';
 import { PageBar } from '~/components/ui/page-bar';
@@ -22,12 +24,18 @@ import { listAlertMutesOptions, listAlertsOptions } from '~/queries/alerts';
 import { listIncidentsOptions } from '~/queries/incidents';
 import { overviewEventsOptions, overviewTrendsOptions } from '~/queries/overview';
 import { listIssuesOptions, traceServicesOptions, traceStatusOptions } from '~/queries/traces';
-import { describeFiring, getAlertMute, getAlertTargetPath } from '~/utils/alerts';
-import { cn } from '~/utils/classname';
+import { describeFiring, getAlertMute } from '~/utils/alerts';
 import { formatUntil } from '~/utils/crons';
-import { DAY_MS, formatClock, formatCount, formatRelative } from '~/utils/format';
+import { DAY_MS, formatClock, formatRelative, pluralize } from '~/utils/format';
 import { getStatusMeta, isClosed, isMaintenance } from '~/utils/incidents';
-import { OTLP_SERVER_ID } from '~/utils/logs';
+import {
+  countCleanDays,
+  describeCpu,
+  getAlertLink,
+  getWorstMetric,
+  joinParts,
+  mergeDays,
+} from '~/utils/overview';
 import { formatMs, formatUptime, getUptime } from '~/utils/uptime';
 
 const CRON_BARS = 30;
@@ -39,87 +47,24 @@ type OverviewDashboardProps = {
   crons: Schemas['Cron'][];
 };
 
+const attentionIcon = cva('shrink-0', {
+  variants: {
+    tone: {
+      critical: 'text-tone-critical-fg',
+      warning: 'text-tone-warning-fg',
+    },
+  },
+});
+
 type AttentionItem = {
   key: string;
   icon: IconName;
-  iconClassName: string;
+  tone: 'critical' | 'warning';
   title: string;
   detail: string;
   href: string;
   action: string;
 };
-
-const CRITICAL_ICON = 'text-tone-critical-fg';
-const WARNING_ICON = 'text-tone-warning-fg';
-
-function getAlertLink(alert: Schemas['Alert']) {
-  if (alert.server_id === OTLP_SERVER_ID) {
-    return { href: getAlertTargetPath(alert), action: 'Open Logs' };
-  }
-  if (alert.server_id) {
-    return { href: `/servers/${alert.server_id}`, action: 'Open Server' };
-  }
-  if (alert.check_id) {
-    return { href: `/uptime/${alert.check_id}`, action: 'Open Check' };
-  }
-  if (alert.cron_id) {
-    return { href: `/crons/${alert.cron_id}`, action: 'Open Cron' };
-  }
-  return { href: `/alerts/${alert.rule_id}`, action: 'Open Alert' };
-}
-
-function pluralize(count: number, word: string) {
-  return `${formatCount(count)} ${count === 1 ? word : `${word}s`}`;
-}
-
-function joinParts(parts: string[]) {
-  return parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
-}
-
-function getWorstMetric(server: Schemas['ServerItem']) {
-  const metrics = [
-    { label: 'CPU', value: server.cpu },
-    { label: 'Memory', value: server.mem_percent },
-    { label: 'Disk', value: server.disk_percent },
-  ].filter((metric): metric is { label: string; value: number } => typeof metric.value === 'number');
-  const worst = metrics.sort((a, b) => b.value - a.value)[0];
-  return worst ? `${worst.label} ${Math.round(worst.value)}%` : '';
-}
-
-function describeCpu(points: Schemas['TrendPoint'][]) {
-  if (points.length === 0) {
-    return undefined;
-  }
-
-  const latest = points.reduce((a, b) => (b.at > a.at ? b : a));
-  const peak = points.reduce((a, b) => (b.value > a.value ? b : a));
-  return `CPU ${Math.round(latest.value)}% now, peak ${Math.round(peak.value)}% at ${formatClock(peak.at)}`;
-}
-
-function mergeDays(checks: Schemas['UptimeCheck'][]) {
-  const byDay = new Map<number, Schemas['UptimeDay']>();
-  for (const day of checks.filter((check) => !check.paused).flatMap((check) => check.days)) {
-    const merged = byDay.get(day.day) ?? { day: day.day, down: 0, slow: 0, total: 0 };
-    byDay.set(day.day, {
-      day: day.day,
-      down: merged.down + day.down,
-      slow: merged.slow + day.slow,
-      total: merged.total + day.total,
-    });
-  }
-  return [...byDay.values()].sort((a, b) => a.day - b.day);
-}
-
-function countCleanDays(days: Schemas['UptimeDay'][]) {
-  let count = 0;
-  for (const day of [...days].reverse()) {
-    if (day.down > 0) {
-      break;
-    }
-    count += 1;
-  }
-  return count;
-}
 
 export function OverviewDashboard(props: OverviewDashboardProps) {
   const { servers, checks, crons } = props;
@@ -151,7 +96,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
     ...openIncidents.map((incident) => ({
       key: `incident-${incident.id}`,
       icon: 'flag' as const,
-      iconClassName: CRITICAL_ICON,
+      tone: 'critical' as const,
       title: `Incident open: ${incident.title}`,
       detail: `${getStatusMeta(incident.status).label} since ${formatClock(Date.parse(incident.started_at))}.`,
       href: `/incidents/${incident.id}`,
@@ -160,7 +105,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
     ...activeAlerts.map((alert) => ({
       key: `alert-${alert.id}`,
       icon: alert.severity === 'critical' ? ('circle-x' as const) : ('triangle-alert' as const),
-      iconClassName: alert.severity === 'critical' ? CRITICAL_ICON : WARNING_ICON,
+      tone: alert.severity === 'critical' ? ('critical' as const) : ('warning' as const),
       title: `${alert.rule_name} on ${alert.target_name}`,
       detail: `${describeFiring(alert)}.`,
       ...getAlertLink(alert),
@@ -170,7 +115,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
       .map((server) => ({
         key: `server-${server.id}`,
         icon: 'circle-x' as const,
-        iconClassName: CRITICAL_ICON,
+        tone: 'critical' as const,
         title: `${server.name} is down`,
         detail: server.last_seen_at ? `Last report ${formatRelative(server.last_seen_at)}.` : 'It has not reported yet.',
         href: `/servers/${server.id}`,
@@ -181,7 +126,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
       .map((check) => ({
         key: `check-${check.id}`,
         icon: 'activity' as const,
-        iconClassName: check.status === 'down' ? CRITICAL_ICON : WARNING_ICON,
+        tone: check.status === 'down' ? ('critical' as const) : ('warning' as const),
         title: check.status === 'down' ? `${check.name} is down` : `${check.name} is slow`,
         detail:
           check.status === 'down'
@@ -195,7 +140,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
       .map((cron) => ({
         key: `cron-${cron.id}`,
         icon: 'clock' as const,
-        iconClassName: cron.status === 'late' ? WARNING_ICON : CRITICAL_ICON,
+        tone: cron.status === 'late' ? ('warning' as const) : ('critical' as const),
         title: cron.status === 'late' ? `${cron.name} is late` : `${cron.name} ${cron.status}`,
         detail:
           cron.status === 'late' && cron.next_expected_at
@@ -291,7 +236,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
               ) : (
                 attention.map((item) => (
                   <div key={item.key} className="flex items-center gap-3 px-4 py-3">
-                    <Icon name={item.icon} className={cn('shrink-0', item.iconClassName)} />
+                    <Icon name={item.icon} className={attentionIcon({ tone: item.tone })} />
                     <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-body">
                       <span className="truncate font-medium">{item.title}</span>
                       <span className="truncate text-text-secondary">{item.detail}</span>
@@ -418,241 +363,5 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
         </div>
       </div>
     </div>
-  );
-}
-
-type TileProps = {
-  title: string;
-  href: string;
-  linkLabel: string;
-  value: string;
-  caption?: string;
-  chart: ReactNode;
-  healthy: ReactNode;
-  children: ReactNode[] | ReactNode;
-};
-
-function Tile(props: TileProps) {
-  const { title, href, linkLabel, value, caption, chart, healthy, children } = props;
-
-  const rows = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];
-
-  return (
-    <section className="flex flex-col overflow-hidden rounded-2xl border border-border-ring bg-surface-default pb-1 shadow-card">
-      <div className="flex flex-col gap-3 p-4">
-        <div className="flex items-center gap-2">
-          <h2 className="flex-1 text-title-section font-medium">{title}</h2>
-          <Link
-            to={href}
-            className="text-body text-text-secondary outline-none hover:text-text-primary focus-visible:underline"
-          >
-            {linkLabel}
-          </Link>
-        </div>
-        <p className="flex items-baseline gap-1.5 whitespace-nowrap">
-          <span className="text-body font-semibold">{value}</span>
-          {caption && <span className="truncate text-caption font-normal text-text-tertiary">{caption}</span>}
-        </p>
-        {chart}
-      </div>
-      <div className="flex flex-col [&>*]:border-t [&>*]:border-border-row">
-        {rows.length > 0 ? (
-          rows
-        ) : (
-          <div className="flex items-center gap-2.5 px-4 py-2.75">
-            <Badge tone="success">
-              <Icon name="check" />
-              Healthy
-            </Badge>
-            <span className="truncate text-body text-text-secondary">{healthy}</span>
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-type TileRowProps = {
-  href: string;
-  badge: ReactNode;
-  label: string;
-  meta: string;
-  isMono?: boolean;
-  more?: number;
-};
-
-function TileRow(props: TileRowProps) {
-  const { href, badge, label, meta, isMono, more = 0 } = props;
-
-  return (
-    <Link
-      to={href}
-      className="flex items-center gap-2.5 px-4 py-2.75 outline-none hover:bg-surface-subtle focus-visible:bg-surface-subtle"
-    >
-      {badge}
-      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-        <span className={cn('truncate text-body', isMono && 'font-mono text-code')}>{label}</span>
-        {more > 0 && <span className="shrink-0 text-caption font-normal text-text-tertiary">+{more} more</span>}
-      </span>
-      <span className="shrink-0 text-caption font-normal text-text-tertiary">{meta}</span>
-    </Link>
-  );
-}
-
-type TrendBarsProps = {
-  points: Schemas['TrendPoint'][];
-  label: (value: number) => string;
-  minScale: number;
-  max?: number;
-  fillClassName: string;
-  warnAt?: number;
-  criticalAt?: number;
-};
-
-const HOUR_MS = 3_600_000;
-const TREND_HOURS = 24;
-
-const trendBar = cva('absolute inset-x-0 bottom-0', {
-  variants: {
-    tone: {
-      normal: '',
-      warning: 'bg-toast-warning-icon',
-      critical: 'bg-brand',
-    },
-  },
-});
-
-type GetBarToneOptions = {
-  value: number;
-  warnAt?: number;
-  criticalAt?: number;
-};
-
-function getBarTone(options: GetBarToneOptions) {
-  const { value, warnAt, criticalAt } = options;
-
-  if (criticalAt !== undefined && value >= criticalAt) {
-    return 'critical';
-  }
-  if (warnAt !== undefined && value >= warnAt) {
-    return 'warning';
-  }
-
-  return 'normal';
-}
-
-function TrendBars(props: TrendBarsProps) {
-  const { points, label, minScale, max, fillClassName, warnAt, criticalAt } = props;
-
-  const byHour = new Map(points.map((point) => [point.at, point.value]));
-  const lastHour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
-  const hours = Array.from({ length: TREND_HOURS }, (_, index) => lastHour - (TREND_HOURS - 1 - index) * HOUR_MS);
-  const top = max ?? Math.max(minScale, ...points.map((point) => point.value)) * 1.25;
-
-  return (
-    <div className="relative">
-      <div className="flex h-7 items-stretch gap-0.5">
-        {hours.map((hour) => {
-          const value = byHour.get(hour);
-          const tone = value === undefined ? 'normal' : getBarTone({ value, warnAt, criticalAt });
-
-          return (
-            <span
-              key={hour}
-              title={value === undefined ? `${formatClock(hour)}: no data` : `${formatClock(hour)}: ${label(value)}`}
-              className="relative min-w-0.5 flex-1 overflow-hidden rounded-[1px] bg-surface-fill"
-            >
-              {value !== undefined && value > 0 && (
-                <span
-                  className={cn(trendBar({ tone }), tone === 'normal' && fillClassName)}
-                  style={{ height: `${Math.max((value / top) * 100, 4)}%` }}
-                />
-              )}
-            </span>
-          );
-        })}
-      </div>
-      {max !== undefined && warnAt !== undefined && (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 border-t border-dashed border-toast-warning-icon"
-          style={{ bottom: `${(warnAt / max) * 100}%` }}
-        />
-      )}
-    </div>
-  );
-}
-
-type TelemetryTileProps = {
-  issues: Schemas['Issue'][];
-  errors: Schemas['TrendPoint'][];
-  isSetUp: boolean;
-};
-
-function TelemetryTile(props: TelemetryTileProps) {
-  const { issues, errors, isSetUp } = props;
-
-  const newIssues = issues.filter((issue) => issue.first_seen_at / 1_000 > Date.now() - DAY_MS);
-  const hourErrors = errors.find((point) => point.at === Math.floor(Date.now() / HOUR_MS) * HOUR_MS)?.value ?? 0;
-
-  if (!isSetUp) {
-    return (
-      <Tile
-        title="Telemetry"
-        href="/traces/setup"
-        linkLabel="Set Up"
-        value="No traces yet"
-        caption="send spans from any OpenTelemetry SDK"
-        chart={<TrendBars points={[]} label={String} minScale={1} fillClassName="bg-brand" />}
-        healthy=""
-      >
-        <TileRow
-          href="/traces/setup"
-          badge={
-            <Badge>
-              <Icon name="terminal" />
-              Setup
-            </Badge>
-          }
-          label="Set up traces to see errors and slow requests"
-          meta=""
-        />
-      </Tile>
-    );
-  }
-
-  return (
-    <Tile
-      title="Telemetry"
-      href="/issues"
-      linkLabel="View all issues"
-      value={newIssues.length === 0 ? 'No new issues' : pluralize(newIssues.length, 'new issue')}
-      caption={`${pluralize(hourErrors, 'error')} this hour`}
-      chart={
-        <TrendBars
-          points={errors}
-          label={(value) => pluralize(value, 'error')}
-          minScale={4}
-          fillClassName="bg-brand"
-        />
-      }
-      healthy="No new errors today."
-    >
-      {newIssues.slice(0, 1).map((issue) => (
-        <TileRow
-          key={issue.fingerprint}
-          more={newIssues.length - 1}
-          href={`/issues/${issue.fingerprint}`}
-          badge={
-            <Badge>
-              <span className="font-mono">{issue.service}</span>
-            </Badge>
-          }
-          label={issue.kind}
-          isMono
-          meta={pluralize(issue.count, 'event')}
-        />
-      ))}
-    </Tile>
   );
 }

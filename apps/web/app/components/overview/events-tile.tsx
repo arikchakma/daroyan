@@ -2,7 +2,8 @@ import type { Schemas } from '@daroyan/client';
 import { useState } from 'react';
 
 import { Badge } from '~/components/ui/badge';
-import { formatClock } from '~/utils/format';
+import { Tooltip } from '~/components/ui/tooltip';
+import { formatClock, pluralize } from '~/utils/format';
 
 const VISIBLE_EVENTS = 8;
 const EVENT_TONES = { problem: 'critical', recovery: 'success', neutral: 'neutral' } as const;
@@ -33,41 +34,55 @@ export function EventsTile(props: EventsTileProps) {
         </div>
         <p className="flex items-baseline gap-1.5 whitespace-nowrap">
           <span className="text-body font-semibold">
-            {events?.problems ?? 0} {events?.problems === 1 ? 'problem' : 'problems'}
+            {pluralize(events?.problems ?? 0, 'problem')}
           </span>
           <span className="truncate text-caption font-normal text-text-tertiary">
             {events?.recoveries ?? 0} recovered · {events?.open ?? 0} still open
           </span>
         </p>
         <div className="flex flex-col gap-1.5">
-          <div className="flex h-16 gap-0.75">
-            {buckets.map((bucket) => (
-              <span
-                key={bucket.at}
-                title={`${formatClock(bucket.at)}: ${bucket.problems} problems, ${bucket.recoveries} recovered`}
-                className="flex min-w-0.5 flex-1 flex-col justify-end gap-px"
-              >
-                {bucket.problems + bucket.recoveries === 0 ? (
-                  <span className="h-0.75 rounded-[1px] bg-surface-fill" />
-                ) : (
-                  <>
-                    {bucket.recoveries > 0 && (
-                      <span
-                        className="rounded-[2px] bg-tone-success-solid"
-                        style={{ height: `${(bucket.recoveries / top) * 100}%` }}
-                      />
+          <Tooltip.Provider delay={0} closeDelay={0}>
+            <div className="flex h-16 gap-0.75">
+              {buckets.map((bucket) => (
+                <Tooltip.Root key={bucket.at}>
+                  <Tooltip.Trigger
+                    render={<span />}
+                    aria-label={`${formatClock(bucket.at)}: ${pluralize(bucket.problems, 'problem')}, ${bucket.recoveries} recovered`}
+                    className="flex min-w-0.5 flex-1 flex-col justify-end gap-px hover:opacity-70"
+                  >
+                    {bucket.problems + bucket.recoveries === 0 ? (
+                      <span className="h-0.75 rounded-[1px] bg-surface-fill" />
+                    ) : (
+                      <>
+                        {bucket.recoveries > 0 && (
+                          <span
+                            className="rounded-[2px] bg-tone-success-solid"
+                            style={{ height: `${(bucket.recoveries / top) * 100}%` }}
+                          />
+                        )}
+                        {bucket.problems > 0 && (
+                          <span
+                            className="rounded-[2px] bg-brand"
+                            style={{ height: `${(bucket.problems / top) * 100}%` }}
+                          />
+                        )}
+                      </>
                     )}
-                    {bucket.problems > 0 && (
-                      <span
-                        className="rounded-[2px] bg-brand"
-                        style={{ height: `${(bucket.problems / top) * 100}%` }}
-                      />
-                    )}
-                  </>
-                )}
-              </span>
-            ))}
-          </div>
+                  </Tooltip.Trigger>
+                  <Tooltip.Portal>
+                    <Tooltip.Positioner side="top">
+                      <Tooltip.Popup className="flex-col items-start gap-0.5">
+                        <span>{formatClock(bucket.at)}</span>
+                        <span className="font-normal opacity-80">{pluralize(bucket.problems, 'problem')}</span>
+                        <span className="font-normal opacity-80">{bucket.recoveries} recovered</span>
+                        <Tooltip.Arrow />
+                      </Tooltip.Popup>
+                    </Tooltip.Positioner>
+                  </Tooltip.Portal>
+                </Tooltip.Root>
+              ))}
+            </div>
+          </Tooltip.Provider>
           <div className="flex justify-between text-caption text-text-tertiary">
             {buckets
               .filter((_, index) => index % AXIS_EVERY === 0)
