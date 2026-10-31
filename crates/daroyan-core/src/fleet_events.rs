@@ -274,35 +274,30 @@ pub async fn list_events(
         );
     }
 
-    let mut offline_since: HashMap<String, i64> = HashMap::new();
-    for row in rows {
+    for row in &rows {
         let Some(server) = names.servers.get(&row.server_id) else { continue };
         let at = DateTime::<Utc>::from_timestamp_millis(row.at).unwrap_or(now);
-        match row.kind.as_str() {
-            AGENT_DISCONNECTED => {
-                offline_since.insert(row.server_id.clone(), row.at);
-                push(
-                    at,
-                    Outcome::Problem,
-                    "Offline",
-                    server.clone(),
-                    "agent disconnected".to_string(),
-                );
-            }
-            AGENT_CONNECTED => {
-                if let Some(since_ms) = offline_since.remove(&row.server_id) {
-                    let from =
-                        DateTime::<Utc>::from_timestamp_millis(since_ms).unwrap_or(at);
-                    push(
-                        at,
-                        Outcome::Recovery,
-                        "Online",
-                        server.clone(),
-                        format!("back after {}", lasted(from, at)),
-                    );
-                }
-            }
-            _ => push_process_event(&row, server, at, &mut push),
+        push_process_event(row, server, at, &mut push);
+    }
+    for outage in find_outages(&rows, now_ms, |id| agents.is_connected(id)) {
+        let Some(server) = names.servers.get(&outage.server_id) else { continue };
+        let from = DateTime::<Utc>::from_timestamp_millis(outage.from).unwrap_or(now);
+        push(
+            from,
+            Outcome::Problem,
+            "Offline",
+            server.clone(),
+            "agent disconnected".to_string(),
+        );
+        if let Some(to) = outage.to {
+            let to = DateTime::<Utc>::from_timestamp_millis(to).unwrap_or(now);
+            push(
+                to,
+                Outcome::Recovery,
+                "Online",
+                server.clone(),
+                format!("back after {}", lasted(from, to)),
+            );
         }
     }
     open += u32::try_from(offline_now).unwrap_or(u32::MAX);
@@ -333,6 +328,49 @@ pub async fn list_events(
     let recoveries = count(Outcome::Recovery);
     events.truncate(MAX_EVENTS);
     Ok(FleetEvents { problems, recoveries, open, buckets, events })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Outage {
+    server_id: String,
+    from: i64,
+    to: Option<i64>,
+}
+
+fn find_outages(
+    rows: &[FleetEventRow],
+    now_ms: i64,
+    is_connected: impl Fn(&str) -> bool,
+) -> Vec<Outage> {
+    let grace_ms = OFFLINE_AFTER_SECS * 1000;
+    let mut offline_since: HashMap<&str, i64> = HashMap::new();
+    let mut outages = Vec::new();
+    for row in rows {
+        match row.kind.as_str() {
+            AGENT_DISCONNECTED => {
+                offline_since.entry(&row.server_id).or_insert(row.at);
+            }
+            AGENT_CONNECTED => {
+                if let Some(from) = offline_since.remove(row.server_id.as_str())
+                    && row.at - from > grace_ms
+                {
+                    outages.push(Outage {
+                        server_id: row.server_id.clone(),
+                        from,
+                        to: Some(row.at),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    outages.extend(
+        offline_since
+            .into_iter()
+            .filter(|&(id, from)| now_ms - from > grace_ms && !is_connected(id))
+            .map(|(id, from)| Outage { server_id: id.to_string(), from, to: None }),
+    );
+    outages
 }
 
 fn push_process_event(
@@ -391,4 +429,39 @@ fn to_names<T>(
     pair: impl Fn(T) -> (String, String),
 ) -> HashMap<String, String> {
     rows.into_iter().map(pair).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(kind: &str, at_secs: i64) -> FleetEventRow {
+        FleetEventRow {
+            server_id: "srv".to_string(),
+            at: at_secs * 1000,
+            kind: kind.to_string(),
+            data: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn ignores_a_short_reconnect() {
+        let rows = [row(AGENT_DISCONNECTED, 0), row(AGENT_CONNECTED, 1)];
+        assert!(find_outages(&rows, 120_000, |_| true).is_empty());
+    }
+
+    #[test]
+    fn reports_a_long_outage() {
+        let rows = [row(AGENT_DISCONNECTED, 0), row(AGENT_CONNECTED, 90)];
+        let outage = Outage { server_id: "srv".to_string(), from: 0, to: Some(90_000) };
+        assert_eq!(find_outages(&rows, 120_000, |_| true), [outage]);
+    }
+
+    #[test]
+    fn reports_an_open_outage_only_after_the_grace_period() {
+        let rows = [row(AGENT_DISCONNECTED, 0)];
+        assert!(find_outages(&rows, 30_000, |_| false).is_empty());
+        let outage = Outage { server_id: "srv".to_string(), from: 0, to: None };
+        assert_eq!(find_outages(&rows, 120_000, |_| false), [outage]);
+    }
 }
