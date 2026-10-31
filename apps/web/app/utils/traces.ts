@@ -1,6 +1,7 @@
 import type { Schemas } from '@daroyan/client';
 
 import type { BadgeProps } from '~/components/ui/badge';
+import { pluralize } from '~/utils/format';
 
 export type TraceSummary = Schemas['TraceSummary'];
 export type TraceSpan = Schemas['TraceSpan'];
@@ -61,7 +62,7 @@ export function getTraceStatus(
 }
 
 export function describeSpans(trace: Pick<TraceSummary, 'span_count' | 'services' | 'service'>) {
-  const count = `${trace.span_count} ${trace.span_count === 1 ? 'span' : 'spans'}`;
+  const count = pluralize(trace.span_count, 'span');
   const services = [trace.service, ...trace.services.filter((service) => service !== trace.service)];
   if (services.length === 0) {
     return count;

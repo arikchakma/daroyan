@@ -1,7 +1,7 @@
 import type { Schemas } from '@daroyan/client';
 
 import type { IconName } from '~/components/icons/icon-paths';
-import { formatClock, formatDate } from '~/utils/format';
+import { formatClock, formatDate, formatUnit } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
 
 export const CONNECTED_MESSAGE = 'daroyan:integration-connected';
@@ -371,19 +371,19 @@ export function describeAlertNow(alert: Schemas['Alert'], summary?: string) {
 export function formatMinutesLong(from: string | number, to: string | number = Date.now()) {
   const minutes = Math.max(Math.round((new Date(to).getTime() - new Date(from).getTime()) / 60_000), 1);
   if (minutes < 60) {
-    return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+    return formatUnit(minutes, 'minute');
   }
   const hours = Math.round(minutes / 60);
   if (hours < 48) {
-    return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+    return formatUnit(hours, 'hour');
   }
-  return `${Math.round(hours / 24)} days`;
+  return formatUnit(Math.round(hours / 24), 'day');
 }
 
 export function describeFiring(alert: Schemas['Alert']) {
   const minutes = Math.max(Math.round((Date.now() - new Date(alert.started_at).getTime()) / 60_000), 1);
   const duration =
-    minutes < 60 ? `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}` : `${formatAlertDuration(alert.started_at)}`;
+    minutes < 60 ? formatUnit(minutes, 'minute') : formatAlertDuration(alert.started_at);
   if (alert.subject === 'Server') {
     return `Offline for ${duration}`;
   }

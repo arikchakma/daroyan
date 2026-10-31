@@ -1,4 +1,15 @@
 export const DAY_MS = 86_400_000;
+export const HOUR_MS = 3_600_000;
+
+const pluralRules = new Intl.PluralRules('en-US');
+
+export function pluralize(count: number, word: string, plural = `${word}s`) {
+  return `${formatCount(count)} ${pluralRules.select(Math.round(count)) === 'one' ? word : plural}`;
+}
+
+export function formatUnit(count: number, unit: 'second' | 'minute' | 'hour' | 'day') {
+  return new Intl.NumberFormat('en-US', { style: 'unit', unit, unitDisplay: 'long' }).format(count);
+}
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
 
@@ -46,7 +57,7 @@ export function formatCount(value: number) {
 export function formatUptimeDays(seconds: number) {
   const days = Math.floor(seconds / 86_400);
   if (days >= 1) {
-    return `${days} ${days === 1 ? 'day' : 'days'}`;
+    return formatUnit(days, 'day');
   }
   return formatDuration(seconds);
 }

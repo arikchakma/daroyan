@@ -16,6 +16,7 @@ import {
   RESOLVE_OPTIONS,
   WINDOW_OPTIONS,
 } from '~/utils/alerts';
+import { pluralize } from '~/utils/format';
 
 export type ScopeKind = 'all' | 'label' | 'picked';
 
@@ -234,7 +235,7 @@ export function getMatchesText(names: string[], noun: string) {
     return `Matches no ${noun}s yet.`;
   }
 
-  const count = names.length === 1 ? `1 ${noun}` : `${names.length} ${noun}s`;
+  const count = pluralize(names.length, noun);
   return `Matches ${count}: ${joinNames(names)}.`;
 }
 

@@ -25,7 +25,7 @@ import { toast } from '~/lib/toast';
 import { listAlertRulesOptions } from '~/queries/alerts';
 import { deleteUptimeCheckOptions, runUptimeCheckOptions, toCheckInput, updateUptimeCheckOptions, uptimeCheckStatsOptions } from '~/queries/uptime';
 import { cn } from '~/utils/classname';
-import { DAY_MS, formatDate } from '~/utils/format';
+import { DAY_MS, formatDate, pluralize } from '~/utils/format';
 import { describeExpect, describeTarget, formatInterval, formatLasted, formatMs, formatStreak, formatUptime, getUptime } from '~/utils/uptime';
 
 type CheckBodyProps = {
@@ -163,7 +163,7 @@ export function CheckBody(props: CheckBodyProps) {
 
           <DetailSection
             title="Last 90 Days"
-            summary={recentOutages.length === 1 ? '1 outage' : `${recentOutages.length} outages`}
+            summary={pluralize(recentOutages.length, 'outage')}
           >
             <div className="flex flex-col gap-2 rounded-2xl border border-border-ring bg-surface-default px-4 pt-4 pb-3 shadow-card">
               <UptimeBars days={check.days} className="h-8" />

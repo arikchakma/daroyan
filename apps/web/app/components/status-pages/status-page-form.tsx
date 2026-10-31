@@ -24,6 +24,7 @@ import { describeSchedule } from '~/utils/crons';
 import { getMonitorKey } from '~/utils/status-pages';
 import type { Monitor } from '~/utils/status-pages';
 import { formatInterval } from '~/utils/uptime';
+import { pluralize } from '~/utils/format';
 
 const MAX_LOGO_BYTES = 200 * 1024;
 const LOGO_TYPES = 'image/png,image/jpeg,image/webp,image/svg+xml';
@@ -549,8 +550,7 @@ function StatusPageFormBody(props: StatusPageFormBodyProps) {
                 {host}/s/{slug || 'your-slug'}
               </span>
               <span>
-                {componentCount} {componentCount === 1 ? 'component' : 'components'} in {sections.length}{' '}
-                {sections.length === 1 ? 'section' : 'sections'}
+                {pluralize(componentCount, 'component')} in {pluralize(sections.length, 'section')}
               </span>
               <span>{isPublic ? 'Public, no sign-in needed' : 'Private, only your team can see it'}</span>
               <span>Status updates every minute</span>

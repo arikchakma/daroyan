@@ -1,6 +1,6 @@
 import type { Schemas } from '@daroyan/client';
 
-import { formatClock } from '~/utils/format';
+import { formatClock, formatUnit } from '~/utils/format';
 
 export const GRACE_OPTIONS = [
   { value: 60, label: '1 minute' },
@@ -44,14 +44,13 @@ export const COMMON_SCHEDULES = [
 ];
 
 export function formatSecs(secs: number) {
-  const units: [number, string][] = [
+  const units: [number, 'day' | 'hour' | 'minute'][] = [
     [86_400, 'day'],
     [3600, 'hour'],
     [60, 'minute'],
   ];
-  const [size, unit] = units.find(([size]) => secs >= size && secs % size === 0) ?? [1, 'second'];
-  const count = secs / size;
-  return `${count} ${unit}${count === 1 ? '' : 's'}`;
+  const [size, unit] = units.find(([size]) => secs >= size && secs % size === 0) ?? [1, 'second' as const];
+  return formatUnit(secs / size, unit);
 }
 
 export function describeSchedule(cron: Pick<Schemas['Cron'], 'schedule_kind' | 'expression' | 'interval_secs'>) {

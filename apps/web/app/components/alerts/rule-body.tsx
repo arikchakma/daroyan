@@ -55,7 +55,7 @@ import {
   readSubjectName,
   readThreshold,
 } from '~/utils/alerts';
-import { formatClock, formatDate, formatRelative } from '~/utils/format';
+import { formatClock, formatDate, formatRelative, pluralize } from '~/utils/format';
 import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
 const RECENT_MS = 30 * 86_400_000;
@@ -295,7 +295,7 @@ export function RuleBody(props: RuleBodyProps) {
           {firing.length > 0 && (
             <DetailSection
               title="Firing Now"
-              summary={`${firing.length} alert${firing.length === 1 ? '' : 's'}`}
+              summary={pluralize(firing.length, 'alert')}
             >
               <div className="overflow-hidden rounded-2xl border border-border-ring bg-surface-default shadow-card [&>*+*]:border-t [&>*+*]:border-border-row">
                 {firing.map((alert) => (
@@ -326,7 +326,7 @@ export function RuleBody(props: RuleBodyProps) {
 
           <DetailSection
             title="History"
-            summary={recent.length > 0 ? `${recent.length} ${recent.length === 1 ? 'time' : 'times'} in 30 days` : undefined}
+            summary={recent.length > 0 ? `${pluralize(recent.length, 'time')} in 30 days` : undefined}
           >
             <DetailCard>
               {history.length > 0 ? (

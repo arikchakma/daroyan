@@ -2,7 +2,7 @@ import type { Schemas } from '@daroyan/client';
 
 import { Tooltip } from '~/components/ui/tooltip';
 import { cn } from '~/utils/classname';
-import { formatDate } from '~/utils/format';
+import { formatDate, pluralize } from '~/utils/format';
 import { formatUptime } from '~/utils/uptime';
 
 type UptimeBarsProps = {
@@ -53,7 +53,7 @@ export function UptimeBars(props: UptimeBarsProps) {
                   <span className="font-normal opacity-80">{describeDay(day)}</span>
                   {day.total > 0 && (
                     <span className="font-normal opacity-80">
-                      {day.total.toLocaleString('en-US')} {day.total === 1 ? 'check' : 'checks'}
+                      {pluralize(day.total, 'check')}
                     </span>
                   )}
                   <Tooltip.Arrow />
