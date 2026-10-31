@@ -17,7 +17,7 @@ import { SaveBar } from '~/components/ui/save-bar';
 import { Switch } from '~/components/ui/switch';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { createAlertRuleOptions, listAlertRulesOptions, listIntegrationsOptions } from '~/queries/alerts';
+import { createAlertRuleOptions, listIntegrationsOptions } from '~/queries/alerts';
 import { createCronOptions, cronPreviewOptions, updateCronOptions } from '~/queries/crons';
 import type { CronInput } from '~/queries/crons';
 import { listServersOptions } from '~/queries/servers';
@@ -98,7 +98,6 @@ function CronFormBody(props: CronFormBodyProps) {
     paused: cron?.paused ?? false,
   };
 
-  const { data: rules } = useQuery(listAlertRulesOptions());
   const { data: integrations } = useQuery(listIntegrationsOptions());
   const [alertMissed, setAlertMissed] = useState(true);
   const [alertFailed, setAlertFailed] = useState(true);

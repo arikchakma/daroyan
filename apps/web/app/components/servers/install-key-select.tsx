@@ -1,4 +1,5 @@
 import { Select } from '~/components/ui/select';
+import { pluralize } from '~/utils/format';
 
 type Item = { value: string; label: string };
 
@@ -15,7 +16,7 @@ export const EXPIRES_ITEMS: Item[] = [
 export const MAX_USES_ITEMS: Item[] = [
   ...[1, 5, 25, 100].map((count) => ({
     value: String(count),
-    label: count === 1 ? '1 server' : `${count} servers`,
+    label: pluralize(count, 'server'),
   })),
   { value: NONE, label: 'Unlimited' },
 ];

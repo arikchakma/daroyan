@@ -37,7 +37,7 @@ import {
   isCronKind,
   isWholeRuleMute,
 } from '~/utils/alerts';
-import { formatClock } from '~/utils/format';
+import { formatClock, pluralize } from '~/utils/format';
 
 type RuleView = 'all' | RuleState;
 
@@ -155,12 +155,12 @@ export default function AlertsPage() {
 
   const setEnabled = async (enabled: boolean) => {
     await Promise.all(selectedIds.map((ruleId) => updateRule({ ruleId, body: { enabled } })));
-    toast.success(`${enabled ? 'Enabled' : 'Disabled'} ${countRules(selectedIds.length)}`);
+    toast.success(`${enabled ? 'Enabled' : 'Disabled'} ${pluralize(selectedIds.length, 'rule')}`);
     refresh();
   };
   const removeSelected = async () => {
     await Promise.all(selectedIds.map((ruleId) => deleteRule({ ruleId })));
-    toast.success(`Deleted ${countRules(selectedIds.length)}`);
+    toast.success(`Deleted ${pluralize(selectedIds.length, 'rule')}`);
     setIsDeleteOpen(false);
     refresh();
   };
@@ -256,7 +256,7 @@ export default function AlertsPage() {
       <ConfirmDialog
         open={isDeleteOpen}
         onOpenChange={setIsDeleteOpen}
-        title={`Delete ${countRules(selectedIds.length)}?`}
+        title={`Delete ${pluralize(selectedIds.length, 'rule')}?`}
         description="Their alert history and notification log are deleted too. Firing alerts stop without a resolve message."
         confirmLabel="Delete"
         isPending={isDeleting}
@@ -264,8 +264,4 @@ export default function AlertsPage() {
       />
     </div>
   );
-}
-
-function countRules(count: number) {
-  return count === 1 ? '1 rule' : `${count} rules`;
 }

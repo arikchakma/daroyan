@@ -30,7 +30,7 @@ import {
   revokeInstallTokenOptions,
 } from "~/queries/install-tokens";
 import type { InstallTokenLimits } from "~/queries/install-tokens";
-import { formatDate, formatRelative } from "~/utils/format";
+import { formatDate, formatRelative, pluralize } from "~/utils/format";
 
 const DEFAULT_LIMITS: InstallTokenLimits = {
   expires_in_hours: null,
@@ -46,7 +46,7 @@ type InstallToken = TokenItem & {
 function toTokenItem(token: InstallToken): TokenItem {
   const usage =
     token.max_uses === null || token.max_uses === undefined
-      ? `${token.uses} ${token.uses === 1 ? "server" : "servers"}`
+      ? pluralize(token.uses, 'server')
       : `${token.uses} of ${token.max_uses}`;
 
   return {
