@@ -4,8 +4,11 @@ use duckdb::params;
 
 use crate::alerts::rules::{Condition, Scope, Target, read_log_severity};
 use crate::analytics::Analytics;
-use crate::analytics::log_lines::{LogMatch, list_busy_windows};
+use crate::analytics::log_lines::{
+    LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source, list_busy_windows,
+};
 use crate::db::Database;
+use crate::db::entities::servers::Model as Server;
 use crate::error::Result;
 use crate::servers::status::get_percent;
 
@@ -52,6 +55,12 @@ pub async fn backtest_rule(
     let since = Utc::now().timestamp_millis() - days * 86_400_000;
     let for_ms = i64::from(for_secs) * 1000;
     let servers = database.list_servers().await?;
+    if matches!(condition, Condition::Logs { .. }) {
+        return Ok(Some(
+            backtest_logs(analytics, condition, scope, &servers, since).await?,
+        ));
+    }
+
     let mut hits = Vec::new();
     for server in &servers {
         let labels: Vec<String> =
@@ -69,28 +78,6 @@ pub async fn backtest_rule(
             value,
             at,
         };
-        if let Condition::Logs { level, count, within_secs, service, text } = condition {
-            let matcher = LogMatch {
-                min_severity: read_log_severity(level).unwrap_or(17),
-                service: service.clone(),
-                text: text.clone(),
-            };
-            let window_ms = i64::from(*within_secs) * 1000;
-            let subject = service.as_deref().unwrap_or("Logs");
-            for (at, found) in list_busy_windows(
-                analytics,
-                server.id.clone(),
-                matcher,
-                since,
-                window_ms,
-                u64::from(*count),
-            )
-            .await?
-            {
-                hits.push(make_hit(subject, format!("{found} {level} lines"), at));
-            }
-            continue;
-        }
         if let Condition::ProcessStopped { name } = condition {
             for (at, process) in read_process_exits(analytics, &server.id, since).await? {
                 if name.as_ref().is_none_or(|name| name == &process) {
@@ -140,6 +127,89 @@ pub async fn backtest_rule(
     hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
     hits.truncate(MAX_HITS);
     Ok(Some(hits))
+}
+
+async fn backtest_logs(
+    analytics: &Analytics,
+    condition: &Condition,
+    scope: &Scope,
+    servers: &[Server],
+    since: i64,
+) -> Result<Vec<BacktestHit>> {
+    let Condition::Logs { level, count, within_secs, service, text, .. } = condition
+    else {
+        return Ok(Vec::new());
+    };
+
+    let matcher = LogMatch {
+        min_severity: read_log_severity(level).unwrap_or(17),
+        service: service.clone(),
+        text: text.clone(),
+    };
+    let window_ms = i64::from(*within_secs) * 1000;
+    let counts = count_logs_by_source(analytics, matcher.clone(), since).await?;
+
+    let mut targets: Vec<(String, String, Target)> = servers
+        .iter()
+        .filter(|server| {
+            let labels: Vec<String> =
+                serde_json::from_value(server.labels.clone()).unwrap_or_default();
+            scope.includes(&server.id, &labels)
+        })
+        .map(|server| (server.id.clone(), server.name.clone(), Target::Server))
+        .collect();
+    if *scope == Scope::All {
+        targets.push((
+            OTLP_SERVER_ID.to_string(),
+            OTLP_SERVER_NAME.to_string(),
+            Target::Telemetry,
+        ));
+    }
+
+    let mut hits = Vec::new();
+    for (server_id, server_name, target) in targets {
+        let sources = counts.get(&server_id).map(Vec::as_slice).unwrap_or_default();
+        let groups: Vec<(String, LogMatch)> = if condition.groups_by_source(target) {
+            sources
+                .iter()
+                .map(|(source, _)| {
+                    let matcher =
+                        LogMatch { service: Some(source.clone()), ..matcher.clone() };
+                    (source.clone(), matcher)
+                })
+                .collect()
+        } else if sources.is_empty() {
+            Vec::new()
+        } else {
+            let subject = service.clone().unwrap_or_else(|| "Logs".to_string());
+            vec![(subject, matcher.clone())]
+        };
+
+        for (subject, matcher) in groups {
+            for (at, found) in list_busy_windows(
+                analytics,
+                server_id.clone(),
+                matcher,
+                since,
+                window_ms,
+                u64::from(*count),
+            )
+            .await?
+            {
+                hits.push(BacktestHit {
+                    server_id: server_id.clone(),
+                    server_name: server_name.clone(),
+                    subject: subject.clone(),
+                    value: format!("{found} {level} lines"),
+                    at,
+                });
+            }
+        }
+    }
+
+    hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
+    hits.truncate(MAX_HITS);
+    Ok(hits)
 }
 
 async fn read_metric_rows(

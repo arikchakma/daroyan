@@ -3,6 +3,7 @@ import type { ColumnVisibilityState } from '@tanstack/react-table';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
+import { AlertBanners } from '~/components/alerts/alert-banners';
 import { Icon } from '~/components/icons/icon';
 import { LogSheet } from '~/components/logs/log-sheet';
 import { ViewMenu, VIEWS } from '~/components/logs/view-menu';
@@ -97,6 +98,8 @@ export default function LogsPage() {
         : []
     )
   );
+  const server = filterValues.server!;
+  const isTelemetryView = !server.negate && server.values.includes(OTLP_SERVER_ID);
   const view = (VIEWS.find((item) => item.value === searchParams.get('level'))?.value ?? 'all') as LevelView;
   const q = searchParams.get('q') ?? '';
   const page = Math.max(Number(searchParams.get('page')) || 1, 1);
@@ -332,6 +335,7 @@ export default function LogsPage() {
         />
       ) : (
         <div className="flex flex-1 flex-col gap-2 px-3 pt-1 pb-3">
+          {isTelemetryView && <AlertBanners serverId={OTLP_SERVER_ID} />}
           <div className="flex h-9 w-full items-center gap-0.5 rounded-lg bg-surface-default p-1 shadow-filter-bar ring-1 ring-border-elevated ring-inset">
             <ViewMenu view={view} onChange={(next) => setParams({ level: next === 'all' ? null : next })} />
             <SearchFilter

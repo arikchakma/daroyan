@@ -1226,6 +1226,7 @@ export interface components {
             reason?: string | null;
             rule_id: string;
             server_id?: string | null;
+            subject?: string | null;
         };
         AlertRule: {
             condition: components["schemas"]["Condition"];
@@ -1333,6 +1334,7 @@ export interface components {
         } | {
             /** Format: int32 */
             count: number;
+            group_by?: components["schemas"]["LogGroup"];
             /** @enum {string} */
             kind: "logs";
             level: string;
@@ -1382,6 +1384,7 @@ export interface components {
             reason?: string | null;
             rule_id: components["schemas"]["AlertRuleId"];
             server_id?: string | null;
+            subject?: string | null;
             time_zone?: string | null;
         };
         CreateAlertRuleBody: {
@@ -1865,6 +1868,8 @@ export interface components {
             state: components["schemas"]["State"];
             top?: components["schemas"]["TopProcess"][];
         };
+        /** @enum {string} */
+        LogGroup: "server" | "source";
         LogLine: {
             /** Format: int64 */
             at: number;

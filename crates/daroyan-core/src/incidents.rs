@@ -289,13 +289,15 @@ pub async fn declare_from_rule(
         })
         .into_iter()
         .collect();
-    let related = vec![
-        rule_item,
-        RelatedItem {
-            kind: fire.target_kind.to_string(),
-            id: fire.target_id.to_string(),
-        },
-    ];
+    let target_item =
+        ["server", "check", "cron"]
+            .contains(&fire.target_kind)
+            .then(|| RelatedItem {
+                kind: fire.target_kind.to_string(),
+                id: fire.target_id.to_string(),
+            });
+    let related: Vec<RelatedItem> =
+        std::iter::once(rule_item).chain(target_item).collect();
     let incident = database
         .create_incident(
             new_id(Prefix::Incident),

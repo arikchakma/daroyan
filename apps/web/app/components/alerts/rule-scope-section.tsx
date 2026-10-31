@@ -85,7 +85,12 @@ export function RuleScopeSection(props: RuleScopeSectionProps) {
           />
         </div>
       )}
-      {scopeKind === 'all' && <p className="p-3.5 text-caption leading-4.5 text-text-secondary">{matches}</p>}
+      {scopeKind === 'all' && (
+        <p className="p-3.5 text-caption leading-4.5 text-text-secondary">
+          {matches}
+          {form.kind === 'logs' && ' OpenTelemetry lines that match no server count too, with one alert per service.'}
+        </p>
+      )}
     </FormSection>
   );
 }

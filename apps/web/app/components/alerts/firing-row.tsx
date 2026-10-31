@@ -2,10 +2,25 @@ import type { Schemas } from '@daroyan/client';
 import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
+import type { IconName } from '~/components/icons/icon-paths';
 import { Button } from '~/components/ui/button';
 import { describeFiring, describeMuteEnd, getAlertTargetPath, joinNames } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
 import { formatClock } from '~/utils/format';
+import { OTLP_SERVER_ID } from '~/utils/logs';
+
+function getOpenAction(alert: Schemas['Alert']): { icon: IconName; label: string } {
+  if (alert.check_id) {
+    return { icon: 'activity', label: 'Open Check' };
+  }
+  if (alert.cron_id) {
+    return { icon: 'clock', label: 'Open Cron' };
+  }
+  if (alert.server_id === OTLP_SERVER_ID) {
+    return { icon: 'terminal', label: 'Open Logs' };
+  }
+  return { icon: 'server', label: 'Open Server' };
+}
 
 type FiringRowProps = {
   alert: Schemas['Alert'];
@@ -18,6 +33,7 @@ type FiringRowProps = {
 export function FiringRow(props: FiringRowProps) {
   const { alert, deliveries, mute, onMute, onUnmute } = props;
 
+  const openAction = getOpenAction(alert);
   const names = [...new Set(deliveries.map((delivery) => delivery.integration_name))];
   const sentAt = deliveries.at(-1)?.sent_at;
   const sent = mute
@@ -61,8 +77,8 @@ export function FiringRow(props: FiringRowProps) {
             variant="secondary"
             className="w-fit"
           >
-            <Icon name={alert.check_id ? 'activity' : alert.cron_id ? 'clock' : 'server'} />
-            {alert.check_id ? 'Open Check' : alert.cron_id ? 'Open Cron' : 'Open Server'}
+            <Icon name={openAction.icon} />
+            {openAction.label}
           </Button>
         </>
       )}

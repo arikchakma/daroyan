@@ -42,10 +42,10 @@ import {
   describeMuteEnd,
   describeResolve,
   describeScope,
-  findMute,
   formatForSecs,
   formatLimit,
-  getAlertTargetId,
+  getAlertMute,
+  getMutedService,
   getRuleState,
   INTEGRATION_KINDS,
   isCheckKind,
@@ -56,6 +56,7 @@ import {
   readThreshold,
 } from '~/utils/alerts';
 import { formatClock, formatDate, formatRelative } from '~/utils/format';
+import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
 const RECENT_MS = 30 * 86_400_000;
 
@@ -82,7 +83,7 @@ export function RuleBody(props: RuleBodyProps) {
   const wholeMute = mutes.find(isWholeRuleMute);
   const firing = history.filter((alert) => alert.status === 'firing');
   const state = getRuleState(rule, firing, mutes);
-  const firstMute = wholeMute ?? mutes.find((mute) => firing.some((alert) => findMute([mute], rule.id, getAlertTargetId(alert))));
+  const firstMute = wholeMute ?? mutes.find((mute) => firing.some((alert) => getAlertMute([mute], alert)));
   const stateLabel =
     state === 'muted' && firstMute
       ? `Muted ${describeMuteEnd(firstMute)}`
@@ -127,14 +128,24 @@ export function RuleBody(props: RuleBodyProps) {
       toast.success('Unmuted');
     },
   });
-  const targetNames = (mute: Schemas['AlertMute']) =>
-    mute.server_id
-      ? (servers.find((server) => server.id === mute.server_id)?.name ?? 'A server')
-      : mute.check_id
-        ? (checks.find((check) => check.id === mute.check_id)?.name ?? 'A check')
-        : mute.cron_id
-          ? (crons.find((cron) => cron.id === mute.cron_id)?.name ?? 'A cron')
-          : 'Every target';
+  const getTargetName = (mute: Schemas['AlertMute']) => {
+    if (mute.subject) {
+      return mute.subject;
+    }
+    if (mute.server_id === OTLP_SERVER_ID) {
+      return OTLP_SERVER_NAME;
+    }
+    if (mute.server_id) {
+      return servers.find((server) => server.id === mute.server_id)?.name ?? 'A server';
+    }
+    if (mute.check_id) {
+      return checks.find((check) => check.id === mute.check_id)?.name ?? 'A check';
+    }
+    if (mute.cron_id) {
+      return crons.find((cron) => cron.id === mute.cron_id)?.name ?? 'A cron';
+    }
+    return 'Every target';
+  };
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['alert-rules'] });
@@ -284,17 +295,23 @@ export function RuleBody(props: RuleBodyProps) {
           {firing.length > 0 && (
             <DetailSection
               title="Firing Now"
-              summary={`${firing.length} ${noun}${firing.length === 1 ? '' : 's'}`}
+              summary={`${firing.length} alert${firing.length === 1 ? '' : 's'}`}
             >
               <div className="overflow-hidden rounded-2xl border border-border-ring bg-surface-default shadow-card [&>*+*]:border-t [&>*+*]:border-border-row">
                 {firing.map((alert) => (
                   <FiringRow
                     key={alert.id}
                     alert={alert}
-                    mute={findMute(mutes, rule.id, getAlertTargetId(alert))}
+                    mute={getAlertMute(mutes, alert)}
                     onMute={() =>
                       setMuting({
-                        target: { serverId: alert.server_id, checkId: alert.check_id, cronId: alert.cron_id, name: alert.target_name },
+                        target: {
+                          serverId: alert.server_id,
+                          checkId: alert.check_id,
+                          cronId: alert.cron_id,
+                          subject: getMutedService(alert, rule),
+                          name: getMutedService(alert, rule) ?? alert.target_name,
+                        },
                       })
                     }
                     onUnmute={(muteId) => unmute.mutate({ muteId })}
@@ -375,7 +392,7 @@ export function RuleBody(props: RuleBodyProps) {
             </div>
             {mutes.map((mute) => (
               <p key={mute.id} className="text-body text-text-secondary">
-                {targetNames(mute)} muted {describeMuteEnd(mute)}
+                {getTargetName(mute)} muted {describeMuteEnd(mute)}
               </p>
             ))}
             {rule.options.message_limit != null && (

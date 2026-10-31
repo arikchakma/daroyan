@@ -4,10 +4,11 @@ use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
 use crate::alerts::message::Moment;
-use crate::alerts::rules::{Condition, read_log_severity};
+use crate::alerts::rules::{Condition, Target, read_log_severity};
 use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
-    LogMatch, LogRun, list_last_lines, list_top_messages, summarize_log_run,
+    LogMatch, LogRun, OTLP_SERVER_ID, list_last_lines, list_top_messages,
+    summarize_log_run,
 };
 use crate::analytics::server_events::{ProcessExit, find_last_exit};
 use crate::analytics::server_states::{DiskTrend, fit_disk_trend};
@@ -139,12 +140,20 @@ impl FactSources<'_> {
         let now_ms = now.timestamp_millis();
 
         let facts = match condition {
-            Condition::Logs { level, within_secs, service, text, .. } => {
-                let Some(server) = self.server else { return Ok(AlertFacts::None) };
+            Condition::Logs { level, within_secs, text, .. } => {
+                let Some(server_id) = alert.server_id.clone() else {
+                    return Ok(AlertFacts::None);
+                };
 
+                let target = match server_id.as_str() {
+                    OTLP_SERVER_ID => Target::Telemetry,
+                    _ => Target::Server,
+                };
                 let matcher = LogMatch {
                     min_severity: read_log_severity(level).unwrap_or(17),
-                    service: service.clone(),
+                    service: condition
+                        .log_source(target, &alert.subject)
+                        .map(str::to_string),
                     text: text.clone(),
                 };
 
@@ -153,7 +162,7 @@ impl FactSources<'_> {
                 if moment.is_resolved() {
                     let run = summarize_log_run(
                         self.analytics,
-                        server.id.clone(),
+                        server_id,
                         matcher,
                         alert.started_at.timestamp_millis() - window_ms,
                         window_ms,
@@ -164,7 +173,7 @@ impl FactSources<'_> {
                 } else {
                     let top = list_top_messages(
                         self.analytics,
-                        server.id.clone(),
+                        server_id,
                         matcher,
                         now_ms - window_ms,
                         TOP_MESSAGES,
@@ -329,6 +338,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::alerts::rules::LogGroup;
 
     const MIGRATION_DISKS: &str =
         include_str!("../../../daroyan-migration/duckdb/0009_disk_states.sql");
@@ -535,6 +545,7 @@ mod tests {
             within_secs: 300,
             service: Some("api".to_string()),
             text: None,
+            group_by: LogGroup::Server,
         };
         let gather = |condition: Condition, subject: &'static str, moment: Moment| {
             let sources = &sources;

@@ -90,6 +90,7 @@ Every 15 seconds the engine in `daroyan-core/src/alerts/engine.rs` checks each e
 | `cpu`, `memory`, `load` | The server, when the value is above `above` |
 | `disk` | Each mount above `above` |
 | `process_stopped`, `port_closed` | Each watched process or port (or the one named) that is down |
+| `logs` | The server, when at least `count` matching lines arrived in `within_secs`. With `group_by: source` each source on the server gets its own alert. A rule on all servers also covers OpenTelemetry lines that match no server, with one alert per service, linked to the Logs page |
 
 A breach must last `for_secs` before the alert fires. Then the rule's integrations get a message, and they get another when the alert resolves. While a server is offline, only `offline` rules are checked. Disabling a rule, or taking a server out of its scope, resolves its alerts without a message. Messages link to `APP_URL/servers/{id}` when `APP_URL` is set.
 

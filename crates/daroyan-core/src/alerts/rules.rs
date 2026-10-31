@@ -35,6 +35,8 @@ pub enum Condition {
         within_secs: u32,
         service: Option<String>,
         text: Option<String>,
+        #[serde(default)]
+        group_by: LogGroup,
     },
     UptimeDown,
     ResponseTime {
@@ -55,6 +57,7 @@ pub enum Target {
     Server,
     Check,
     Cron,
+    Telemetry,
 }
 
 impl Target {
@@ -63,19 +66,27 @@ impl Target {
             Self::Server => "Server",
             Self::Check => "Check",
             Self::Cron => "Cron",
+            Self::Telemetry => "Source",
         }
     }
 
-    pub fn path(self) -> &'static str {
+    pub fn kind(self) -> &'static str {
         match self {
-            Self::Server => "servers",
-            Self::Check => "uptime",
-            Self::Cron => "crons",
+            Self::Server => "server",
+            Self::Check => "check",
+            Self::Cron => "cron",
+            Self::Telemetry => "telemetry",
         }
     }
 
     pub fn url(self, app_url: &str, id: &str) -> String {
-        format!("{}/{}/{id}", app_url.trim_end_matches('/'), self.path())
+        let app_url = app_url.trim_end_matches('/');
+        match self {
+            Self::Server => format!("{app_url}/servers/{id}"),
+            Self::Check => format!("{app_url}/uptime/{id}"),
+            Self::Cron => format!("{app_url}/crons/{id}"),
+            Self::Telemetry => format!("{app_url}/logs?server_id={id}"),
+        }
     }
 }
 
@@ -103,6 +114,26 @@ impl Condition {
             Self::Logs { count, .. } => Some(f64::from(*count)),
             _ => None,
         }
+    }
+
+    pub fn groups_by_source(&self, target: Target) -> bool {
+        match self {
+            Self::Logs { group_by, .. } => {
+                target == Target::Telemetry || *group_by == LogGroup::Source
+            }
+            _ => false,
+        }
+    }
+
+    pub fn log_source<'a>(&'a self, target: Target, subject: &'a str) -> Option<&'a str> {
+        let Self::Logs { service, .. } = self else {
+            return None;
+        };
+
+        if self.groups_by_source(target) {
+            return Some(subject);
+        }
+        service.as_deref()
     }
 
     pub fn is_below(&self) -> bool {
@@ -150,6 +181,14 @@ impl Aggregation {
             Self::P95 => "p95",
         }
     }
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LogGroup {
+    #[default]
+    Server,
+    Source,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -521,7 +560,7 @@ pub fn describe_condition(condition: &Condition, for_secs: u32) -> String {
         }
         Condition::CronMissed => "Cron missed a run".to_string(),
         Condition::CronFailed => "Cron failed".to_string(),
-        Condition::Logs { level, count, within_secs, service, text } => {
+        Condition::Logs { level, count, within_secs, service, text, group_by } => {
             let mut what = format!(
                 "{count}+ {} lines in {}",
                 describe_log_level(level),
@@ -532,6 +571,9 @@ pub fn describe_condition(condition: &Condition, for_secs: u32) -> String {
             }
             if let Some(text) = text {
                 what.push_str(&format!(" matching \"{text}\""));
+            }
+            if *group_by == LogGroup::Source {
+                what.push_str(" per source");
             }
             what
         }
@@ -609,6 +651,13 @@ mod tests {
             describe_condition(&condition, 0),
             "10+ error lines in 5m from Linkity API"
         );
+        let grouped: Condition = serde_json::from_str(
+            r#"{"kind":"logs","level":"error","count":3,"within_secs":300,"group_by":"source"}"#,
+        )
+        .unwrap();
+        assert_eq!(describe_condition(&grouped, 0), "3+ error lines in 5m per source");
+        assert_eq!(grouped.log_source(Target::Server, "api"), Some("api"));
+        assert_eq!(condition.log_source(Target::Server, "Logs"), Some("Linkity API"));
         assert!(validate_rule(&condition, &Scope::All, 0).is_ok());
         let bad = Condition::Logs {
             level: "loud".into(),
@@ -616,6 +665,7 @@ mod tests {
             within_secs: 300,
             service: None,
             text: None,
+            group_by: LogGroup::Server,
         };
         assert!(validate_rule(&bad, &Scope::All, 0).is_err());
         let short = Condition::Logs {
@@ -624,6 +674,7 @@ mod tests {
             within_secs: 10,
             service: None,
             text: None,
+            group_by: LogGroup::Server,
         };
         assert!(validate_rule(&short, &Scope::All, 0).is_err());
     }

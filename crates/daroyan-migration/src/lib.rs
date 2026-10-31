@@ -25,6 +25,7 @@ mod m20261103_000001_delivery_threads;
 mod m20261104_000001_delivery_payloads;
 mod m20261105_000001_ingest_throttled_logs;
 mod m20261106_000001_uptime_confirmation;
+mod m20261107_000001_alert_mute_subjects;
 mod parts;
 
 pub struct Migrator;
@@ -57,6 +58,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261104_000001_delivery_payloads::Migration),
             Box::new(m20261105_000001_ingest_throttled_logs::Migration),
             Box::new(m20261106_000001_uptime_confirmation::Migration),
+            Box::new(m20261107_000001_alert_mute_subjects::Migration),
         ]
     }
 }

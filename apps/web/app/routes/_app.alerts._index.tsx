@@ -31,8 +31,7 @@ import { listServersOptions } from '~/queries/servers';
 import {
   describeMuteEnd,
   describeScope,
-  findMute,
-  getAlertTargetId,
+  getAlertMute,
   getRuleState,
   isCheckKind,
   isCronKind,
@@ -98,7 +97,7 @@ export default function AlertsPage() {
     const mutedNames = ruleMutes.map((mute) =>
       isWholeRuleMute(mute)
         ? `muted ${describeMuteEnd(mute)}`
-        : `${firing?.find((alert) => findMute([mute], rule.id, getAlertTargetId(alert)))?.target_name ?? 'a target'} muted ${describeMuteEnd(mute)}`
+        : `${mute.subject ?? firing?.find((alert) => getAlertMute([mute], alert))?.target_name ?? 'a target'} muted ${describeMuteEnd(mute)}`
     );
     const notes = [
       ...mutedNames,

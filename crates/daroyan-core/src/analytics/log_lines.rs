@@ -29,6 +29,7 @@ const MAX_NAME_BYTES: usize = 200;
 const AGENT_SERVICE: &str = "Daroyan agent";
 const LINE_OVERHEAD: u64 = 64;
 pub const OTLP_SERVER_ID: &str = "otlp";
+pub const OTLP_SERVER_NAME: &str = "OpenTelemetry";
 const LEVEL_KEYS: [&str; 4] = ["level", "severity", "status", "log.level"];
 
 pub struct LogRow {
@@ -493,6 +494,7 @@ pub async fn list_log_sources(analytics: &Analytics) -> Result<Vec<LogSource>> {
         .await
 }
 
+#[derive(Clone)]
 pub struct LogMatch {
     pub min_severity: u8,
     pub service: Option<String>,
@@ -512,27 +514,33 @@ fn push_match(sql: &mut String, values: &mut Vec<SqlValue>, matcher: &LogMatch) 
     }
 }
 
-pub async fn count_logs_by_server(
+pub async fn count_logs_by_source(
     analytics: &Analytics,
     matcher: LogMatch,
     since: i64,
-) -> Result<HashMap<String, u64>> {
-    analytics
+) -> Result<HashMap<String, Vec<(String, u64)>>> {
+    let rows: Vec<(String, String, u64)> = analytics
         .read(move |conn| {
             let mut sql = String::from(
-                "SELECT server_id, count(*) FROM log_lines WHERE logged_at >= ?",
+                "SELECT server_id, service, count(*) FROM log_lines WHERE logged_at >= ?",
             );
             let mut values = vec![SqlValue::BigInt(since)];
             push_match(&mut sql, &mut values, &matcher);
-            sql.push_str(" GROUP BY server_id");
+            sql.push_str(" GROUP BY server_id, service ORDER BY service");
             let mut statement = conn.prepare(&sql)?;
             statement
                 .query_map(params_from_iter(values), |row| {
-                    Ok((row.get(0)?, row.get(1)?))
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                 })?
                 .collect()
         })
-        .await
+        .await?;
+
+    let mut counts: HashMap<String, Vec<(String, u64)>> = HashMap::new();
+    for (server_id, service, found) in rows {
+        counts.entry(server_id).or_default().push((service, found));
+    }
+    Ok(counts)
 }
 
 pub async fn list_busy_windows(
@@ -879,8 +887,8 @@ mod tests {
             service: Some("api".into()),
             text: Some("ses".into()),
         };
-        let counts = super::count_logs_by_server(&analytics, matcher(), 0).await.unwrap();
-        assert_eq!(counts.get("srv_1"), Some(&7));
+        let counts = super::count_logs_by_source(&analytics, matcher(), 0).await.unwrap();
+        assert_eq!(counts.get("srv_1"), Some(&vec![("api".to_string(), 7)]));
         let windows =
             super::list_busy_windows(&analytics, "srv_1".into(), matcher(), 0, 1_000, 5)
                 .await

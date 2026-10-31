@@ -2,6 +2,7 @@ import type { Schemas } from '@daroyan/client';
 
 import type { IconName } from '~/components/icons/icon-paths';
 import { formatClock, formatDate } from '~/utils/format';
+import { OTLP_SERVER_ID } from '~/utils/logs';
 
 export const CONNECTED_MESSAGE = 'daroyan:integration-connected';
 
@@ -127,12 +128,26 @@ export const MESSAGE_LIMIT_OPTIONS: { value: string; label: string }[] = [
 
 export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export function findMute(mutes: Schemas['AlertMute'][], ruleId: string, targetId?: string | null) {
+type MuteMatch = Pick<Schemas['Alert'], 'rule_id' | 'server_id' | 'check_id' | 'cron_id' | 'subject'>;
+
+export function getAlertMute(mutes: Schemas['AlertMute'][], alert: MuteMatch) {
+  const targetId = getAlertTargetId(alert);
   return mutes.find(
     (mute) =>
-      mute.rule_id === ruleId &&
+      mute.rule_id === alert.rule_id &&
+      (!mute.subject || mute.subject === alert.subject) &&
       (isWholeRuleMute(mute) || mute.server_id === targetId || mute.check_id === targetId || mute.cron_id === targetId)
   );
+}
+
+export function getMutedService(alert: Pick<Schemas['Alert'], 'server_id' | 'subject'>, rule?: Schemas['AlertRule']) {
+  if (alert.server_id === OTLP_SERVER_ID) {
+    return alert.subject;
+  }
+  if (readLogCondition(rule?.condition)?.group_by === 'source') {
+    return alert.subject;
+  }
+  return null;
 }
 
 export function isWholeRuleMute(mute: Schemas['AlertMute']) {
@@ -154,7 +169,7 @@ export function getRuleState(
   if (!rule.enabled) {
     return 'disabled';
   }
-  if (isWholeMuted || (own.length > 0 && own.every((alert) => findMute(mutes, rule.id, getAlertTargetId(alert))))) {
+  if (isWholeMuted || (own.length > 0 && own.every((alert) => getAlertMute(mutes, alert)))) {
     return 'muted';
   }
   if (rule.options.message_limit != null && rule.quiet_until && new Date(rule.quiet_until).getTime() > now) {
@@ -298,9 +313,12 @@ export function joinNames(names: string[]) {
   return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
-export function getAlertTargetPath(alert: Pick<Schemas['Alert'], 'server_id' | 'check_id' | 'cron_id'>) {
+export function getAlertTargetPath(alert: Pick<Schemas['Alert'], 'server_id' | 'check_id' | 'cron_id' | 'subject'>) {
   if (alert.cron_id) {
     return `/crons/${alert.cron_id}`;
+  }
+  if (alert.server_id === OTLP_SERVER_ID) {
+    return `/logs?${new URLSearchParams({ server_id: OTLP_SERVER_ID, service: alert.subject })}`;
   }
   return alert.check_id ? `/uptime/${alert.check_id}` : `/servers/${alert.server_id}`;
 }

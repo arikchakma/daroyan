@@ -209,7 +209,7 @@ fn list_tool_defs() -> Vec<ToolDef> {
             "create_alert_mute",
             POST,
             "/v1/alert-mutes",
-            "Mute a rule, optionally for one server, check or cron, until a time or forever."
+            "Mute a rule, optionally for one server, check or cron and one subject on it, until a time or forever."
         ),
         tool!(
             "delete_alert_mute",
@@ -777,6 +777,7 @@ fn build_overview(
                     "rule_id",
                     "rule_name",
                     "target_name",
+                    "subject",
                     "severity",
                     "value",
                     "started_at",

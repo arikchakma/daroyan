@@ -2895,6 +2895,12 @@
               "string",
               "null"
             ]
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3306,6 +3312,9 @@
                 "format": "int32",
                 "minimum": 0
               },
+              "group_by": {
+                "$ref": "#/components/schemas/LogGroup"
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -3513,6 +3522,12 @@
             "$ref": "#/components/schemas/AlertRuleId"
           },
           "server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
             "type": [
               "string",
               "null"
@@ -5323,6 +5338,13 @@
             }
           }
         }
+      },
+      "LogGroup": {
+        "type": "string",
+        "enum": [
+          "server",
+          "source"
+        ]
       },
       "LogLine": {
         "type": "object",

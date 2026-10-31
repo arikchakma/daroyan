@@ -22,11 +22,12 @@ import { listAlertMutesOptions, listAlertsOptions } from '~/queries/alerts';
 import { listIncidentsOptions } from '~/queries/incidents';
 import { overviewEventsOptions, overviewTrendsOptions } from '~/queries/overview';
 import { listIssuesOptions, traceServicesOptions, traceStatusOptions } from '~/queries/traces';
-import { describeFiring, findMute } from '~/utils/alerts';
+import { describeFiring, getAlertMute, getAlertTargetPath } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
 import { formatUntil } from '~/utils/crons';
 import { DAY_MS, formatClock, formatCount, formatRelative } from '~/utils/format';
 import { getStatusMeta, isClosed, isMaintenance } from '~/utils/incidents';
+import { OTLP_SERVER_ID } from '~/utils/logs';
 import { formatMs, formatUptime, getUptime } from '~/utils/uptime';
 
 const CRON_BARS = 30;
@@ -52,6 +53,9 @@ const CRITICAL_ICON = 'text-tone-critical-fg';
 const WARNING_ICON = 'text-tone-warning-fg';
 
 function getAlertLink(alert: Schemas['Alert']) {
+  if (alert.server_id === OTLP_SERVER_ID) {
+    return { href: getAlertTargetPath(alert), action: 'Open Logs' };
+  }
   if (alert.server_id) {
     return { href: `/servers/${alert.server_id}`, action: 'Open Server' };
   }
@@ -132,7 +136,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
   const { data: issues = [] } = useQuery(listIssuesOptions());
 
   const activeAlerts = firing.filter(
-    (alert) => !findMute(mutes, alert.rule_id, alert.server_id ?? alert.check_id ?? alert.cron_id)
+    (alert) => !getAlertMute(mutes, alert)
   );
   const alertedIds = new Set(activeAlerts.flatMap((alert) => [alert.server_id, alert.check_id, alert.cron_id]));
   const openIncidents = incidents.filter((incident) => !isMaintenance(incident) && !isClosed(incident.status));
