@@ -30,6 +30,7 @@ export function TraceDetail(props: TraceDetailProps) {
   const [selectedId, setSelectedId] = useState(() => (nodes.find((node) => node.status === 'error') ?? root).span_id);
   const selected = nodes.find((node) => node.span_id === selectedId) ?? root;
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [timelineWidth, setTimelineWidth] = useState(0);
   const visible = nodes.filter((node) => !node.ancestors.some((id) => collapsed.has(id)));
   const traceStart = Math.min(...nodes.map((node) => node.started_at));
   const traceEnd = Math.max(...nodes.map((node) => node.started_at + node.duration_us));
@@ -103,7 +104,17 @@ export function TraceDetail(props: TraceDetailProps) {
               <div className="min-w-160">
                 <div className="flex h-8 items-center bg-surface-row px-4">
                   <span className="w-75 shrink-0 text-caption font-medium text-text-secondary">Span</span>
-                  <div className="relative h-3.5 flex-1 text-[11px] leading-3.5 text-text-tertiary">
+                  <div
+                    ref={(element) => {
+                      if (!element) {
+                        return;
+                      }
+                      const observer = new ResizeObserver(([entry]) => setTimelineWidth(entry!.contentRect.width));
+                      observer.observe(element);
+                      return () => observer.disconnect();
+                    }}
+                    className="relative h-3.5 flex-1 text-[11px] leading-3.5 text-text-tertiary"
+                  >
                     {Array.from({ length: TICKS }, (_, index) => (
                       <span
                         key={index}
@@ -137,6 +148,7 @@ export function TraceDetail(props: TraceDetailProps) {
                       color={getServiceColor(node.service)}
                       offset={(node.started_at - traceStart) / total}
                       width={node.duration_us / total}
+                      timelineWidth={timelineWidth}
                       isSelected={node.span_id === selected.span_id}
                       onSelect={() => setSelectedId(node.span_id)}
                     />
