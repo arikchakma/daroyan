@@ -6,6 +6,8 @@ import type { SpanNode } from '~/utils/traces';
 
 const INDENT = 16;
 const GUIDE_X = 6;
+const LABEL_CHAR = 6.6;
+const LABEL_GAP = 6;
 
 type WaterfallRowProps = {
   node: SpanNode;
@@ -15,15 +17,21 @@ type WaterfallRowProps = {
   color: string;
   offset: number;
   width: number;
+  timelineWidth: number;
   isSelected: boolean;
   onSelect: () => void;
 };
 
 export function WaterfallRow(props: WaterfallRowProps) {
-  const { node, isRoot, isCollapsed, onToggle, color, offset, width, isSelected, onSelect } = props;
+  const { node, isRoot, isCollapsed, onToggle, color, offset, width, timelineWidth, isSelected, onSelect } = props;
 
   const isError = node.status === 'error';
-  const isLabelBefore = offset + width > 0.7;
+  const duration = formatMicros(node.duration_us);
+  const labelWidth = duration.length * LABEL_CHAR;
+  const barWidth = Math.max(width * timelineWidth, 2);
+  const isLabelInside = barWidth >= labelWidth + LABEL_GAP * 2;
+  const isLabelBefore =
+    !isLabelInside && timelineWidth > 0 && (1 - offset - width) * timelineWidth < labelWidth + LABEL_GAP;
   const ownX = (node.depth - 1) * INDENT + GUIDE_X;
 
   return (
@@ -93,23 +101,29 @@ export function WaterfallRow(props: WaterfallRowProps) {
             />
           ))}
           <span
-            className="absolute top-1/2 h-2 -translate-y-1/2 rounded-[2px]"
+            className="absolute top-1/2 flex h-4.5 -translate-y-1/2 items-center overflow-hidden rounded-[4px]"
             style={{
               left: `${offset * 100}%`,
               width: `max(${width * 100}%, 2px)`,
               backgroundColor: isError ? ERROR_COLOR : color,
             }}
-          />
-          <span
-            className="absolute top-1/2 -translate-y-1/2 font-mono text-code-small whitespace-nowrap text-text-tertiary"
-            style={
-              isLabelBefore
-                ? { right: `calc(${(1 - offset) * 100}% + 6px)` }
-                : { left: `calc(${(offset + width) * 100}% + 6px)` }
-            }
           >
-            {formatMicros(node.duration_us)}
+            {isLabelInside && (
+              <span className="px-1.5 font-mono text-code-small whitespace-nowrap text-white">{duration}</span>
+            )}
           </span>
+          {!isLabelInside && (
+            <span
+              className="absolute top-1/2 -translate-y-1/2 font-mono text-code-small whitespace-nowrap text-text-tertiary"
+              style={
+                isLabelBefore
+                  ? { right: `calc(${(1 - offset) * 100}% + ${LABEL_GAP}px)` }
+                  : { left: `calc(${(offset + width) * 100}% + ${LABEL_GAP}px)` }
+              }
+            >
+              {duration}
+            </span>
+          )}
         </span>
       </button>
       {node.hasChildren && (
