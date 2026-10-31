@@ -1334,6 +1334,7 @@ export interface components {
         } | {
             /** Format: int32 */
             count: number;
+            group_by?: components["schemas"]["LogGroup"];
             /** @enum {string} */
             kind: "logs";
             level: string;
@@ -1867,6 +1868,8 @@ export interface components {
             state: components["schemas"]["State"];
             top?: components["schemas"]["TopProcess"][];
         };
+        /** @enum {string} */
+        LogGroup: "server" | "source";
         LogLine: {
             /** Format: int64 */
             at: number;

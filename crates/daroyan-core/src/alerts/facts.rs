@@ -4,7 +4,7 @@ use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
 use crate::alerts::message::Moment;
-use crate::alerts::rules::{Condition, read_log_severity};
+use crate::alerts::rules::{Condition, Target, read_log_severity};
 use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, LogRun, OTLP_SERVER_ID, list_last_lines, list_top_messages,
@@ -140,18 +140,20 @@ impl FactSources<'_> {
         let now_ms = now.timestamp_millis();
 
         let facts = match condition {
-            Condition::Logs { level, within_secs, service, text, .. } => {
+            Condition::Logs { level, within_secs, text, .. } => {
                 let Some(server_id) = alert.server_id.clone() else {
                     return Ok(AlertFacts::None);
                 };
 
-                let service = match server_id.as_str() {
-                    OTLP_SERVER_ID => Some(alert.subject.clone()),
-                    _ => service.clone(),
+                let target = match server_id.as_str() {
+                    OTLP_SERVER_ID => Target::Telemetry,
+                    _ => Target::Server,
                 };
                 let matcher = LogMatch {
                     min_severity: read_log_severity(level).unwrap_or(17),
-                    service,
+                    service: condition
+                        .log_source(target, &alert.subject)
+                        .map(str::to_string),
                     text: text.clone(),
                 };
 
@@ -336,6 +338,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::alerts::rules::LogGroup;
 
     const MIGRATION_DISKS: &str =
         include_str!("../../../daroyan-migration/duckdb/0009_disk_states.sql");
@@ -542,6 +545,7 @@ mod tests {
             within_secs: 300,
             service: Some("api".to_string()),
             text: None,
+            group_by: LogGroup::Server,
         };
         let gather = |condition: Condition, subject: &'static str, moment: Moment| {
             let sources = &sources;

@@ -25,8 +25,7 @@ use crate::alerts::rules::{
 };
 use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
-    LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_server,
-    count_otlp_logs_by_service,
+    LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source,
 };
 use crate::analytics::server_states::aggregate_server_metric;
 use crate::analytics::uptime_results::{aggregate_check_metric, list_cert_expiries};
@@ -204,44 +203,41 @@ impl AlertEngine {
         &self,
         condition: &Condition,
         now: DateTime<Utc>,
-    ) -> Result<HashMap<String, u64>> {
+    ) -> Result<HashMap<String, Vec<(String, u64)>>> {
         let Some((matcher, since)) = to_log_match(condition, now) else {
             return Ok(HashMap::new());
         };
-        count_logs_by_server(&self.analytics, matcher, since).await
+        count_logs_by_source(&self.analytics, matcher, since).await
     }
 
     // OpenTelemetry lines that match no server alert once per service, like a
     // log monitor grouped by service.
-    async fn read_telemetry_target(
-        &self,
+    fn read_telemetry_target(
         parsed: &ParsedRule,
-        now: DateTime<Utc>,
-    ) -> Result<Option<TargetReadings>> {
+        log_counts: &HashMap<String, Vec<(String, u64)>>,
+    ) -> Option<TargetReadings> {
         let Condition::Logs { level, within_secs, .. } = &parsed.condition else {
-            return Ok(None);
-        };
-        let Some((matcher, since)) = to_log_match(&parsed.condition, now) else {
-            return Ok(None);
+            return None;
         };
         if parsed.scope != Scope::All {
-            return Ok(None);
+            return None;
         }
 
-        let readings = count_otlp_logs_by_service(&self.analytics, matcher, since)
-            .await?
+        let readings = log_counts
+            .get(OTLP_SERVER_ID)
             .into_iter()
+            .flatten()
             .map(|(service, found)| {
-                make_log_reading(&service, found, level, *within_secs)
+                make_log_reading(service, *found, level, *within_secs)
             })
             .collect();
 
-        Ok(Some(TargetReadings {
+        Some(TargetReadings {
             id: OTLP_SERVER_ID.to_string(),
             name: OTLP_SERVER_NAME.to_string(),
             target: Target::Telemetry,
             readings: Some(readings),
-        }))
+        })
     }
 
     async fn aggregate_servers(
@@ -373,9 +369,9 @@ impl AlertEngine {
                     is_connected,
                     mem_total: server.mem_total,
                     report: server.report.as_ref(),
-                    log_count: log_counts
+                    log_counts: log_counts
                         .get(&server.server.id)
-                        .copied()
+                        .map(Vec::as_slice)
                         .unwrap_or_default(),
                 };
                 let readings = match &aggregates {
@@ -414,7 +410,7 @@ impl AlertEngine {
             })
             .collect();
 
-        targets.extend(self.read_telemetry_target(parsed, now).await?);
+        targets.extend(Self::read_telemetry_target(parsed, &log_counts));
 
         Ok(targets)
     }

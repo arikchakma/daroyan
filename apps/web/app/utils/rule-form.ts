@@ -44,6 +44,7 @@ export type RuleFormState = {
   logWithin: number;
   logService: string;
   logText: string;
+  logGroupBy: Schemas['LogGroup'];
   scopeKind: ScopeKind;
   label: string;
   pickedIds: string[];
@@ -272,6 +273,7 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
     logWithin: savedLog?.within_secs ?? 300,
     logService: savedLog?.service ?? '',
     logText: savedLog?.text ?? '',
+    logGroupBy: savedLog?.group_by ?? 'server',
     scopeKind: readScopeKind(scope),
     label: scope?.kind === 'label' ? scope.label : '',
     pickedIds: readPickedIds(scope),
@@ -353,6 +355,7 @@ export function readCondition(form: RuleFormState): Schemas['Condition'] | undef
         within_secs: form.logWithin,
         service: form.logService || null,
         text: form.logText.trim() || null,
+        group_by: form.logGroupBy,
       };
     case 'cert_days':
       return { kind, below: limit };

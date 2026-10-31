@@ -514,51 +514,33 @@ fn push_match(sql: &mut String, values: &mut Vec<SqlValue>, matcher: &LogMatch) 
     }
 }
 
-pub async fn count_logs_by_server(
+pub async fn count_logs_by_source(
     analytics: &Analytics,
     matcher: LogMatch,
     since: i64,
-) -> Result<HashMap<String, u64>> {
-    analytics
+) -> Result<HashMap<String, Vec<(String, u64)>>> {
+    let rows: Vec<(String, String, u64)> = analytics
         .read(move |conn| {
             let mut sql = String::from(
-                "SELECT server_id, count(*) FROM log_lines WHERE logged_at >= ?",
+                "SELECT server_id, service, count(*) FROM log_lines WHERE logged_at >= ?",
             );
             let mut values = vec![SqlValue::BigInt(since)];
             push_match(&mut sql, &mut values, &matcher);
-            sql.push_str(" GROUP BY server_id");
+            sql.push_str(" GROUP BY server_id, service ORDER BY service");
             let mut statement = conn.prepare(&sql)?;
             statement
                 .query_map(params_from_iter(values), |row| {
-                    Ok((row.get(0)?, row.get(1)?))
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                 })?
                 .collect()
         })
-        .await
-}
+        .await?;
 
-pub async fn count_otlp_logs_by_service(
-    analytics: &Analytics,
-    matcher: LogMatch,
-    since: i64,
-) -> Result<Vec<(String, u64)>> {
-    analytics
-        .read(move |conn| {
-            let mut sql = String::from(
-                "SELECT service, count(*) FROM log_lines WHERE server_id = ? AND logged_at >= ?",
-            );
-            let mut values =
-                vec![SqlValue::Text(OTLP_SERVER_ID.to_string()), SqlValue::BigInt(since)];
-            push_match(&mut sql, &mut values, &matcher);
-            sql.push_str(" GROUP BY service ORDER BY service");
-            let mut statement = conn.prepare(&sql)?;
-            statement
-                .query_map(params_from_iter(values), |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })?
-                .collect()
-        })
-        .await
+    let mut counts: HashMap<String, Vec<(String, u64)>> = HashMap::new();
+    for (server_id, service, found) in rows {
+        counts.entry(server_id).or_default().push((service, found));
+    }
+    Ok(counts)
 }
 
 pub async fn list_busy_windows(
@@ -905,8 +887,8 @@ mod tests {
             service: Some("api".into()),
             text: Some("ses".into()),
         };
-        let counts = super::count_logs_by_server(&analytics, matcher(), 0).await.unwrap();
-        assert_eq!(counts.get("srv_1"), Some(&7));
+        let counts = super::count_logs_by_source(&analytics, matcher(), 0).await.unwrap();
+        assert_eq!(counts.get("srv_1"), Some(&vec![("api".to_string(), 7)]));
         let windows =
             super::list_busy_windows(&analytics, "srv_1".into(), matcher(), 0, 1_000, 5)
                 .await

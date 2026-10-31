@@ -309,8 +309,8 @@ export function RuleBody(props: RuleBodyProps) {
                           serverId: alert.server_id,
                           checkId: alert.check_id,
                           cronId: alert.cron_id,
-                          subject: getMutedService(alert),
-                          name: getMutedService(alert) ?? alert.target_name,
+                          subject: getMutedService(alert, rule),
+                          name: getMutedService(alert, rule) ?? alert.target_name,
                         },
                       })
                     }

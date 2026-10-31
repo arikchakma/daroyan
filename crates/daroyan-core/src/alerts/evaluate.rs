@@ -1,4 +1,4 @@
-use crate::alerts::rules::{Condition, format_duration};
+use crate::alerts::rules::{Condition, LogGroup, format_duration};
 use crate::servers::report::LastReport;
 use crate::servers::status::get_percent;
 
@@ -53,21 +53,29 @@ pub struct ServerSnapshot<'a> {
     pub is_connected: bool,
     pub mem_total: u64,
     pub report: Option<&'a LastReport>,
-    pub log_count: u64,
+    pub log_counts: &'a [(String, u64)],
 }
 
 pub fn find_readings(
     condition: &Condition,
     server: &ServerSnapshot,
 ) -> Option<Vec<Reading>> {
-    if let Condition::Logs { level, within_secs, service, .. } = condition {
+    if let Condition::Logs { level, within_secs, service, group_by, .. } = condition {
+        if *group_by == LogGroup::Source {
+            return Some(
+                server
+                    .log_counts
+                    .iter()
+                    .map(|(source, found)| {
+                        make_log_reading(source, *found, level, *within_secs)
+                    })
+                    .collect(),
+            );
+        }
+
         let subject = service.as_deref().unwrap_or("Logs");
-        return Some(vec![make_log_reading(
-            subject,
-            server.log_count,
-            level,
-            *within_secs,
-        )]);
+        let found = server.log_counts.iter().map(|(_, found)| found).sum();
+        return Some(vec![make_log_reading(subject, found, level, *within_secs)]);
     }
     let report = server.report?;
     if let Condition::Offline = condition {
@@ -221,7 +229,7 @@ mod tests {
             is_connected,
             mem_total: 100,
             report: Some(&report),
-            log_count: 0,
+            log_counts: &[],
         };
         find_readings(&condition, &server)
     }
@@ -282,8 +290,42 @@ mod tests {
             is_connected: false,
             mem_total: 0,
             report: None,
-            log_count: 0,
+            log_counts: &[],
         };
         assert_eq!(find_readings(&Condition::Offline, &server), None);
+    }
+
+    #[test]
+    fn groups_log_lines_by_server_or_source() {
+        let counts = [("api".to_string(), 4), ("worker".to_string(), 2)];
+        let server = ServerSnapshot {
+            is_connected: true,
+            mem_total: 0,
+            report: None,
+            log_counts: &counts,
+        };
+        let logs = |group_by| Condition::Logs {
+            level: "error".to_string(),
+            count: 3,
+            within_secs: 300,
+            service: None,
+            text: None,
+            group_by,
+        };
+
+        let readings = find_readings(&logs(LogGroup::Server), &server).unwrap();
+        let read = |readings: Vec<Reading>| -> Vec<(String, f64)> {
+            readings
+                .into_iter()
+                .map(|reading| (reading.subject, reading.value))
+                .collect()
+        };
+        assert_eq!(read(readings), [("Logs".to_string(), 6.0)]);
+
+        let readings = find_readings(&logs(LogGroup::Source), &server).unwrap();
+        assert_eq!(
+            read(readings),
+            [("api".to_string(), 4.0), ("worker".to_string(), 2.0)]
+        );
     }
 }

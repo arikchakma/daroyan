@@ -133,7 +133,7 @@ impl AlertMessage<'_> {
     }
 
     fn logs(&self, facts: &LogFacts) -> Details {
-        let Condition::Logs { level, within_secs, service, .. } = self.condition else {
+        let Condition::Logs { level, within_secs, .. } = self.condition else {
             return self.generic();
         };
 
@@ -141,10 +141,11 @@ impl AlertMessage<'_> {
         let lines = format!("{found} {} lines", describe_log_level(level));
 
         let mut fields = vec![self.target_field()];
-        if self.target == Target::Telemetry {
-            fields.push(Field::new("Service", &self.alert.subject));
-        } else if let Some(service) = service {
-            fields.push(Field::new("Source", service));
+        if let Some(source) = self.condition.log_source(self.target, &self.alert.subject)
+        {
+            let label =
+                if self.target == Target::Telemetry { "Service" } else { "Source" };
+            fields.push(Field::new(label, source));
         }
         fields.push(self.started_field());
         fields.push(Field::new("Rule", &self.rule.name));
@@ -693,19 +694,16 @@ impl AlertMessage<'_> {
             vec![("server_id", self.target_id.to_string()), ("range", "1h".to_string())];
 
         match self.condition {
-            Condition::Logs { level, service, text, .. } => {
+            Condition::Logs { level, text, .. } => {
                 let view = match level.as_str() {
                     "error" | "warn" | "info" => level.as_str(),
                     _ => "all",
                 };
 
-                let service = match self.target {
-                    Target::Telemetry => Some(&self.alert.subject),
-                    _ => service.as_ref(),
-                };
+                let service = self.condition.log_source(self.target, &self.alert.subject);
 
                 params.push(("level", view.to_string()));
-                params.extend(service.map(|service| ("service", service.clone())));
+                params.extend(service.map(|service| ("service", service.to_string())));
                 params.extend(text.iter().map(|text| ("q", text.clone())));
             }
             Condition::ProcessStopped { .. } => {
@@ -841,6 +839,7 @@ mod tests {
 
     use super::*;
     use crate::alerts::facts::{CheckCount, CheckResult, LogLine};
+    use crate::alerts::rules::LogGroup;
     use crate::analytics::log_lines::LogRun;
     use crate::analytics::server_events::ProcessExit;
     use crate::analytics::server_states::DiskTrend;
@@ -943,6 +942,7 @@ mod tests {
             within_secs: 300,
             service: Some("Inboxjot API".to_string()),
             text: None,
+            group_by: LogGroup::Server,
         }
     }
 
@@ -997,6 +997,7 @@ mod tests {
                 within_secs: 300,
                 service: None,
                 text: None,
+                group_by: LogGroup::Server,
             },
             make_alert("inboxjot-api", "11 error lines in 5m"),
             AlertFacts::Logs(LogFacts { top: Vec::new(), run: None }),
@@ -1022,6 +1023,29 @@ mod tests {
         );
         let mute = details.links.iter().find(|link| link.label == "Mute").unwrap();
         assert!(mute.url.starts_with("https://daroyan.test/logs?server_id=otlp&mute="));
+    }
+
+    #[test]
+    fn builds_an_error_spike_grouped_by_source() {
+        let case = Case::new(
+            Condition::Logs {
+                level: "error".to_string(),
+                count: 10,
+                within_secs: 300,
+                service: None,
+                text: None,
+                group_by: LogGroup::Source,
+            },
+            make_alert("inboxjot-worker", "11 error lines in 5m"),
+            AlertFacts::Logs(LogFacts { top: Vec::new(), run: None }),
+        );
+        let details = case.details(Moment::Firing);
+
+        assert_eq!(details.fields[1], Field::new("Source", "inboxjot-worker"));
+        assert_eq!(
+            details.links[0].url,
+            "https://daroyan.test/logs?server_id=server_1&range=1h&level=error&service=inboxjot-worker"
+        );
     }
 
     #[test]

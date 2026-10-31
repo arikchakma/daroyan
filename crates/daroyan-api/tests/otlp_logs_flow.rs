@@ -614,3 +614,118 @@ async fn alerts_once_per_service_on_otlp_lines_without_a_server() {
 
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[tokio::test]
+async fn alerts_once_per_source_on_a_server_when_grouped() {
+    let dir = std::env::temp_dir()
+        .join(format!("daroyan-otlp-source-alerts-{}", std::process::id()));
+    let state = open_test_state(&dir).await;
+    let analytics = state.analytics.clone();
+    let mut engine = AlertEngine::new(
+        state.database.clone(),
+        state.agents.clone(),
+        state.analytics.clone(),
+        state.config.app_url.clone(),
+    );
+    let http = common::sign_in(&state.database).await;
+    let base = serve(build_app(state)).await;
+
+    let created: Value = http
+        .post(format!("{base}/v1/ingest-tokens"))
+        .json(&json!({ "name": "inboxjot" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = created["token"].as_str().unwrap().to_string();
+
+    let condition = json!({
+        "kind": "logs", "level": "error", "count": 3, "within_secs": 300, "group_by": "source"
+    });
+    let rule: Value = http
+        .post(format!("{base}/v1/alert-rules"))
+        .json(&json!({
+            "name": "Errors per App",
+            "condition": condition,
+            "scope": { "kind": "all" },
+            "integration_ids": []
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(rule["summary"], "3+ error lines in 5m per source", "{rule}");
+
+    let batches = [
+        make_request("inboxjot-api", "inboxjot", error_lines(4, "SES SendEmail failed")),
+        make_request("inboxjot-worker", "inboxjot", error_lines(3, "job failed")),
+        make_request("inboxjot-cron", "inboxjot", error_lines(1, "late run")),
+    ];
+    for batch in batches {
+        let response = Client::new()
+            .post(format!("{base}/v1/otlp/v1/logs"))
+            .bearer_auth(&token)
+            .header("content-type", "application/x-protobuf")
+            .body(batch.encode_to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    analytics.flush().await.unwrap();
+
+    engine.check_alerts(chrono::Utc::now()).await.unwrap();
+    let mut firing: Vec<(String, String, String)> = http
+        .get(format!("{base}/v1/alerts?status=firing"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Vec<Value>>()
+        .await
+        .unwrap()
+        .iter()
+        .map(|alert| {
+            (
+                alert["server_id"].as_str().unwrap().to_string(),
+                alert["subject"].as_str().unwrap().to_string(),
+                alert["value"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    firing.sort_unstable();
+    assert_eq!(
+        firing,
+        [
+            ("srv_inboxjot".into(), "inboxjot-api".into(), "4 error lines in 5m".into()),
+            (
+                "srv_inboxjot".into(),
+                "inboxjot-worker".into(),
+                "3 error lines in 5m".into()
+            ),
+        ]
+    );
+
+    let backtest: Value = http
+        .post(format!("{base}/v1/alert-rules/backtest"))
+        .json(&json!({ "condition": condition, "scope": { "kind": "all" } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut hits: Vec<&str> = backtest["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|hit| hit["subject"].as_str().unwrap())
+        .collect();
+    hits.sort_unstable();
+    assert_eq!(hits, ["inboxjot-api", "inboxjot-worker"]);
+
+    std::fs::remove_dir_all(dir).ok();
+}

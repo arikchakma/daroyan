@@ -3312,6 +3312,9 @@
                 "format": "int32",
                 "minimum": 0
               },
+              "group_by": {
+                "$ref": "#/components/schemas/LogGroup"
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -5335,6 +5338,13 @@
             }
           }
         }
+      },
+      "LogGroup": {
+        "type": "string",
+        "enum": [
+          "server",
+          "source"
+        ]
       },
       "LogLine": {
         "type": "object",

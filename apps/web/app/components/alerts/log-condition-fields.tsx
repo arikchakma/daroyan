@@ -1,3 +1,4 @@
+import type { Schemas } from '@daroyan/client';
 import { useQuery } from '@tanstack/react-query';
 
 import { FieldGrid } from '~/components/alerts/field-grid';
@@ -10,6 +11,19 @@ import { logSourcesOptions } from '~/queries/logs';
 import { getUnit, LOG_LEVEL_OPTIONS, LOG_WINDOW_OPTIONS } from '~/utils/alerts';
 import { formatSpan, isLimitValid } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState } from '~/utils/rule-form';
+
+const LOG_GROUP_OPTIONS: { value: Schemas['LogGroup']; label: string }[] = [
+  { value: 'server', label: 'Server' },
+  { value: 'source', label: 'Each source' },
+];
+
+function getLimitHint(form: RuleFormState) {
+  const lines = `${form.critical} or more matching lines arrive within ${formatSpan(form.logWithin)}`;
+  if (form.logGroupBy === 'source') {
+    return `Fires when ${lines} from one source, with one alert per source.`;
+  }
+  return `Fires when ${lines}.`;
+}
 
 type LogConditionFieldsProps = {
   form: RuleFormState;
@@ -26,7 +40,7 @@ export function LogConditionFields(props: LogConditionFieldsProps) {
 
   return (
     <>
-      <FieldGrid hint="Only processes with logs: true send lines.">
+      <FieldGrid columns={3} hint="Only processes with logs: true send lines.">
         <SelectField
           label="Level"
           value={form.logLevel}
@@ -38,6 +52,12 @@ export function LogConditionFields(props: LogConditionFieldsProps) {
           value={form.logService || 'any'}
           onValueChange={(value) => onChange({ logService: !value || value === 'any' ? '' : value })}
           items={[{ value: 'any', label: 'Any source' }, ...services.map((service) => ({ value: service, label: service }))]}
+        />
+        <SelectField
+          label="Group By"
+          value={form.logGroupBy}
+          onValueChange={(value) => onChange({ logGroupBy: value === 'source' ? 'source' : 'server' })}
+          items={LOG_GROUP_OPTIONS}
         />
       </FieldGrid>
       <FieldRow label="Text" hint="Optional. Matches lines that contain this text.">
@@ -54,7 +74,7 @@ export function LogConditionFields(props: LogConditionFieldsProps) {
       </FieldRow>
       <FieldGrid
         columns={3}
-        hint={isValid ? `Fires when ${form.critical} or more matching lines arrive within ${formatSpan(form.logWithin)}.` : undefined}
+        hint={isValid ? getLimitHint(form) : undefined}
       >
         <UnitField
           label="At Least"

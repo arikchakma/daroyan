@@ -93,12 +93,13 @@ export function AlertBanners(props: AlertBannersProps) {
     return null;
   }
 
+  const findRule = (alert: Schemas['Alert']) => rules.find((rule) => rule.id === alert.rule_id);
   const getTarget = (alert: Schemas['Alert']): MuteTarget => ({
     serverId: alert.server_id,
     checkId: alert.check_id,
     cronId: alert.cron_id,
-    subject: getMutedService(alert),
-    name: getMutedService(alert) ?? alert.target_name,
+    subject: getMutedService(alert, findRule(alert)),
+    name: getMutedService(alert, findRule(alert)) ?? alert.target_name,
   });
 
   return (
@@ -118,7 +119,7 @@ export function AlertBanners(props: AlertBannersProps) {
                   {alert.rule_name} is muted {describeMuteEnd(mute)}
                 </p>
                 <p className="text-body text-text-primary">
-                  {detail} {mute.creator?.name.split(' ')[0] ?? 'Someone'} muted {isWholeRuleMute(mute) ? 'the whole rule' : `it on ${getMutedService(alert) ?? alert.target_name}`}
+                  {detail} {mute.creator?.name.split(' ')[0] ?? 'Someone'} muted {isWholeRuleMute(mute) ? 'the whole rule' : `it on ${getMutedService(alert, findRule(alert)) ?? alert.target_name}`}
                   {mute.ends_at ? ` for ${formatMinutesLong(mute.created_at, mute.ends_at)}` : ' until it resolves'}
                   {mute.reason ? `: "${mute.reason}".` : '.'}
                   {resume}
@@ -169,7 +170,7 @@ export function AlertBanners(props: AlertBannersProps) {
                     <Menu.Positioner align="start">
                       <Menu.Popup>
                         <Menu.Group>
-                          <Menu.GroupLabel>{getMutedService(alert) ?? alert.target_name} only</Menu.GroupLabel>
+                          <Menu.GroupLabel>{getMutedService(alert, findRule(alert)) ?? alert.target_name} only</Menu.GroupLabel>
                           {QUICK_LENGTHS.map((length) => (
                             <Menu.Item
                               key={length.value}
@@ -179,7 +180,7 @@ export function AlertBanners(props: AlertBannersProps) {
                                   server_id: alert.server_id,
                                   check_id: alert.check_id,
                                   cron_id: alert.cron_id,
-                                  subject: getMutedService(alert),
+                                  subject: getMutedService(alert, findRule(alert)),
                                   ends_at: getMuteEnd(length.value),
                                   time_zone: getBrowserTimeZone(),
                                 })

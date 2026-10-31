@@ -140,8 +140,14 @@ export function getAlertMute(mutes: Schemas['AlertMute'][], alert: MuteMatch) {
   );
 }
 
-export function getMutedService(alert: Pick<Schemas['Alert'], 'server_id' | 'subject'>) {
-  return alert.server_id === OTLP_SERVER_ID ? alert.subject : null;
+export function getMutedService(alert: Pick<Schemas['Alert'], 'server_id' | 'subject'>, rule?: Schemas['AlertRule']) {
+  if (alert.server_id === OTLP_SERVER_ID) {
+    return alert.subject;
+  }
+  if (readLogCondition(rule?.condition)?.group_by === 'source') {
+    return alert.subject;
+  }
+  return null;
 }
 
 export function isWholeRuleMute(mute: Schemas['AlertMute']) {
