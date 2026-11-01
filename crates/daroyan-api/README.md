@@ -11,7 +11,7 @@ cargo run -p daroyan-api
 
 At start the API runs the SQLite and DuckDB migrations, then listens on `PORT` (default 8900). `data/` holds `daroyan.db` (SQLite, WAL mode) and `daroyan.duckdb`.
 
-The release binary embeds the dashboard from `apps/web/build/client` and `install.sh`, so build the web app first. Any path outside `/v1` gets the dashboard. `/install.sh` downloads the agent from the GitHub release matching the API's version.
+The release binary embeds `install.sh` and the dashboard from `apps/web/build/client`, which `build.rs` brotli-compresses, so build the web app first. Any path outside `/v1` gets the dashboard. `/install.sh` downloads the agent from the GitHub release matching the API's version.
 
 ## Sign In
 
