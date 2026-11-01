@@ -14,5 +14,8 @@ export default defineConfig({
       '/mcp': process.env.API_URL ?? 'http://127.0.0.1:8910',
     },
   },
+  build: {
+    assetsInlineLimit: (file) => (file.endsWith('.woff2') ? false : undefined),
+  },
   plugins: [tailwindcss(), reactRouter()],
 });

@@ -87,7 +87,7 @@ const CACHE_HASHED: &str = "public, max-age=31536000, immutable";
 const CACHE_STATIC: &str = "public, max-age=3600";
 const CACHE_PAGE: &str = "no-cache";
 
-const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
 const SECURITY_HEADERS: [(HeaderName, &str); 4] = [
     (header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY),

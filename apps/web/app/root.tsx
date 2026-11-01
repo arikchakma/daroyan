@@ -8,6 +8,8 @@ import { getThemeRootProps, THEME_SCRIPT } from '~/utils/theme';
 import type { Route } from './+types/root';
 
 import './app.css';
+import geistMonoCore from './fonts/geist-mono-core.woff2?url';
+import interCore from './fonts/inter-core.woff2?url';
 import { IconSprite } from './components/icons/icon-sprite';
 import { NavigationProgress } from './components/navigation/navigation-progress';
 
@@ -17,16 +19,13 @@ export const links: Route.LinksFunction = () => {
     { rel: 'icon', href: '/icon.svg', type: 'image/svg+xml' },
     { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
     { rel: 'manifest', href: '/manifest.webmanifest' },
-    { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-    {
-      rel: 'preconnect',
-      href: 'https://fonts.gstatic.com',
-      crossOrigin: 'anonymous',
-    },
-    {
-      rel: 'stylesheet',
-      href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=Geist+Mono:wght@400..500&display=swap',
-    },
+    ...[interCore, geistMonoCore].map((href) => ({
+      rel: 'preload',
+      href,
+      as: 'font',
+      type: 'font/woff2',
+      crossOrigin: 'anonymous' as const,
+    })),
   ];
 };
 

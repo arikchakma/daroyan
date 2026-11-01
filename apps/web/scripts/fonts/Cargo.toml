@@ -1,0 +1,19 @@
+[package]
+name = "daroyan-fonts"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+harfrust = "0.15.0"
+hb-subset = "0.3.0"
+read-fonts = "0.46.0"
+unicode-properties = { version = "0.1.3", default-features = false, features = ["general-category"] }
+ureq = "3.4.2"
+woofwoof = "1.0.2"
+write-fonts = "0.55.0"
+
+[profile.dev]
+opt-level = 3
