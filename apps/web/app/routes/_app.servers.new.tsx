@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, Navigate } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
@@ -60,8 +60,14 @@ export default function AddServerPage() {
     refetchIntervalInBackground: true,
   });
 
-  const tokenCreatedAt = installToken ? new Date(installToken.created_at).getTime() : Infinity;
-  const newServer = servers?.find((server) => new Date(server.created_at).getTime() >= tokenCreatedAt);
+  // The install token stays cached, so its created_at is older than a server
+  // added on the last visit. Remember the servers already listed and only
+  // follow one that shows up while this page is open.
+  const knownServerIds = useRef<Set<string> | null>(null);
+  if (servers && knownServerIds.current === null) {
+    knownServerIds.current = new Set(servers.map((server) => server.id));
+  }
+  const newServer = servers?.find((server) => knownServerIds.current && !knownServerIds.current.has(server.id));
   if (newServer?.last_seen_at) {
     return <Navigate to={`/servers/${newServer.id}`} replace />;
   }
