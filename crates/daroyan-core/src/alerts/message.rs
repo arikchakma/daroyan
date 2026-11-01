@@ -598,18 +598,27 @@ impl AlertMessage<'_> {
 
     fn describe_trigger(&self) -> String {
         let held = self.held();
+        let warning = self
+            .options
+            .warning
+            .filter(|_| Level::read(&self.alert.severity) == Level::Warning);
+        let trigger =
+            if warning.is_some() { "The warning fires" } else { "The rule fires" };
 
         match self.condition {
             Condition::Logs { count, within_secs, .. } => format!(
-                "The rule fires at {count} lines in {}.",
+                "{trigger} at {} lines in {}.",
+                warning.unwrap_or(f64::from(*count)),
                 format_span(u64::from(*within_secs))
             ),
             Condition::Cpu { above }
             | Condition::Memory { above }
             | Condition::Disk { above } => {
-                format!("The rule fires above {above}%{held}.")
+                format!("{trigger} above {}%{held}.", warning.unwrap_or(*above))
             }
-            Condition::Load { above } => format!("The rule fires above {above}{held}."),
+            Condition::Load { above } => {
+                format!("{trigger} above {}{held}.", warning.unwrap_or(*above))
+            }
             _ => format!(
                 "The rule fires on: {}.",
                 describe_rule(self.condition, self.options, self.for_secs())
@@ -1345,6 +1354,51 @@ mod tests {
         assert_eq!(details.summary.to_string(), "Inboxjot Server is down.");
         assert_eq!(details.snippet.unwrap().lines, ["DNS 0 ms · Connect failed"]);
         assert_eq!(details.fields[1], Field::new("Error", "Connection refused"));
+    }
+
+    #[test]
+    fn names_the_warning_threshold_on_a_warning() {
+        let mut alert = make_alert("CPU", "62%");
+        alert.severity = "warning".to_string();
+
+        let mut case = Case::new(
+            Condition::Cpu { above: 80.0 },
+            alert,
+            AlertFacts::Usage(UsageFacts {
+                load1: 4.1,
+                cores: 3,
+                mem_used: 0,
+                mem_total: 1,
+                top: Vec::new(),
+            }),
+        );
+        case.rule = make_rule(60);
+        case.options.warning = Some(60.0);
+
+        assert_eq!(
+            case.details(Moment::Firing).summary.to_string(),
+            "CPU at 62% for 1 min. The warning fires above 60% for 1 min."
+        );
+
+        case.alert.severity = "critical".to_string();
+        assert_eq!(
+            case.details(Moment::Escalated).summary.to_string(),
+            "CPU at 62% for 1 min. The rule fires above 80% for 1 min."
+        );
+
+        let mut alert = make_alert("Inboxjot API", "6 error lines in 5m");
+        alert.severity = "warning".to_string();
+        let mut case = Case::new(
+            logs_condition(),
+            alert,
+            AlertFacts::Logs(LogFacts { top: Vec::new(), run: None }),
+        );
+        case.options.warning = Some(5.0);
+
+        assert_eq!(
+            case.details(Moment::Firing).summary.to_string(),
+            "6 error lines in the last 5 min. The warning fires at 5 lines in 5 min."
+        );
     }
 
     #[test]
