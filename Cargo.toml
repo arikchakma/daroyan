@@ -46,7 +46,8 @@ flexi_logger = "0.31.2"
 log = "0.4"
 nix = { version = "0.31", features = ["fs"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
-rust-embed = { version = "8.7", features = ["mime-guess"] }
+brotli = "9.0.0"
+brotli-decompressor = "6.0.1"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1.0.9"
@@ -103,6 +104,9 @@ unnecessary_self_imports = "warn"
 unnecessary_semicolon = "warn"
 unnested_or_patterns = "warn"
 unseparated_literal_suffix = "warn"
+[profile.dev.package.brotli]
+opt-level = 3
+
 [profile.release]
 lto = true
 codegen-units = 1
