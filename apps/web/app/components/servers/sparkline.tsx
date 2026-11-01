@@ -1,3 +1,5 @@
+const BUCKETS = 24;
+
 type SparklineProps = {
   values: number[];
 };
@@ -8,13 +10,17 @@ export function Sparkline(props: SparklineProps) {
     return null;
   }
 
+  const size = Math.ceil(values.length / BUCKETS);
+  const averages = Array.from({ length: Math.ceil(values.length / size) }, (_, index) => {
+    const bucket = values.slice(index * size, (index + 1) * size);
+    return bucket.reduce((sum, value) => sum + value, 0) / bucket.length;
+  });
+
   const width = 60;
   const height = 32;
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const range = max - min || 1;
-  const step = width / (values.length - 1);
-  const coords = values.map((value, index) => [index * step, height - ((value - min) / range) * height] as const);
+  const max = Math.max(...averages) || 1;
+  const step = width / Math.max(averages.length - 1, 1);
+  const coords = averages.map((value, index) => [index * step, height - (value / max) * height] as const);
   const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
   const last = coords[coords.length - 1];
 
