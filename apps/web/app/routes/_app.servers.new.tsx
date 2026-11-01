@@ -54,17 +54,17 @@ export default function AddServerPage() {
     setLimits(nextLimits);
     setTokenVersion(tokenVersion + 1);
   };
-  const { data: servers } = useQuery({
+  const { data: servers, isFetchedAfterMount } = useQuery({
     ...listServersOptions(),
     refetchInterval: 3_000,
     refetchIntervalInBackground: true,
   });
 
-  // The install token stays cached, so its created_at is older than a server
-  // added on the last visit. Remember the servers already listed and only
-  // follow one that shows up while this page is open.
+  // The cached server list can be missing a server that already enrolled.
+  // Snapshot the first fetch this visit started, then only follow a server
+  // that shows up after that.
   const knownServerIds = useRef<Set<string> | null>(null);
-  if (servers && knownServerIds.current === null) {
+  if (servers && isFetchedAfterMount && knownServerIds.current === null) {
     knownServerIds.current = new Set(servers.map((server) => server.id));
   }
   const newServer = servers?.find((server) => knownServerIds.current && !knownServerIds.current.has(server.id));
