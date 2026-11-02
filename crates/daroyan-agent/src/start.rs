@@ -77,6 +77,7 @@ fn collect_reports(
         let host = collect_host(&config.server, &collector.system, &collector.networks);
         let watched = processes.check_processes(
             &collector.system,
+            &collector.process_io,
             collector.elapsed_secs,
             &mut events,
         );

@@ -2,10 +2,12 @@ pub mod connections;
 pub mod disk;
 pub mod host;
 pub mod network;
+pub mod process_io;
 pub mod top;
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::collect::process_io::ProcessIo;
 use crate::config::Config;
 use daroyan_protocol::report::State;
 use sysinfo::{
@@ -16,6 +18,7 @@ pub struct Collector {
     pub system: System,
     pub disks: Disks,
     pub networks: Networks,
+    pub process_io: ProcessIo,
     refreshed_at: Instant,
     pub elapsed_secs: f64,
 }
@@ -26,6 +29,7 @@ impl Collector {
             system: System::new(),
             disks: Disks::new_with_refreshed_list(),
             networks: Networks::new_with_refreshed_list(),
+            process_io: ProcessIo::default(),
             refreshed_at: Instant::now(),
             elapsed_secs: 0.0,
         };
@@ -52,6 +56,7 @@ impl Collector {
         );
         self.disks.refresh(true);
         self.networks.refresh(true);
+        self.process_io.refresh();
     }
 
     pub fn collect_state(&self, config: &Config) -> State {
