@@ -40,9 +40,11 @@ export function clientLoader() {
   const tokens = queryClient.getQueriesData<Schemas['InstallToken']>({ queryKey: ['install-token'] });
   for (const [queryKey, token] of tokens) {
     const isUsed = token && servers.some((server) => new Date(server.created_at) >= new Date(token.created_at));
-    if (isUsed) {
-      queryClient.removeQueries({ queryKey, exact: true });
+    if (!isUsed) {
+      continue;
     }
+
+    queryClient.removeQueries({ queryKey, exact: true });
   }
 
   return null;
