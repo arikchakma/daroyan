@@ -24,8 +24,17 @@ curl -fsSL https://daroyan.com/install.sh | sudo DAROYAN_TOKEN=dy_agent_... sh
 | `DAROYAN_TOKEN` | required | The install token |
 | `DAROYAN_API_URL` | `https://daroyan.com` | The API |
 | `DAROYAN_BINARY` | download | A local binary to install instead of the download |
+| `DAROYAN_COMMANDS` | `0` | `1` lets the agent start, stop and restart units and containers, for `restart` and `agent.commands` |
+| `DAROYAN_PROCESS_IO` | `0` | `1` gives the agent `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` to read other users' `/proc/<pid>/io` for per-process disk I/O |
 
-The script creates the `daroyan` user, writes `/etc/daroyan/agent.yml` once (a rerun keeps it), and swaps the binary in with a rename, so a rerun upgrades a running agent safely. It installs a systemd unit, or an OpenRC service on Alpine. For process restarts it adds a polkit rule, or a sudoers entry for `systemctl start/stop/restart` when polkit is not installed. With Docker installed, it also allows `docker start/stop/restart` and the read-only `docker ps/inspect/logs/events` through sudo.
+The script creates the `daroyan` user, writes `/etc/daroyan/agent.yml` once (a rerun keeps it), and swaps the binary in with a rename, so a rerun upgrades a running agent safely. It installs a systemd unit, or an OpenRC service on Alpine. With Docker installed, it allows the read-only `docker ps/inspect/logs/events` through sudo.
+
+The agent starts with no capabilities, and under systemd with `NoNewPrivileges` when it needs no sudo. The two flags add more:
+
+- `DAROYAN_COMMANDS=1` adds a polkit rule for `systemctl start/stop/restart`, or a sudoers entry when polkit is not installed, plus `docker start/stop/restart` through sudo.
+- `DAROYAN_PROCESS_IO=1` adds the two capabilities. They let the agent read any file and any process's memory, so leave them off unless you need per-process disk I/O.
+
+A rerun without a flag keeps what the server already has. Set a flag to `0` to remove it.
 
 Build the Linux binary on a Mac with `cargo zigbuild --release -p daroyan-agent --target aarch64-unknown-linux-musl` (or `x86_64-unknown-linux-musl`). The musl build is static and runs on Ubuntu, Debian and Alpine.
 
@@ -67,17 +76,17 @@ Each process entry has exactly one source. The source decides how the agent find
 | `server.labels` | `[]` | Labels in the dashboard |
 | `processes[].name` | the source value | The label in the dashboard. Names must be unique |
 | `processes[].user` | any | Count only processes owned by this user |
-| `processes[].restart.attempts` | no restarts | Restart a stopped `systemd` or `docker` entry up to this many times. An error on `process` entries |
+| `processes[].restart.attempts` | no restarts | Restart a stopped `systemd` or `docker` entry up to this many times. An error on `process` entries. Needs `DAROYAN_COMMANDS=1` at install |
 | `processes[].logs` | `false` | Send this process's logs. `docker` reads `docker logs`, `systemd` reads the journal. An error on `process` entries. `logs: { format: nginx }` sets the format; see Logs |
 | `processes[].restart.within` | `10m` | The window for `attempts`, as `30s`, `10m` or `1h`. Once spent, the agent sends a `process_restart_gave_up` event and stops trying until the process runs again |
-| `files[].name`, `files[].path` | none | A log file to send. The agent follows it and handles rotation. The `daroyan` user must be able to read it |
+| `files[].name`, `files[].path` | none | A log file to send. The agent follows it and handles rotation. The `daroyan` user must be able to read it; see Logs |
 | `files[].format` | `auto` | The file's log format; see Logs |
 | `ports[].name` | none | The label in the dashboard |
 | `ports[].host` | `localhost` | The host to connect to |
 | `ports[].port` | required | Checked with a TCP connect, 3 second timeout |
 | `host.disks` | `[]` | Report only these mount points. Empty skips overlay, tmpfs, devtmpfs, squashfs, nsfs and autofs |
 | `host.networks` | `[]` | Report only these interfaces. Empty skips `lo*`, `docker*`, `veth*`, `br-*`, `virbr*`, `cni*`, `flannel*`, `cali*` |
-| `agent.commands` | `false` | `true` lets admins start, stop and restart `systemd` and `docker` entries from the dashboard. Auto-restart (`restart`) works either way |
+| `agent.commands` | `false` | `true` lets admins start, stop and restart `systemd` and `docker` entries from the dashboard. Auto-restart (`restart`) works either way. Both need `DAROYAN_COMMANDS=1` at install |
 | `agent.log_level`, `agent.log_path` | `info`, `/var/log/daroyan` | Rotated daily or at 20 MB, 7 files kept, `daroyan.log` points to the current file |
 | `agent.log_budget` | `1MB` | The most log data sent per minute, as `512KB` or `2MB`. Lines over it are dropped and counted |
 | `agent.state_path` | `/var/lib/daroyan` | Holds `server.json`, the server id and token, mode 600 |
@@ -96,7 +105,13 @@ Mark a `docker` or `systemd` process with `logs: true`, or list a file under `fi
 - A new source starts at its newest line. Read positions live in `log_positions.json` in `agent.state_path`, so a restart neither loses nor repeats lines.
 - While the API cannot be reached, the agent keeps up to 10 MB of lines and drops the oldest past that.
 
-`install.sh` adds the `daroyan` user to `systemd-journal` and `adm`, and allows `docker logs` through sudo.
+`install.sh` adds the `daroyan` user to `systemd-journal` and `adm`, and allows `docker logs` through sudo. For a file neither group can read, give the user read access with an ACL, and a default ACL on the folder so rotated files keep it:
+
+```sh
+sudo setfacl -m u:daroyan:rx /var/www/app/storage/logs
+sudo setfacl -m u:daroyan:r /var/www/app/storage/logs/laravel.log
+sudo setfacl -d -m u:daroyan:r /var/www/app/storage/logs
+```
 
 ## Enrollment
 

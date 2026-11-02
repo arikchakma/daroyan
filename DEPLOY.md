@@ -200,8 +200,13 @@ curl -fsSL https://monitor.example.com/install.sh | \
   enrollments; servers that already enrolled keep their own token.
 - The agent downloads itself from the GitHub release that matches your server
   version, so the host needs outbound HTTPS to `github.com`.
-- To let admins start/stop/restart processes from the dashboard, set
-  `agent: commands: true` in `/etc/daroyan/agent.yml` on the host.
+- The agent runs as the `daroyan` user with no capabilities, and cannot start,
+  stop or restart other services. Add `DAROYAN_COMMANDS=1` to the install command to allow
+  process restarts, and `DAROYAN_PROCESS_IO=1` for per-process disk I/O. A
+  rerun keeps what a server already has.
+- To let admins start/stop/restart processes from the dashboard, install with
+  `DAROYAN_COMMANDS=1` and set `agent: commands: true` in
+  `/etc/daroyan/agent.yml` on the host.
 - Everything else the agent watches (processes, ports, log files, disks) is set
   in `/etc/daroyan/agent.yml` and `/etc/daroyan/conf.d/*.yml`. See the
   [agent config reference](./crates/daroyan-agent/README.md#config) and
