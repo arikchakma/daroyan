@@ -18,6 +18,20 @@ use crate::service::{
     Controller, find_container_id, inspect_container, resolve_controller,
 };
 
+const UNIT_TYPES: [&str; 11] = [
+    "service",
+    "socket",
+    "device",
+    "mount",
+    "automount",
+    "swap",
+    "target",
+    "path",
+    "timer",
+    "slice",
+    "scope",
+];
+
 pub struct ProcessWatch {
     checks: Vec<ProcessCheck>,
     controllers: HashMap<String, Controller>,
@@ -386,7 +400,10 @@ fn has_cgroup_part(cgroup: &str, is_part: &dyn Fn(&str) -> bool) -> bool {
 }
 
 fn to_unit_name(unit: &str) -> String {
-    if unit.contains('.') { unit.to_string() } else { format!("{unit}.service") }
+    match unit.rsplit_once('.') {
+        Some((_, suffix)) if UNIT_TYPES.contains(&suffix) => unit.to_string(),
+        _ => format!("{unit}.service"),
+    }
 }
 
 fn is_matched(process: &Process, pattern: &str) -> bool {
@@ -507,6 +524,8 @@ mod tests {
         assert!(!has_cgroup_part(user_unit, &|part| part == "nginx.service"));
         assert_eq!(to_unit_name("nginx"), "nginx.service");
         assert_eq!(to_unit_name("backup.timer"), "backup.timer");
+        assert_eq!(to_unit_name("php8.2-fpm"), "php8.2-fpm.service");
+        assert_eq!(to_unit_name("php8.2-fpm.service"), "php8.2-fpm.service");
     }
 
     #[test]
