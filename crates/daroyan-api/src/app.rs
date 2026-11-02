@@ -27,6 +27,7 @@ use tower_http::trace::TraceLayer;
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::AppState;
+use crate::layers::cache_control::forbid_caching;
 use crate::layers::client_ip::detect_client_ip;
 use crate::layers::errors::render_errors;
 use crate::layers::rate_limit::limit_globally;
@@ -206,7 +207,8 @@ pub fn build_app(state: AppState) -> Router {
                 .layer(Extension(Arc::new(mcp))),
         )
         .merge(routes::crons::ping_router())
-        .merge(routes::otlp::router());
+        .merge(routes::otlp::router())
+        .layer(from_fn(forbid_caching));
     router
         .fallback_service(any(serve_web).layer(CompressionLayer::new()))
         .method_not_allowed_fallback(|| async { not_found() })
