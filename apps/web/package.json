@@ -24,6 +24,7 @@
     "@tiptap/starter-kit": "^3.32.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
+    "dithering-avatar": "^0.2.0",
     "isbot": "^5.2.2",
     "nprogress": "^0.2.0",
     "react": "^19.2.8",
