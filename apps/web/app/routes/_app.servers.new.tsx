@@ -35,8 +35,8 @@ ports:
   - host: redis-1
     port: 6379`;
 
-export function clientLoader() {
-  const servers = queryClient.getQueryData(listServersOptions().queryKey) ?? [];
+export async function clientLoader() {
+  const servers = await queryClient.ensureQueryData(listServersOptions());
   const tokens = queryClient.getQueriesData<Schemas['InstallToken']>({ queryKey: ['install-token'] });
   for (const [queryKey, token] of tokens) {
     const isUsed = token && servers.some((server) => new Date(server.created_at) >= new Date(token.created_at));
