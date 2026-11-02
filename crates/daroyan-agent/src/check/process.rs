@@ -18,6 +18,20 @@ use crate::service::{
     Controller, find_container_id, inspect_container, resolve_controller,
 };
 
+const UNIT_TYPES: [&str; 11] = [
+    "service",
+    "socket",
+    "device",
+    "mount",
+    "automount",
+    "swap",
+    "target",
+    "path",
+    "timer",
+    "slice",
+    "scope",
+];
+
 pub struct ProcessWatch {
     checks: Vec<ProcessCheck>,
     controllers: HashMap<String, Controller>,
@@ -385,21 +399,6 @@ fn has_cgroup_part(cgroup: &str, is_part: &dyn Fn(&str) -> bool) -> bool {
         .any(|path| path.split('/').any(is_part))
 }
 
-const UNIT_TYPES: [&str; 11] = [
-    "service",
-    "socket",
-    "device",
-    "mount",
-    "automount",
-    "swap",
-    "target",
-    "path",
-    "timer",
-    "slice",
-    "scope",
-];
-
-/// Adds `.service` unless the name already ends in a unit type, so `php8.2-fpm` still matches.
 fn to_unit_name(unit: &str) -> String {
     match unit.rsplit_once('.') {
         Some((_, suffix)) if UNIT_TYPES.contains(&suffix) => unit.to_string(),
