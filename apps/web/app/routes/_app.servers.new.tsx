@@ -1,5 +1,6 @@
+import type { Schemas } from '@daroyan/client';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, Navigate } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
@@ -34,6 +35,19 @@ ports:
   - host: redis-1
     port: 6379`;
 
+export function clientLoader() {
+  const servers = queryClient.getQueryData(listServersOptions().queryKey) ?? [];
+  const tokens = queryClient.getQueriesData<Schemas['InstallToken']>({ queryKey: ['install-token'] });
+  for (const [queryKey, token] of tokens) {
+    const isUsed = token && servers.some((server) => new Date(server.created_at) >= new Date(token.created_at));
+    if (isUsed) {
+      queryClient.removeQueries({ queryKey, exact: true });
+    }
+  }
+
+  return null;
+}
+
 function maskToken(token: string) {
   return `${token.slice(0, 13)}…${token.slice(-3)}`;
 }
@@ -63,16 +77,8 @@ export default function AddServerPage() {
 
   const tokenCreatedAt = installToken ? new Date(installToken.created_at).getTime() : Infinity;
   const newServer = servers?.find((server) => new Date(server.created_at).getTime() >= tokenCreatedAt);
-  const enrolledServerId = newServer?.last_seen_at ? newServer.id : undefined;
-
-  useEffect(() => {
-    if (enrolledServerId) {
-      queryClient.removeQueries({ queryKey: ['install-token'] });
-    }
-  }, [enrolledServerId]);
-
-  if (enrolledServerId) {
-    return <Navigate to={`/servers/${enrolledServerId}`} replace />;
+  if (newServer?.last_seen_at) {
+    return <Navigate to={`/servers/${newServer.id}`} replace />;
   }
 
   const token = installToken?.token ?? '';
