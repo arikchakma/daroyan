@@ -20,7 +20,6 @@ impl FromRequestParts<AppState> for AuthenticatedServer {
         state: &AppState,
     ) -> Result<Self, Error> {
         let ClientIp(ip) = ClientIp::from_request_parts(parts, state).await?;
-        state.limits.check_auth_blocked(ip)?;
         let server = match read_bearer(&parts.headers) {
             Ok(token) => {
                 state.database.find_server_by_token_hash(&hash_token(&token)).await?
@@ -28,6 +27,7 @@ impl FromRequestParts<AppState> for AuthenticatedServer {
             Err(_) => None,
         };
         let Some(server) = server else {
+            state.limits.check_auth_blocked(ip)?;
             state.limits.record_auth_failure(ip);
             return Err(Error::new(ErrorName::Unauthorized, "Unauthorized"));
         };

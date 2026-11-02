@@ -70,7 +70,6 @@ impl FromRequestParts<AppState> for CurrentUser {
         }
         let is_token = cookie.is_none();
         let ClientIp(ip) = ClientIp::from_request_parts(parts, state).await?;
-        state.limits.check_auth_blocked(ip)?;
         let user = match (cookie, bearer) {
             (Some(token), _) => find_active_session(&state.database, &token)
                 .await?
@@ -79,6 +78,7 @@ impl FromRequestParts<AppState> for CurrentUser {
             (None, None) => None,
         };
         let Some(user) = user else {
+            state.limits.check_auth_blocked(ip)?;
             state.limits.record_auth_failure(ip);
             return Err(unauthorized());
         };
