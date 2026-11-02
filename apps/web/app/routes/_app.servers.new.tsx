@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
@@ -13,6 +13,7 @@ import {
   InstallKeySelect,
   MAX_USES_ITEMS,
 } from '~/components/servers/install-key-select';
+import { queryClient } from '~/lib/query-client';
 import { ONE_OFF_LIMITS, installTokenOptions, revokeInstallTokenOptions } from '~/queries/install-tokens';
 import type { InstallTokenLimits } from '~/queries/install-tokens';
 import { listServersOptions } from '~/queries/servers';
@@ -54,22 +55,24 @@ export default function AddServerPage() {
     setLimits(nextLimits);
     setTokenVersion(tokenVersion + 1);
   };
-  const { data: servers, isFetchedAfterMount } = useQuery({
+  const { data: servers } = useQuery({
     ...listServersOptions(),
     refetchInterval: 3_000,
     refetchIntervalInBackground: true,
   });
 
-  // The cached server list can be missing a server that already enrolled.
-  // Snapshot the first fetch this visit started, then only follow a server
-  // that shows up after that.
-  const knownServerIds = useRef<Set<string> | null>(null);
-  if (servers && isFetchedAfterMount && knownServerIds.current === null) {
-    knownServerIds.current = new Set(servers.map((server) => server.id));
-  }
-  const newServer = servers?.find((server) => knownServerIds.current && !knownServerIds.current.has(server.id));
-  if (newServer?.last_seen_at) {
-    return <Navigate to={`/servers/${newServer.id}`} replace />;
+  const tokenCreatedAt = installToken ? new Date(installToken.created_at).getTime() : Infinity;
+  const newServer = servers?.find((server) => new Date(server.created_at).getTime() >= tokenCreatedAt);
+  const enrolledServerId = newServer?.last_seen_at ? newServer.id : undefined;
+
+  useEffect(() => {
+    if (enrolledServerId) {
+      queryClient.removeQueries({ queryKey: ['install-token'] });
+    }
+  }, [enrolledServerId]);
+
+  if (enrolledServerId) {
+    return <Navigate to={`/servers/${enrolledServerId}`} replace />;
   }
 
   const token = installToken?.token ?? '';
