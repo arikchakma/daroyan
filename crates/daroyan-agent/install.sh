@@ -6,6 +6,8 @@ set -eu
 : "${DAROYAN_TOKEN:?Set DAROYAN_TOKEN to an install token from the dashboard}"
 API_URL="${DAROYAN_API_URL:-https://daroyan.com}"
 BINARY="${DAROYAN_BINARY:-}"
+COMMANDS="${DAROYAN_COMMANDS:-}"
+PROCESS_IO="${DAROYAN_PROCESS_IO:-}"
 CONFIG_DIR=/etc/daroyan
 CONFIG="$CONFIG_DIR/agent.yml"
 
@@ -22,6 +24,30 @@ esac
 if [ "$(id -u)" -ne 0 ]; then
   echo "Run this script as root." >&2
   exit 1
+fi
+
+for flag in "$COMMANDS" "$PROCESS_IO"; do
+  case "$flag" in
+    "" | 0 | 1) ;;
+    *) echo "DAROYAN_COMMANDS and DAROYAN_PROCESS_IO take 1 or 0." >&2; exit 1 ;;
+  esac
+done
+
+# A rerun without a flag keeps what the server already has. This runs before
+# the binary is replaced, because the new file drops setcap capabilities.
+if [ -z "$COMMANDS" ]; then
+  COMMANDS=0
+  if [ -f /etc/polkit-1/rules.d/50-daroyan.rules ] || grep -qs " restart \*" /etc/sudoers.d/daroyan; then
+    COMMANDS=1
+  fi
+fi
+if [ -z "$PROCESS_IO" ]; then
+  PROCESS_IO=0
+  if grep -qs "^AmbientCapabilities=.*CAP_SYS_PTRACE" /etc/systemd/system/daroyan.service; then
+    PROCESS_IO=1
+  elif command -v getcap >/dev/null 2>&1 && getcap /usr/local/bin/daroyan 2>/dev/null | grep -q cap_sys_ptrace; then
+    PROCESS_IO=1
+  fi
 fi
 
 case "$(uname -m)" in
@@ -84,6 +110,7 @@ server:
 #   - port: 443
 
 # Let admins start, stop and restart the processes above from the dashboard.
+# Restarts need the agent installed with DAROYAN_COMMANDS=1.
 # agent:
 #   commands: true
 EOF
@@ -91,30 +118,44 @@ fi
 chown root:daroyan "$CONFIG"
 chmod 640 "$CONFIG"
 
+# Lets the agent find a container's processes and read its details, events
+# and logs, and, with DAROYAN_COMMANDS=1, start, stop and restart containers.
+# The agent refuses anything that is not in processes in its config.
+add_docker_rules() {
+  if ! command -v docker >/dev/null 2>&1; then
+    return
+  fi
+  DOCKER="$(command -v docker)"
+  RULES="$DOCKER ps *, $DOCKER inspect *, $DOCKER logs *, $DOCKER events *"
+  if [ "$COMMANDS" = 1 ]; then
+    RULES="$DOCKER start *, $DOCKER stop *, $DOCKER restart *, $RULES"
+  fi
+  SUDO_RULES="${SUDO_RULES:+$SUDO_RULES, }$RULES"
+}
+
+write_sudoers() {
+  if [ -z "$SUDO_RULES" ]; then
+    rm -f /etc/sudoers.d/daroyan
+    return
+  fi
+  if [ -d /etc/sudoers.d ] && command -v visudo >/dev/null 2>&1; then
+    echo "daroyan ALL=(root) NOPASSWD: $SUDO_RULES" > /etc/sudoers.d/daroyan
+    chmod 440 /etc/sudoers.d/daroyan
+    if ! visudo -cf /etc/sudoers.d/daroyan >/dev/null; then
+      rm -f /etc/sudoers.d/daroyan
+      echo "Could not add the sudoers entry. Docker checks and process restarts will not work." >&2
+    fi
+  else
+    echo "No sudo found. Docker checks and process restarts will not work." >&2
+  fi
+}
+
+SUDO_RULES=""
 if [ -d /run/systemd/system ]; then
-  cat > /etc/systemd/system/daroyan.service <<'EOF'
-[Unit]
-Description=Daroyan monitoring agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=daroyan
-ExecStart=/usr/local/bin/daroyan start
-Restart=on-failure
-RestartSec=5
-# Reading /proc/<pid>/io of other users' processes needs these two capabilities.
-AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  # Lets the agent start, stop and restart units and containers, and find a
-  # container's processes with docker ps. The agent refuses anything that is
-  # not in processes in its config. Polkit covers systemctl when it is
-  # installed; sudo covers the rest.
-  SUDO_RULES=""
-  if [ -d /etc/polkit-1/rules.d ]; then
+  # Polkit covers systemctl when it is installed; sudo covers the rest.
+  if [ "$COMMANDS" = 0 ]; then
+    rm -f /etc/polkit-1/rules.d/50-daroyan.rules
+  elif [ -d /etc/polkit-1/rules.d ]; then
     cat > /etc/polkit-1/rules.d/50-daroyan.rules <<'EOF'
 polkit.addRule(function (action, subject) {
   if (action.id != "org.freedesktop.systemd1.manage-units" || subject.user != "daroyan") {
@@ -132,26 +173,42 @@ EOF
     SYSTEMCTL="$(command -v systemctl)"
     SUDO_RULES="$SYSTEMCTL start *, $SYSTEMCTL stop *, $SYSTEMCTL restart *"
   fi
-  if command -v docker >/dev/null 2>&1; then
-    DOCKER="$(command -v docker)"
-    SUDO_RULES="${SUDO_RULES:+$SUDO_RULES, }$DOCKER start *, $DOCKER stop *, $DOCKER restart *, $DOCKER ps *, $DOCKER inspect *, $DOCKER logs *, $DOCKER events *"
-  fi
-  if [ -n "$SUDO_RULES" ]; then
-    if [ -d /etc/sudoers.d ] && command -v visudo >/dev/null 2>&1; then
-      echo "daroyan ALL=(root) NOPASSWD: $SUDO_RULES" > /etc/sudoers.d/daroyan
-      chmod 440 /etc/sudoers.d/daroyan
-      if ! visudo -cf /etc/sudoers.d/daroyan >/dev/null; then
-        rm -f /etc/sudoers.d/daroyan
-        echo "Could not add the sudoers entry. Process restarts will not work." >&2
-      fi
-    else
-      echo "No sudo found. Process restarts will not work." >&2
+  add_docker_rules
+  write_sudoers
+
+  {
+    cat <<'EOF'
+[Unit]
+Description=Daroyan monitoring agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=daroyan
+ExecStart=/usr/local/bin/daroyan start
+Restart=on-failure
+RestartSec=5
+EOF
+    if [ "$PROCESS_IO" = 1 ]; then
+      echo "# Reading /proc/<pid>/io of other users' processes needs these two capabilities."
+      echo "AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH"
     fi
-  fi
+    if [ -z "$SUDO_RULES" ]; then
+      echo "NoNewPrivileges=yes"
+    fi
+    cat <<'EOF'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  } > /etc/systemd/system/daroyan.service
   systemctl daemon-reload
   systemctl enable --now daroyan
   systemctl restart daroyan
 elif command -v rc-service >/dev/null 2>&1; then
+  add_docker_rules
+  write_sudoers
+
   cat > /etc/init.d/daroyan <<'EOF'
 #!/sbin/openrc-run
 description="Daroyan monitoring agent"
@@ -167,10 +224,12 @@ EOF
   chmod 755 /etc/init.d/daroyan
   chown root:daroyan /usr/local/bin/daroyan
   chmod 750 /usr/local/bin/daroyan
-  if command -v setcap >/dev/null 2>&1; then
-    setcap cap_sys_ptrace,cap_dac_read_search+ep /usr/local/bin/daroyan
-  else
-    echo "setcap was not found, so process disk I/O shows as 0. Install libcap to fix it." >&2
+  if [ "$PROCESS_IO" = 1 ]; then
+    if command -v setcap >/dev/null 2>&1; then
+      setcap cap_sys_ptrace,cap_dac_read_search+ep /usr/local/bin/daroyan
+    else
+      echo "setcap was not found, so process disk I/O stays off. Install libcap to fix it." >&2
+    fi
   fi
   rc-update add daroyan default >/dev/null
   rc-service daroyan restart
@@ -180,3 +239,9 @@ else
 fi
 
 echo "The Daroyan agent is running. It reports to $API_URL."
+if [ "$COMMANDS" = 0 ]; then
+  echo "Process restarts are off. Rerun with DAROYAN_COMMANDS=1 to allow them."
+fi
+if [ "$PROCESS_IO" = 0 ]; then
+  echo "Per-process disk I/O is off. Rerun with DAROYAN_PROCESS_IO=1 to collect it."
+fi

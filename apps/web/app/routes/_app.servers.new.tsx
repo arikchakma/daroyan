@@ -118,7 +118,7 @@ export default function AddServerPage() {
 
           <Step
             title="2. Pick What to Watch"
-            description="The agent reads /etc/daroyan/agent.yml. Host metrics need no config. Watch a systemd unit, a Docker container or a process by name, and the ports you care about."
+            description="The agent reads /etc/daroyan/agent.yml. Host metrics need no config. Watch a systemd unit, a Docker container or a process by name, and the ports you care about. Restarts need DAROYAN_COMMANDS=1 in the install command."
           >
             <CodeBlock label="Agent config" code={CONFIG_EXAMPLE} language="yaml" />
           </Step>
