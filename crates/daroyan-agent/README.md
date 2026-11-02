@@ -25,7 +25,7 @@ curl -fsSL https://daroyan.com/install.sh | sudo DAROYAN_TOKEN=dy_agent_... sh
 | `DAROYAN_API_URL` | `https://daroyan.com` | The API |
 | `DAROYAN_BINARY` | download | A local binary to install instead of the download |
 
-The script creates the `daroyan` user, writes `/etc/daroyan/agent.yml` once (a rerun keeps it), and swaps the binary in with a rename, so a rerun upgrades a running agent safely. It installs a systemd unit, or an OpenRC service on Alpine. For process restarts it adds a polkit rule, or a sudoers entry for `systemctl start/stop/restart` when polkit is not installed. With Docker installed, it also allows `docker start/stop/restart/ps` through sudo.
+The script creates the `daroyan` user, writes `/etc/daroyan/agent.yml` once (a rerun keeps it), and swaps the binary in with a rename, so a rerun upgrades a running agent safely. It installs a systemd unit, or an OpenRC service on Alpine. For process restarts it adds a polkit rule, or a sudoers entry for `systemctl start/stop/restart` when polkit is not installed. With Docker installed, it also allows `docker start/stop/restart` and the read-only `docker ps/inspect/logs/events` through sudo.
 
 Build the Linux binary on a Mac with `cargo zigbuild --release -p daroyan-agent --target aarch64-unknown-linux-musl` (or `x86_64-unknown-linux-musl`). The musl build is static and runs on Ubuntu, Debian and Alpine.
 
