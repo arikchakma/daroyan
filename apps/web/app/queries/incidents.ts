@@ -9,41 +9,41 @@ const REFRESH_MS = 30_000;
 export type IncidentInput = Schemas['IncidentBody'];
 export type NewIncidentInput = Schemas['NewIncidentBody'];
 
-export function listIncidentsOptions() {
-  return queryOptions({
-    queryKey: ['incidents'],
-    queryFn: () => request(apiClient.GET('/v1/incidents')),
-    refetchInterval: REFRESH_MS,
-  });
-}
+export const incidentQueries = {
+  all: () => ['incidents'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...incidentQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/incidents')),
+      refetchInterval: REFRESH_MS,
+    }),
+  detail: (incidentId: string) =>
+    queryOptions({
+      queryKey: [...incidentQueries.all(), 'detail', incidentId],
+      queryFn: () =>
+        request(apiClient.GET('/v1/incidents/{incident_id}', { params: { path: { incident_id: incidentId } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+  updates: (incidentId: string) =>
+    queryOptions({
+      queryKey: [...incidentQueries.detail(incidentId).queryKey, 'updates'],
+      queryFn: () =>
+        request(
+          apiClient.GET('/v1/incidents/{incident_id}/updates', { params: { path: { incident_id: incidentId } } })
+        ),
+      refetchInterval: REFRESH_MS,
+    }),
+};
 
-export function incidentOptions(incidentId: string) {
-  return queryOptions({
-    queryKey: ['incidents', incidentId],
-    queryFn: () =>
-      request(apiClient.GET('/v1/incidents/{incident_id}', { params: { path: { incident_id: incidentId } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function incidentUpdatesOptions(incidentId: string) {
-  return queryOptions({
-    queryKey: ['incidents', incidentId, 'updates'],
-    queryFn: () =>
-      request(
-        apiClient.GET('/v1/incidents/{incident_id}/updates', { params: { path: { incident_id: incidentId } } })
-      ),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function listUsersOptions() {
-  return queryOptions({
-    queryKey: ['users'],
-    queryFn: () => request(apiClient.GET('/v1/users')),
-    staleTime: 60_000,
-  });
-}
+export const userQueries = {
+  all: () => ['users'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...userQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/users')),
+      staleTime: 60_000,
+    }),
+};
 
 export function createIncidentOptions() {
   return mutationOptions({

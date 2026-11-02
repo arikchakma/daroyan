@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
-import { listAlertRulesOptions } from '~/queries/alerts';
+import { alertRuleQueries } from '~/queries/alerts';
 import { isCronKind } from '~/utils/alerts';
 
 export function getCronRules(rules: Schemas['AlertRule'][], cronId?: string) {
@@ -26,7 +26,7 @@ type CronRulesProps = {
 export function CronRules(props: CronRulesProps) {
   const { cronId, cronName } = props;
 
-  const { data: rules } = useQuery(listAlertRulesOptions());
+  const { data: rules } = useQuery(alertRuleQueries.list());
   const covering = getCronRules(rules ?? [], cronId);
 
   return (

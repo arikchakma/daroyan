@@ -17,10 +17,10 @@ import { SaveBar } from '~/components/ui/save-bar';
 import { Switch } from '~/components/ui/switch';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { createAlertRuleOptions, listIntegrationsOptions } from '~/queries/alerts';
-import { createCronOptions, cronPreviewOptions, updateCronOptions } from '~/queries/crons';
+import { alertRuleQueries, createAlertRuleOptions, integrationQueries } from '~/queries/alerts';
+import { createCronOptions, cronQueries, updateCronOptions } from '~/queries/crons';
 import type { CronInput } from '~/queries/crons';
-import { listServersOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 import { joinNames } from '~/utils/alerts';
 import type { ConditionKind } from '~/utils/alerts';
 import {
@@ -81,8 +81,8 @@ function CronFormBody(props: CronFormBodyProps) {
   const [serverId, setServerId] = useState(cron?.server_id ?? NO_SERVER);
   const [command, setCommand] = useState(cron?.command ?? '');
 
-  const { data: servers } = useQuery(listServersOptions());
-  const preview = useQuery(cronPreviewOptions(scheduleKind === 'cron' ? expression : '', timeZone));
+  const { data: servers } = useQuery(serverQueries.list());
+  const preview = useQuery(cronQueries.preview(scheduleKind === 'cron' ? expression : '', timeZone));
   const isExpressionValid = scheduleKind === 'every' || (!!expression.trim() && !preview.isError);
 
   const body: CronInput = {
@@ -98,7 +98,7 @@ function CronFormBody(props: CronFormBodyProps) {
     paused: cron?.paused ?? false,
   };
 
-  const { data: integrations } = useQuery(listIntegrationsOptions());
+  const { data: integrations } = useQuery(integrationQueries.list());
   const [alertMissed, setAlertMissed] = useState(true);
   const [alertFailed, setAlertFailed] = useState(true);
   const createRule = useMutation({
@@ -126,9 +126,9 @@ function CronFormBody(props: CronFormBodyProps) {
           })
           .catch(() => undefined);
       }
-      queryClient.invalidateQueries({ queryKey: ['alert-rules'] });
+      queryClient.invalidateQueries({ queryKey: alertRuleQueries.all() });
     }
-    queryClient.invalidateQueries({ queryKey: ['crons'] });
+    queryClient.invalidateQueries({ queryKey: cronQueries.all() });
     toast.success(cron ? `Saved ${saved.name}` : `Created ${saved.name}`);
     navigate(`/crons/${saved.id}`);
   };

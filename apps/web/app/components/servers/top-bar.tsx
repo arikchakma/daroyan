@@ -9,7 +9,7 @@ import { useCommandActions } from '~/hooks/use-command-actions';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { deleteServerOptions, renameServerOptions } from '~/queries/servers';
+import { deleteServerOptions, renameServerOptions, serverQueries } from '~/queries/servers';
 
 type TopBarProps = {
   serverId: string;
@@ -40,7 +40,7 @@ export function TopBar(props: TopBarProps) {
       { serverId, name },
       {
         onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: ['servers'] });
+          queryClient.invalidateQueries({ queryKey: serverQueries.all() });
           toast.success(`Renamed to ${name}`);
         },
       }
@@ -55,7 +55,7 @@ export function TopBar(props: TopBarProps) {
       { serverId },
       {
         onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: ['servers'] });
+          queryClient.invalidateQueries({ queryKey: serverQueries.all() });
           toast.success(`Removed ${serverName ?? 'the server'}`);
           navigate('/servers');
         },

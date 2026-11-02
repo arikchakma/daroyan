@@ -20,10 +20,10 @@ import { PageBar } from '~/components/ui/page-bar';
 import { UptimeBars } from '~/components/uptime/uptime-bars';
 import { UptimeStatusBadge } from '~/components/uptime/uptime-status-badge';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { listAlertMutesOptions, listAlertsOptions } from '~/queries/alerts';
-import { listIncidentsOptions } from '~/queries/incidents';
-import { overviewEventsOptions, overviewTrendsOptions } from '~/queries/overview';
-import { listIssuesOptions, traceServicesOptions, traceStatusOptions } from '~/queries/traces';
+import { alertMuteQueries, alertQueries } from '~/queries/alerts';
+import { incidentQueries } from '~/queries/incidents';
+import { overviewQueries } from '~/queries/overview';
+import { issueQueries, traceQueries } from '~/queries/traces';
 import { describeFiring, getAlertMute } from '~/utils/alerts';
 import { formatUntil } from '~/utils/crons';
 import { DAY_MS, formatClock, formatRelative, pluralize } from '~/utils/format';
@@ -70,15 +70,15 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
   const { servers, checks, crons } = props;
 
   const isAdmin = useIsAdmin();
-  const { data: firing = [] } = useQuery(listAlertsOptions('firing'));
-  const { data: resolved = [] } = useQuery(listAlertsOptions('resolved'));
-  const { data: mutes = [] } = useQuery(listAlertMutesOptions());
-  const { data: incidents = [] } = useQuery(listIncidentsOptions());
-  const { data: trends } = useQuery(overviewTrendsOptions());
-  const { data: events } = useQuery(overviewEventsOptions());
-  const { data: traceStatus } = useQuery(traceStatusOptions());
-  const { data: services = [] } = useQuery(traceServicesOptions(DAY_MS));
-  const { data: issues = [] } = useQuery(listIssuesOptions());
+  const { data: firing = [] } = useQuery(alertQueries.list('firing'));
+  const { data: resolved = [] } = useQuery(alertQueries.list('resolved'));
+  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
+  const { data: incidents = [] } = useQuery(incidentQueries.list());
+  const { data: trends } = useQuery(overviewQueries.trends());
+  const { data: events } = useQuery(overviewQueries.events());
+  const { data: traceStatus } = useQuery(traceQueries.status());
+  const { data: services = [] } = useQuery(traceQueries.services(DAY_MS));
+  const { data: issues = [] } = useQuery(issueQueries.list());
 
   const activeAlerts = firing.filter(
     (alert) => !getAlertMute(mutes, alert)

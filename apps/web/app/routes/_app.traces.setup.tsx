@@ -12,7 +12,7 @@ import { PageBar } from '~/components/ui/page-bar';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { createIngestTokenOptions, traceStatusOptions } from '~/queries/traces';
+import { createIngestTokenOptions, ingestTokenQueries, traceQueries } from '~/queries/traces';
 
 const POLL_MS = 3_000;
 
@@ -58,14 +58,14 @@ export default function TraceSetupPage() {
   const [token, setToken] = useState<string>();
   const [openedAt] = useState(() => Date.now());
   const isAdmin = useIsAdmin();
-  const { data: status } = useQuery(traceStatusOptions(POLL_MS));
+  const { data: status } = useQuery(traceQueries.status(POLL_MS));
 
   const create = useMutation({
     ...createIngestTokenOptions(),
     meta: { errorMessage: 'The token could not be created' },
     onSuccess: (created) => {
       setToken(created.token);
-      queryClient.invalidateQueries({ queryKey: ['ingest-tokens'] });
+      queryClient.invalidateQueries({ queryKey: ingestTokenQueries.all() });
       toast.success('Token created. Copy it now, it is shown once.');
     },
   });

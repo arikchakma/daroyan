@@ -21,8 +21,8 @@ import { Input } from '~/components/ui/input';
 import { TimePicker } from '~/components/ui/time-picker';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { meOptions } from '~/queries/auth';
-import { createIncidentOptions } from '~/queries/incidents';
+import { authQueries } from '~/queries/auth';
+import { createIncidentOptions, incidentQueries } from '~/queries/incidents';
 import { formatClock } from '~/utils/format';
 import { hasText } from '~/utils/rich-text';
 
@@ -92,7 +92,7 @@ function ScheduleMaintenanceForm(props: { onOpenChange: (open: boolean) => void 
 
   const navigate = useNavigate();
   const directory = useIncidentDirectory();
-  const { data: me } = useQuery(meOptions());
+  const { data: me } = useQuery(authQueries.me());
 
   const [title, setTitle] = useState('');
   const [starts, setStarts] = useState(() => toDateTime(getNextHour()));
@@ -112,7 +112,7 @@ function ScheduleMaintenanceForm(props: { onOpenChange: (open: boolean) => void 
     ...createIncidentOptions(),
     meta: { errorMessage: 'The maintenance could not be scheduled' },
     onSuccess: (incident) => {
-      queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      queryClient.invalidateQueries({ queryKey: incidentQueries.all() });
       toast.success('Maintenance scheduled');
       onOpenChange(false);
       navigate(`/incidents/${incident.id}`);

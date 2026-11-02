@@ -9,11 +9,11 @@ import { Button } from '~/components/ui/button';
 import { CodeBlock } from '~/components/ui/code-block';
 import { PageBar } from '~/components/ui/page-bar';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { listIntegrationsOptions } from '~/queries/alerts';
-import { listCronsOptions } from '~/queries/crons';
-import { ONE_OFF_LIMITS, installTokenOptions } from '~/queries/install-tokens';
-import { listServersOptions } from '~/queries/servers';
-import { listUptimeChecksOptions } from '~/queries/uptime';
+import { integrationQueries } from '~/queries/alerts';
+import { cronQueries } from '~/queries/crons';
+import { installTokenQueries, ONE_OFF_LIMITS } from '~/queries/install-tokens';
+import { serverQueries } from '~/queries/servers';
+import { uptimeCheckQueries } from '~/queries/uptime';
 import { cn } from '~/utils/classname';
 
 export function meta() {
@@ -46,10 +46,10 @@ type Step = {
 };
 
 export default function OverviewPage() {
-  const { data: servers } = useQuery({ ...listServersOptions(), refetchInterval: 5_000 });
-  const { data: checks } = useQuery(listUptimeChecksOptions());
-  const { data: crons } = useQuery(listCronsOptions());
-  const { data: integrations } = useQuery(listIntegrationsOptions());
+  const { data: servers } = useQuery({ ...serverQueries.list(), refetchInterval: 5_000 });
+  const { data: checks } = useQuery(uptimeCheckQueries.list());
+  const { data: crons } = useQuery(cronQueries.list());
+  const { data: integrations } = useQuery(integrationQueries.list());
   const isAdmin = useIsAdmin();
   const [openKey, setOpenKey] = useState<string>();
   const [skipped, setSkipped] = useState(readSkipped);
@@ -220,7 +220,7 @@ export default function OverviewPage() {
 }
 
 function InstallCommand() {
-  const { data: installToken } = useQuery(installTokenOptions(0, ONE_OFF_LIMITS));
+  const { data: installToken } = useQuery(installTokenQueries.generate(0, ONE_OFF_LIMITS));
   const token = installToken?.token ?? '…';
   const command = `curl -fsSL ${window.location.origin}/install.sh | \\\n  sudo DAROYAN_API_URL=${window.location.origin} DAROYAN_TOKEN=${token} sh`;
 

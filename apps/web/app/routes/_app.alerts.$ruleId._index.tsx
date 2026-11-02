@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { RuleBody } from '~/components/alerts/rule-body';
 import { PageBar } from '~/components/ui/page-bar';
-import { alertRuleOptions } from '~/queries/alerts';
+import { alertRuleQueries } from '~/queries/alerts';
 
 import type { Route } from './+types/_app.alerts.$ruleId._index';
 
@@ -13,7 +13,7 @@ export function meta() {
 export default function AlertRulePage(props: Route.ComponentProps) {
   const { ruleId } = props.params;
 
-  const { data: rule, error } = useQuery(alertRuleOptions(ruleId));
+  const { data: rule, error } = useQuery(alertRuleQueries.detail(ruleId));
 
   if (error) {
     return (

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 
 import { LevelBadge } from '~/hooks/use-logs-table';
-import { logsOptions } from '~/queries/logs';
+import { logQueries } from '~/queries/logs';
 import { formatLogClock } from '~/utils/format';
 
 const LOG_LIMIT = 50;
@@ -19,7 +19,7 @@ export function TraceLogs(props: TraceLogsProps) {
 
   const query = `trace_id:${traceId}`;
   const { data } = useQuery({
-    ...logsOptions({ q: query, offset: 0, limit: LOG_LIMIT }, false),
+    ...logQueries.list({ q: query, offset: 0, limit: LOG_LIMIT }, false),
     // Log batches arrive a few seconds after the spans, so keep looking while a
     // fresh trace has none yet.
     refetchInterval: (current) =>

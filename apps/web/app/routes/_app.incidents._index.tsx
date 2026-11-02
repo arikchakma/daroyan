@@ -10,7 +10,7 @@ import { EmptyState, NoResults } from '~/components/ui/empty-state';
 import { PageBar } from '~/components/ui/page-bar';
 import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useIncidentsTable } from '~/hooks/use-incidents-table';
-import { listIncidentsOptions } from '~/queries/incidents';
+import { incidentQueries } from '~/queries/incidents';
 import { isClosed, sortIncidents } from '~/utils/incidents';
 import type { Incident } from '~/utils/incidents';
 
@@ -39,7 +39,7 @@ export function meta() {
 }
 
 export default function IncidentsPage() {
-  const { data: incidents, isLoading } = useQuery(listIncidentsOptions());
+  const { data: incidents, isLoading } = useQuery(incidentQueries.list());
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get('view');
   const view: IncidentView = isIncidentView(viewParam) ? viewParam : 'all';

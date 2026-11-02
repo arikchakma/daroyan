@@ -14,6 +14,7 @@ import { Switch } from '~/components/ui/switch';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import {
+  incidentQueries,
   publishPostmortemOptions,
   savePostmortemOptions,
   unpublishPostmortemOptions,
@@ -74,7 +75,7 @@ export function PostmortemCard(props: PostmortemCardProps) {
     meta: { errorMessage: 'The postmortem could not be saved' },
     onMutate: () => setSaveState('saving'),
     onSuccess: (next) => {
-      queryClient.setQueryData(['incidents', incident.id], next);
+      queryClient.setQueryData(incidentQueries.detail(incident.id).queryKey, next);
       setSaveState('saved');
     },
     onError: () => setSaveState('idle'),
@@ -84,7 +85,7 @@ export function PostmortemCard(props: PostmortemCardProps) {
     ...publishPostmortemOptions(),
     meta: { errorMessage: 'The postmortem could not be published' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      queryClient.invalidateQueries({ queryKey: incidentQueries.all() });
       toast.success(isPublished ? 'Postmortem updated' : 'Postmortem published');
       setIsEditing(false);
     },
@@ -94,7 +95,7 @@ export function PostmortemCard(props: PostmortemCardProps) {
     ...unpublishPostmortemOptions(),
     meta: { errorMessage: 'The postmortem could not be unpublished' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      queryClient.invalidateQueries({ queryKey: incidentQueries.all() });
       toast.success('Postmortem unpublished');
       setIsEditing(true);
     },

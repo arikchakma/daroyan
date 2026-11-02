@@ -11,7 +11,7 @@ import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useDataTable } from '~/hooks/use-data-table';
 import { ServiceDot } from '~/hooks/use-traces-table';
 import type { DataTableFeatures } from '~/lib/table';
-import { listIssuesOptions } from '~/queries/traces';
+import { issueQueries } from '~/queries/traces';
 import { formatCount, formatRelative } from '~/utils/format';
 import type { Issue } from '~/utils/traces';
 
@@ -69,7 +69,7 @@ export default function IssuesPage() {
   const service = searchParams.get('service') ?? '';
   const search = searchParams.get('q') ?? '';
 
-  const { data: issues = [], isLoading } = useQuery(listIssuesOptions());
+  const { data: issues = [], isLoading } = useQuery(issueQueries.list());
   const services = useMemo(() => [...new Set(issues.map((issue) => issue.service))].sort(), [issues]);
   const data = useMemo(() => {
     const needle = search.trim().toLowerCase();

@@ -9,7 +9,7 @@ import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { listIntegrationsOptions, testAlertRuleOptions } from '~/queries/alerts';
+import { integrationQueries, testAlertRuleOptions } from '~/queries/alerts';
 import type { NotifyLevel } from '~/utils/alerts';
 
 type RuleNotifySectionProps = {
@@ -24,13 +24,13 @@ export function RuleNotifySection(props: RuleNotifySectionProps) {
   const [shownIds, setShownIds] = useState<string[]>([]);
   const [isAddOpen, setIsAddOpen] = useState(false);
 
-  const { data: integrations = [] } = useQuery(listIntegrationsOptions());
+  const { data: integrations = [] } = useQuery(integrationQueries.list());
 
   const test = useMutation({
     ...testAlertRuleOptions(),
     meta: { errorMessage: 'The test alert could not be sent' },
     onSuccess: () => toast.success('Test alert sent'),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['integrations'] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: integrationQueries.all() }),
   });
 
   const visible = integrations.filter(

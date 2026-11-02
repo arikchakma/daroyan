@@ -22,8 +22,8 @@ import { useCommandActions } from '~/hooks/use-command-actions';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { listAlertRulesOptions } from '~/queries/alerts';
-import { deleteUptimeCheckOptions, runUptimeCheckOptions, toCheckInput, updateUptimeCheckOptions, uptimeCheckStatsOptions } from '~/queries/uptime';
+import { alertRuleQueries } from '~/queries/alerts';
+import { deleteUptimeCheckOptions, runUptimeCheckOptions, toCheckInput, updateUptimeCheckOptions, uptimeCheckQueries } from '~/queries/uptime';
 import { cn } from '~/utils/classname';
 import { DAY_MS, formatDate, pluralize } from '~/utils/format';
 import { describeExpect, describeTarget, formatInterval, formatLasted, formatMs, formatStreak, formatUptime, getUptime } from '~/utils/uptime';
@@ -39,10 +39,10 @@ export function CheckBody(props: CheckBodyProps) {
   const isAdmin = useIsAdmin();
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isDeclareOpen, setIsDeclareOpen] = useState(false);
-  const { data: details, dataUpdatedAt } = useQuery(uptimeCheckStatsOptions(check.id));
-  const { data: alertRules } = useQuery(listAlertRulesOptions());
+  const { data: details, dataUpdatedAt } = useQuery(uptimeCheckQueries.stats(check.id));
+  const { data: alertRules } = useQuery(alertRuleQueries.list());
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['uptime-checks'] });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: uptimeCheckQueries.all() });
   const run = useMutation({
     ...runUptimeCheckOptions(),
     meta: { errorMessage: 'The check could not run' },
@@ -65,7 +65,7 @@ export function CheckBody(props: CheckBodyProps) {
     meta: { errorMessage: 'The check could not be deleted' },
     onSuccess: () => {
       navigate('/uptime');
-      queryClient.invalidateQueries({ queryKey: ['uptime-checks'], exact: true });
+      queryClient.invalidateQueries({ queryKey: uptimeCheckQueries.list().queryKey });
       toast.success(`Deleted ${check.name}`);
     },
   });

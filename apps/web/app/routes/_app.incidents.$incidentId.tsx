@@ -5,7 +5,7 @@ import { IncidentDetail } from '~/components/incidents/incident-detail';
 import { Button } from '~/components/ui/button';
 import { PageBar } from '~/components/ui/page-bar';
 import { Skeleton } from '~/components/ui/skeleton';
-import { incidentOptions } from '~/queries/incidents';
+import { incidentQueries } from '~/queries/incidents';
 
 export function meta() {
   return [{ title: 'Incident · Daroyan' }];
@@ -13,7 +13,7 @@ export function meta() {
 
 export default function IncidentPage() {
   const { incidentId = '' } = useParams();
-  const { data: incident, isLoading, isError } = useQuery(incidentOptions(incidentId));
+  const { data: incident, isLoading, isError } = useQuery(incidentQueries.detail(incidentId));
 
   if (isLoading) {
     return (

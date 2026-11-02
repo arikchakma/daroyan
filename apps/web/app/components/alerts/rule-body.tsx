@@ -21,22 +21,21 @@ import { Switch } from '~/components/ui/switch';
 import { useAlertHistoryTable } from '~/hooks/use-alert-history-table';
 import { useCommandActions } from '~/hooks/use-command-actions';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { apiClient } from '~/lib/api-client';
-import { request } from '~/lib/http';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import {
-  alertDeliveriesOptions,
+  alertMuteQueries,
+  alertQueries,
+  alertRuleQueries,
   deleteAlertMuteOptions,
   deleteAlertRuleOptions,
-  listAlertMutesOptions,
-  listAlertsOptions,
-  listIntegrationsOptions,
+  integrationQueries,
   testAlertRuleOptions,
   updateAlertRuleOptions,
 } from '~/queries/alerts';
-import { listServersOptions } from '~/queries/servers';
-import { listUptimeChecksOptions } from '~/queries/uptime';
+import { cronQueries } from '~/queries/crons';
+import { serverQueries } from '~/queries/servers';
+import { uptimeCheckQueries } from '~/queries/uptime';
 import {
   CONDITION_OPTIONS,
   describeMuteEnd,
@@ -68,13 +67,13 @@ export function RuleBody(props: RuleBodyProps) {
   const { rule } = props;
 
   const navigate = useNavigate();
-  const { data: history = [] } = useQuery(listAlertsOptions('all', rule.id));
-  const { data: deliveries = [] } = useQuery(alertDeliveriesOptions(rule.id));
-  const { data: servers = [] } = useQuery(listServersOptions());
-  const { data: checks = [] } = useQuery(listUptimeChecksOptions());
-  const { data: crons = [] } = useQuery({ queryKey: ['crons'], queryFn: () => request(apiClient.GET('/v1/crons')) });
-  const { data: integrations = [] } = useQuery(listIntegrationsOptions());
-  const { data: allMutes = [] } = useQuery(listAlertMutesOptions());
+  const { data: history = [] } = useQuery(alertQueries.list('all', rule.id));
+  const { data: deliveries = [] } = useQuery(alertRuleQueries.deliveries(rule.id));
+  const { data: servers = [] } = useQuery(serverQueries.list());
+  const { data: checks = [] } = useQuery(uptimeCheckQueries.list());
+  const { data: crons = [] } = useQuery({ ...cronQueries.list(), refetchInterval: false });
+  const { data: integrations = [] } = useQuery(integrationQueries.list());
+  const { data: allMutes = [] } = useQuery(alertMuteQueries.list());
   const isAdmin = useIsAdmin();
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [muting, setMuting] = useState<{ target?: MuteTarget } | undefined>();
@@ -124,7 +123,7 @@ export function RuleBody(props: RuleBodyProps) {
     ...deleteAlertMuteOptions(),
     meta: { errorMessage: 'The alert could not be unmuted' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['alert-mutes'] });
+      queryClient.invalidateQueries({ queryKey: alertMuteQueries.all() });
       toast.success('Unmuted');
     },
   });
@@ -148,8 +147,8 @@ export function RuleBody(props: RuleBodyProps) {
   };
 
   const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['alert-rules'] });
-    queryClient.invalidateQueries({ queryKey: ['alerts'] });
+    queryClient.invalidateQueries({ queryKey: alertRuleQueries.all() });
+    queryClient.invalidateQueries({ queryKey: alertQueries.all() });
   };
   const update = useMutation({
     ...updateAlertRuleOptions(),
@@ -164,8 +163,8 @@ export function RuleBody(props: RuleBodyProps) {
     meta: { errorMessage: 'The rule could not be deleted' },
     onSuccess: () => {
       navigate('/alerts');
-      queryClient.invalidateQueries({ queryKey: ['alert-rules', 'list'] });
-      queryClient.invalidateQueries({ queryKey: ['alerts'] });
+      queryClient.invalidateQueries({ queryKey: alertRuleQueries.list().queryKey });
+      queryClient.invalidateQueries({ queryKey: alertQueries.all() });
       toast.success(`Deleted ${rule.name}`);
     },
   });

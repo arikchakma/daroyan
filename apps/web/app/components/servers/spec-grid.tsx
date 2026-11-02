@@ -5,7 +5,7 @@ import { Icon } from '~/components/icons/icon';
 import { Sparkline } from '~/components/servers/sparkline';
 import { UsageRing } from '~/components/servers/usage-ring';
 import type { UsageTone } from '~/components/servers/usage-ring';
-import { serverMetricsOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { formatBytes, formatDate, formatDuration, formatPercent, formatUsedOf, getPercent } from '~/utils/format';
 
@@ -22,7 +22,7 @@ type SpecGridProps = {
 export function SpecGrid(props: SpecGridProps) {
   const { serverId, host, report } = props;
 
-  const { data: metrics } = useQuery(serverMetricsOptions(serverId, '1h'));
+  const { data: metrics } = useQuery(serverQueries.metrics(serverId, '1h'));
   const points = metrics?.points ?? [];
   const loadSeries = points.map((point) => point.load1);
   const trafficSeries = points.map((point) => point.net_in_speed + point.net_out_speed);

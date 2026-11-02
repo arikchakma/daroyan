@@ -2,14 +2,14 @@ import { useQuery } from '@tanstack/react-query';
 
 import { ServerBody } from '~/components/servers/server-body';
 import { TopBar } from '~/components/servers/top-bar';
-import { serverOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 
 import type { Route } from './+types/_app.servers.$serverId';
 
 export default function ServerPage(props: Route.ComponentProps) {
   const { serverId } = props.params;
 
-  const { data: server, error } = useQuery(serverOptions(serverId));
+  const { data: server, error } = useQuery(serverQueries.detail(serverId));
 
   if (error) {
     return (

@@ -8,31 +8,29 @@ const REFRESH_MS = 15_000;
 
 export type UptimeCheckInput = Schemas['UptimeCheckBody'];
 
-export function listUptimeChecksOptions() {
-  return queryOptions({
-    queryKey: ['uptime-checks'],
-    queryFn: () => request(apiClient.GET('/v1/uptime-checks')),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function uptimeCheckOptions(checkId: string) {
-  return queryOptions({
-    queryKey: ['uptime-checks', checkId],
-    queryFn: () =>
-      request(apiClient.GET('/v1/uptime-checks/{check_id}', { params: { path: { check_id: checkId } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function uptimeCheckStatsOptions(checkId: string) {
-  return queryOptions({
-    queryKey: ['uptime-checks', checkId, 'stats'],
-    queryFn: () =>
-      request(apiClient.GET('/v1/uptime-checks/{check_id}/stats', { params: { path: { check_id: checkId } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
+export const uptimeCheckQueries = {
+  all: () => ['uptime-checks'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...uptimeCheckQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/uptime-checks')),
+      refetchInterval: REFRESH_MS,
+    }),
+  detail: (checkId: string) =>
+    queryOptions({
+      queryKey: [...uptimeCheckQueries.all(), 'detail', checkId],
+      queryFn: () =>
+        request(apiClient.GET('/v1/uptime-checks/{check_id}', { params: { path: { check_id: checkId } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+  stats: (checkId: string) =>
+    queryOptions({
+      queryKey: [...uptimeCheckQueries.detail(checkId).queryKey, 'stats'],
+      queryFn: () =>
+        request(apiClient.GET('/v1/uptime-checks/{check_id}/stats', { params: { path: { check_id: checkId } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+};
 
 export function createUptimeCheckOptions() {
   return mutationOptions({

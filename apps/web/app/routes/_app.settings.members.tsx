@@ -7,16 +7,16 @@ import {
 } from "~/components/settings/settings-page";
 import { DataTable } from "~/components/ui/data-table";
 import { useMembersTable } from "~/hooks/use-members-table";
-import { meOptions } from "~/queries/auth";
-import { listMembersOptions } from "~/queries/members";
+import { authQueries } from "~/queries/auth";
+import { memberQueries } from "~/queries/members";
 
 export function meta() {
   return [{ title: "Members · Daroyan" }];
 }
 
 export default function MembersPage() {
-  const { data: me } = useQuery(meOptions());
-  const { data: members, isLoading } = useQuery(listMembersOptions());
+  const { data: me } = useQuery(authQueries.me());
+  const { data: members, isLoading } = useQuery(memberQueries.list());
   const canManage = me?.role === "admin";
 
   const table = useMembersTable({

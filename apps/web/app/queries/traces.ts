@@ -16,64 +16,62 @@ export type TraceFilters = {
   limit?: number;
 };
 
-export function listTracesOptions(filters: TraceFilters) {
-  return queryOptions({
-    queryKey: ['traces', filters],
-    queryFn: () => {
-      const { rangeMs, ...query } = filters;
-      return request(apiClient.GET('/v1/traces', { params: { query: { ...query, since: Date.now() - rangeMs } } }));
-    },
-    refetchInterval: REFRESH_MS,
-  });
-}
+export const traceQueries = {
+  all: () => ['traces'] as const,
+  list: (filters: TraceFilters) =>
+    queryOptions({
+      queryKey: [...traceQueries.all(), 'list', filters],
+      queryFn: () => {
+        const { rangeMs, ...query } = filters;
+        return request(apiClient.GET('/v1/traces', { params: { query: { ...query, since: Date.now() - rangeMs } } }));
+      },
+      refetchInterval: REFRESH_MS,
+    }),
+  detail: (traceId: string) =>
+    queryOptions({
+      queryKey: [...traceQueries.all(), 'detail', traceId],
+      queryFn: () => request(apiClient.GET('/v1/traces/{trace_id}', { params: { path: { trace_id: traceId } } })),
+    }),
+  services: (rangeMs: number) =>
+    queryOptions({
+      queryKey: [...traceQueries.all(), 'services', rangeMs],
+      queryFn: () =>
+        request(apiClient.GET('/v1/traces/services', { params: { query: { since: Date.now() - rangeMs } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+  status: (refetchInterval?: number) =>
+    queryOptions({
+      queryKey: [...traceQueries.all(), 'status'],
+      queryFn: () => request(apiClient.GET('/v1/traces/status')),
+      refetchInterval,
+    }),
+};
 
-export function traceOptions(traceId: string) {
-  return queryOptions({
-    queryKey: ['traces', 'detail', traceId],
-    queryFn: () => request(apiClient.GET('/v1/traces/{trace_id}', { params: { path: { trace_id: traceId } } })),
-  });
-}
+export const issueQueries = {
+  all: () => ['issues'] as const,
+  list: (since?: number) =>
+    queryOptions({
+      queryKey: [...issueQueries.all(), 'list', since],
+      queryFn: () => request(apiClient.GET('/v1/issues', { params: { query: { since } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+  events: (fingerprint: string) =>
+    queryOptions({
+      queryKey: [...issueQueries.all(), 'events', fingerprint],
+      queryFn: () =>
+        request(apiClient.GET('/v1/issues/{fingerprint}/events', { params: { path: { fingerprint } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+};
 
-export function traceServicesOptions(rangeMs: number) {
-  return queryOptions({
-    queryKey: ['traces', 'services', rangeMs],
-    queryFn: () =>
-      request(apiClient.GET('/v1/traces/services', { params: { query: { since: Date.now() - rangeMs } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function traceStatusOptions(refetchInterval?: number) {
-  return queryOptions({
-    queryKey: ['traces', 'status'],
-    queryFn: () => request(apiClient.GET('/v1/traces/status')),
-    refetchInterval,
-  });
-}
-
-export function listIssuesOptions(since?: number) {
-  return queryOptions({
-    queryKey: ['issues', since],
-    queryFn: () => request(apiClient.GET('/v1/issues', { params: { query: { since } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function issueEventsOptions(fingerprint: string) {
-  return queryOptions({
-    queryKey: ['issues', 'events', fingerprint],
-    queryFn: () =>
-      request(apiClient.GET('/v1/issues/{fingerprint}/events', { params: { path: { fingerprint } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function listIngestTokensOptions() {
-  return queryOptions({
-    queryKey: ['ingest-tokens'],
-    queryFn: () => request(apiClient.GET('/v1/ingest-tokens')),
-  });
-}
+export const ingestTokenQueries = {
+  all: () => ['ingest-tokens'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...ingestTokenQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/ingest-tokens')),
+    }),
+};
 
 export function createIngestTokenOptions() {
   return mutationOptions({

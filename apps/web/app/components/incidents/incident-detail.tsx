@@ -25,7 +25,7 @@ import { useCopyToClipboard } from '~/hooks/use-copy-to-clipboard';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { deleteIncidentOptions, incidentUpdatesOptions, postIncidentUpdateOptions } from '~/queries/incidents';
+import { deleteIncidentOptions, incidentQueries, postIncidentUpdateOptions } from '~/queries/incidents';
 import { formatClock } from '~/utils/format';
 import {
   RELATED_LABELS,
@@ -80,7 +80,7 @@ export function IncidentDetail(props: IncidentDetailProps) {
   const navigate = useNavigate();
   const [copy] = useCopyToClipboard();
   const directory = useIncidentDirectory();
-  const { data: updates = [] } = useQuery(incidentUpdatesOptions(incident.id));
+  const { data: updates = [] } = useQuery(incidentQueries.updates(incident.id));
   const [isResolveOpen, setIsResolveOpen] = useState(false);
   const isAdmin = useIsAdmin();
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -106,7 +106,7 @@ export function IncidentDetail(props: IncidentDetailProps) {
     ...deleteIncidentOptions(),
     meta: { errorMessage: 'The incident could not be deleted' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      queryClient.invalidateQueries({ queryKey: incidentQueries.all() });
       toast.success(maintenance ? 'Maintenance deleted' : 'Incident deleted');
       navigate('/incidents');
     },
@@ -115,7 +115,7 @@ export function IncidentDetail(props: IncidentDetailProps) {
   const post = useMutation({
     ...postIncidentUpdateOptions(),
     meta: { errorMessage: 'The status could not be changed' },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['incidents'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: incidentQueries.all() }),
   });
 
   const startNow = () =>

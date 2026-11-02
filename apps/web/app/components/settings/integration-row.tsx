@@ -7,7 +7,7 @@ import { DeliveryStatus } from '~/components/settings/delivery-status';
 import { Menu } from '~/components/ui/menu';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { testIntegrationOptions } from '~/queries/alerts';
+import { integrationQueries, testIntegrationOptions } from '~/queries/alerts';
 
 type IntegrationRowProps = {
   integration: Schemas['Integration'];
@@ -23,7 +23,7 @@ export function IntegrationRow(props: IntegrationRowProps) {
     meta: { isSilent: true },
     onSuccess: () => toast.success(`Test message sent to ${integration.name}`),
     onError: (error) => toast.error(error.message),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['integrations'] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: integrationQueries.all() }),
   });
 
   return (

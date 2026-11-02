@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 import { RuleForm } from '~/components/alerts/rule-form';
-import { alertRuleOptions } from '~/queries/alerts';
+import { alertRuleQueries } from '~/queries/alerts';
 
 import type { Route } from './+types/_app.alerts.$ruleId.edit';
 
@@ -12,7 +12,7 @@ export function meta() {
 export default function EditRulePage(props: Route.ComponentProps) {
   const { ruleId } = props.params;
 
-  const { data: rule, error } = useQuery(alertRuleOptions(ruleId));
+  const { data: rule, error } = useQuery(alertRuleQueries.detail(ruleId));
 
   if (error) {
     return (

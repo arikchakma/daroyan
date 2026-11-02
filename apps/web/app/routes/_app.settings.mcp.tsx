@@ -19,7 +19,7 @@ import { toast } from "~/lib/toast";
 import {
   createMcpTokenOptions,
   deleteMcpTokenOptions,
-  listMcpTokensOptions,
+  mcpTokenQueries,
 } from "~/queries/mcp";
 
 function getClaudeCommand(url: string, token: string) {
@@ -86,7 +86,7 @@ export function meta() {
 }
 
 export default function McpPage() {
-  const { data: tokens, isLoading } = useQuery(listMcpTokensOptions());
+  const { data: tokens, isLoading } = useQuery(mcpTokenQueries.list());
   const [isAdding, setIsAdding] = useState(false);
   const [revoking, setRevoking] = useState<TokenItem>();
   const url = `${window.location.origin}/mcp`;
@@ -96,7 +96,7 @@ export default function McpPage() {
     ...deleteMcpTokenOptions(),
     meta: { errorMessage: "The token could not be revoked" },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["mcp-tokens"] });
+      queryClient.invalidateQueries({ queryKey: mcpTokenQueries.all() });
       toast.success(`Revoked ${revoking?.name ?? "the token"}`);
       setRevoking(undefined);
     },
@@ -163,7 +163,7 @@ export default function McpPage() {
       <AddTokenDialog
         open={isAdding}
         onOpenChange={setIsAdding}
-        queryKey={["mcp-tokens"]}
+        queryKey={mcpTokenQueries.list().queryKey}
         mutation={createMcpTokenOptions()}
         placeholder="Claude Code"
         nameHelp="Name it after the tool that uses it."

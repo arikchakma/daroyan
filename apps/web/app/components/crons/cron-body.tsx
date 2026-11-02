@@ -25,8 +25,8 @@ import { useCopyToClipboard } from '~/hooks/use-copy-to-clipboard';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { listAlertRulesOptions } from '~/queries/alerts';
-import { cronStatsOptions, deleteCronOptions, toCronInput, updateCronOptions } from '~/queries/crons';
+import { alertRuleQueries } from '~/queries/alerts';
+import { cronQueries, deleteCronOptions, toCronInput, updateCronOptions } from '~/queries/crons';
 import { describeSchedule, formatRunTime, formatSecs, getPingUrl } from '~/utils/crons';
 import { DAY_MS, formatClock, formatRelative } from '~/utils/format';
 import { formatUptime } from '~/utils/uptime';
@@ -46,10 +46,10 @@ export function CronBody(props: CronBodyProps) {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [declaring, setDeclaring] = useState<Schemas['CronFailure']>();
   const [openRun, setOpenRun] = useState<Schemas['CronRun']>();
-  const { data: details, dataUpdatedAt } = useQuery(cronStatsOptions(cron.id));
-  const { data: alertRules } = useQuery(listAlertRulesOptions());
+  const { data: details, dataUpdatedAt } = useQuery(cronQueries.stats(cron.id));
+  const { data: alertRules } = useQuery(alertRuleQueries.list());
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['crons'] });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: cronQueries.all() });
   const update = useMutation({
     ...updateCronOptions(),
     meta: { errorMessage: 'The cron could not be saved' },
@@ -60,7 +60,7 @@ export function CronBody(props: CronBodyProps) {
     meta: { errorMessage: 'The cron could not be deleted' },
     onSuccess: () => {
       navigate('/crons');
-      queryClient.invalidateQueries({ queryKey: ['crons'], exact: true });
+      queryClient.invalidateQueries({ queryKey: cronQueries.list().queryKey });
       toast.success(`Deleted ${cron.name}`);
     },
   });

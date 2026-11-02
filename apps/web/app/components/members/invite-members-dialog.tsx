@@ -8,7 +8,7 @@ import { FieldRow } from "~/components/ui/field-row";
 import { OptionList } from "~/components/ui/option-list";
 import { queryClient } from "~/lib/query-client";
 import { toast } from "~/lib/toast";
-import { inviteMembersOptions } from "~/queries/members";
+import { inviteMembersOptions, memberQueries } from "~/queries/members";
 import type { MemberRole } from "~/queries/members";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -73,7 +73,7 @@ export function InviteMembersDialog(props: InviteMembersDialogProps) {
       setIsOpen(false);
       toast.success(emails.length === 1 ? "Member invited" : "Members invited");
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["members"] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: memberQueries.all() }),
   });
 
   return (

@@ -15,7 +15,7 @@ import { toast } from '~/lib/toast';
 import {
   connectProviderOptions,
   createIntegrationOptions,
-  integrationProvidersOptions,
+  integrationQueries,
   testIntegrationConfigOptions,
   testIntegrationOptions,
   updateIntegrationOptions,
@@ -81,7 +81,7 @@ const DESCRIPTIONS: Record<IntegrationKind, string> = {
 function IntegrationDialogContent(props: IntegrationDialogContentProps) {
   const { integration, onClose, onSaved } = props;
 
-  const { data: providers } = useQuery(integrationProvidersOptions());
+  const { data: providers } = useQuery(integrationQueries.providers());
   const isAvailable = (item: IntegrationKind) => item === 'webhook' || !!providers?.[item];
   const [picked, setPicked] = useState<IntegrationKind>();
   const [step, setStep] = useState<{ kind: 'webhook' } | { kind: ConnectProvider; started: Connection }>();
@@ -248,7 +248,7 @@ function useSavedHandler(options: {
   const { isEditing, onClose, onSaved } = options;
 
   return (saved: Schemas['Integration']) => {
-    queryClient.invalidateQueries({ queryKey: ['integrations'] });
+    queryClient.invalidateQueries({ queryKey: integrationQueries.all() });
     toast.success(isEditing ? `Saved ${saved.name}` : `Added ${saved.name}`);
     onSaved?.(saved);
     onClose();

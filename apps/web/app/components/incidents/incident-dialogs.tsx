@@ -20,6 +20,7 @@ import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import {
   editIncidentUpdateOptions,
+  incidentQueries,
   postIncidentUpdateOptions,
   toIncidentInput,
   updateIncidentOptions,
@@ -30,7 +31,7 @@ import type { Incident, IncidentUpdate } from '~/utils/incidents';
 import { hasText, toDocument } from '~/utils/rich-text';
 
 function invalidate() {
-  return queryClient.invalidateQueries({ queryKey: ['incidents'] });
+  return queryClient.invalidateQueries({ queryKey: incidentQueries.all() });
 }
 
 type DialogFrameProps = {

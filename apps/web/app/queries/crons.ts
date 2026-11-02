@@ -8,39 +8,36 @@ const REFRESH_MS = 15_000;
 
 export type CronInput = Schemas['CronBody'];
 
-export function listCronsOptions() {
-  return queryOptions({
-    queryKey: ['crons'],
-    queryFn: () => request(apiClient.GET('/v1/crons')),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function cronOptions(cronId: string) {
-  return queryOptions({
-    queryKey: ['crons', cronId],
-    queryFn: () => request(apiClient.GET('/v1/crons/{cron_id}', { params: { path: { cron_id: cronId } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function cronStatsOptions(cronId: string) {
-  return queryOptions({
-    queryKey: ['crons', cronId, 'stats'],
-    queryFn: () => request(apiClient.GET('/v1/crons/{cron_id}/stats', { params: { path: { cron_id: cronId } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function cronPreviewOptions(expression: string, timeZone: string) {
-  return queryOptions({
-    queryKey: ['crons', 'preview', expression, timeZone],
-    queryFn: () => request(apiClient.GET('/v1/crons/preview', { params: { query: { expression, time_zone: timeZone } } })),
-    enabled: expression.trim().length > 0,
-    placeholderData: keepPreviousData,
-    retry: false,
-  });
-}
+export const cronQueries = {
+  all: () => ['crons'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...cronQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/crons')),
+      refetchInterval: REFRESH_MS,
+    }),
+  detail: (cronId: string) =>
+    queryOptions({
+      queryKey: [...cronQueries.all(), 'detail', cronId],
+      queryFn: () => request(apiClient.GET('/v1/crons/{cron_id}', { params: { path: { cron_id: cronId } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+  stats: (cronId: string) =>
+    queryOptions({
+      queryKey: [...cronQueries.detail(cronId).queryKey, 'stats'],
+      queryFn: () => request(apiClient.GET('/v1/crons/{cron_id}/stats', { params: { path: { cron_id: cronId } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+  preview: (expression: string, timeZone: string) =>
+    queryOptions({
+      queryKey: [...cronQueries.all(), 'preview', expression, timeZone],
+      queryFn: () =>
+        request(apiClient.GET('/v1/crons/preview', { params: { query: { expression, time_zone: timeZone } } })),
+      enabled: expression.trim().length > 0,
+      placeholderData: keepPreviousData,
+      retry: false,
+    }),
+};
 
 export function createCronOptions() {
   return mutationOptions({

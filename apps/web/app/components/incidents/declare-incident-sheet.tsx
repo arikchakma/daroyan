@@ -21,8 +21,8 @@ import { RichTextEditor } from '~/components/rich-text/rich-text-editor';
 import { Input } from '~/components/ui/input';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { meOptions } from '~/queries/auth';
-import { createIncidentOptions } from '~/queries/incidents';
+import { authQueries } from '~/queries/auth';
+import { createIncidentOptions, incidentQueries } from '~/queries/incidents';
 import { formatClock } from '~/utils/format';
 import { SEVERITY_META } from '~/utils/incidents';
 import { hasText } from '~/utils/rich-text';
@@ -75,7 +75,7 @@ function DeclareIncidentForm(props: DeclareIncidentFormProps) {
 
   const navigate = useNavigate();
   const directory = useIncidentDirectory();
-  const { data: me } = useQuery(meOptions());
+  const { data: me } = useQuery(authQueries.me());
 
   const [title, setTitle] = useState(defaults?.title ?? '');
   const [severity, setSeverity] = useState<'minor' | 'major' | 'critical'>(defaults?.severity ?? 'major');
@@ -94,7 +94,7 @@ function DeclareIncidentForm(props: DeclareIncidentFormProps) {
     ...createIncidentOptions(),
     meta: { errorMessage: 'The incident could not be declared' },
     onSuccess: (incident) => {
-      queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      queryClient.invalidateQueries({ queryKey: incidentQueries.all() });
       toast.success('Incident declared');
       onOpenChange(false);
       navigate(`/incidents/${incident.id}`);

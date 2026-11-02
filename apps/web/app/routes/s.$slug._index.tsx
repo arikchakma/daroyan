@@ -5,7 +5,7 @@ import { useParams } from 'react-router';
 import { PublicStatus } from '~/components/status-pages/public-status';
 import { Skeleton } from '~/components/ui/skeleton';
 import { ApiError } from '~/lib/http';
-import { publicStatusPageOptions } from '~/queries/status-pages';
+import { publicStatusQueries } from '~/queries/status-pages';
 
 export function meta() {
   return [{ title: 'Status' }];
@@ -13,7 +13,7 @@ export function meta() {
 
 export default function PublicStatusRoute() {
   const { slug = '' } = useParams();
-  const { data: page, error } = useQuery(publicStatusPageOptions(slug));
+  const { data: page, error } = useQuery(publicStatusQueries.page(slug));
 
   useEffect(() => {
     if (page) {

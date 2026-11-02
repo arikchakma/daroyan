@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 import { CronForm } from '~/components/crons/cron-form';
-import { cronOptions } from '~/queries/crons';
+import { cronQueries } from '~/queries/crons';
 
 import type { Route } from './+types/_app.crons.$cronId.edit';
 
@@ -12,7 +12,7 @@ export function meta() {
 export default function EditCronPage(props: Route.ComponentProps) {
   const { cronId } = props.params;
 
-  const { data: cron, error } = useQuery({ ...cronOptions(cronId), refetchInterval: false });
+  const { data: cron, error } = useQuery({ ...cronQueries.detail(cronId), refetchInterval: false });
 
   if (error) {
     return (

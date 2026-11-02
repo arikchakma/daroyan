@@ -12,7 +12,7 @@ import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import type { DataTableFeatures } from '~/lib/table';
 import { toast } from '~/lib/toast';
-import { runCommandOptions } from '~/queries/servers';
+import { runCommandOptions, serverQueries } from '~/queries/servers';
 import type { CommandAction } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { formatBytes, formatDuration, formatPercent, formatSpeed } from '~/utils/format';
@@ -52,7 +52,7 @@ function ProcessActions(props: ProcessActionsProps) {
       {
         onSuccess: () => {
           toast.success(`${ACTION_DONE[action]} ${process.name}`);
-          void queryClient.invalidateQueries({ queryKey: ['servers', serverId] });
+          void queryClient.invalidateQueries({ queryKey: serverQueries.detail(serverId).queryKey });
         },
       }
     );

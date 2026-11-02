@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { EventRow } from '~/components/servers/event-row';
 import { Dialog } from '~/components/ui/dialog';
-import { serverEventsOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 
 const VISIBLE_EVENTS = 4;
 
@@ -14,7 +14,7 @@ type EventsCardProps = {
 export function EventsCard(props: EventsCardProps) {
   const { serverId, serverName } = props;
 
-  const { data: events } = useQuery(serverEventsOptions(serverId));
+  const { data: events } = useQuery(serverQueries.events(serverId));
 
   return (
     <div className="flex w-full shrink-0 flex-col overflow-hidden rounded-2xl border border-border-ring bg-surface-default shadow-card lg:w-85">

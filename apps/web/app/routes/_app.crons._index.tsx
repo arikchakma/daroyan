@@ -11,8 +11,8 @@ import { useCronsTable } from '~/hooks/use-crons-table';
 import type { CronRow } from '~/hooks/use-crons-table';
 import { useSortParams } from '~/hooks/use-sort-params';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { listAlertMutesOptions, listAlertsOptions } from '~/queries/alerts';
-import { listCronsOptions } from '~/queries/crons';
+import { alertMuteQueries, alertQueries } from '~/queries/alerts';
+import { cronQueries } from '~/queries/crons';
 import { describeMuteEnd, getAlertMute } from '~/utils/alerts';
 
 type StatusView = 'all' | 'ok' | 'late' | 'failed' | 'paused';
@@ -35,9 +35,9 @@ export function meta() {
 
 export default function CronsPage() {
   const isAdmin = useIsAdmin();
-  const { data: crons, isLoading } = useQuery(listCronsOptions());
-  const { data: firing = [] } = useQuery(listAlertsOptions('firing'));
-  const { data: mutes = [] } = useQuery(listAlertMutesOptions());
+  const { data: crons, isLoading } = useQuery(cronQueries.list());
+  const { data: firing = [] } = useQuery(alertQueries.list('firing'));
+  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get('view');
   const view: StatusView = isStatusView(viewParam) ? viewParam : 'all';

@@ -7,7 +7,7 @@ import { SelectField } from '~/components/alerts/select-field';
 import { UnitField } from '~/components/alerts/unit-field';
 import { FieldRow } from '~/components/ui/field-row';
 import { Input } from '~/components/ui/input';
-import { logSourcesOptions } from '~/queries/logs';
+import { logQueries } from '~/queries/logs';
 import { getUnit, LOG_LEVEL_OPTIONS, LOG_WINDOW_OPTIONS } from '~/utils/alerts';
 import { formatSpan, isLimitValid } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState } from '~/utils/rule-form';
@@ -33,7 +33,7 @@ type LogConditionFieldsProps = {
 export function LogConditionFields(props: LogConditionFieldsProps) {
   const { form, onChange } = props;
 
-  const { data: logSources } = useQuery(logSourcesOptions());
+  const { data: logSources } = useQuery(logQueries.sources());
 
   const services = [...new Set((logSources ?? []).map((source) => source.service))].sort();
   const isValid = isLimitValid(form);

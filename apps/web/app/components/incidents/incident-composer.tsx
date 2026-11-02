@@ -8,7 +8,7 @@ import { Button } from '~/components/ui/button';
 import { Switch } from '~/components/ui/switch';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { postIncidentUpdateOptions } from '~/queries/incidents';
+import { incidentQueries, postIncidentUpdateOptions } from '~/queries/incidents';
 import { cn } from '~/utils/classname';
 import { getStatusMeta, statusesOf } from '~/utils/incidents';
 import type { Incident } from '~/utils/incidents';
@@ -50,7 +50,7 @@ export function IncidentComposer(props: IncidentComposerProps) {
     ...postIncidentUpdateOptions(),
     meta: { errorMessage: isNote ? 'The note could not be added' : 'The update could not be posted' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      queryClient.invalidateQueries({ queryKey: incidentQueries.all() });
       toast.success(isNote ? 'Note added' : 'Update posted');
       setBody(null);
       setVersion((current) => current + 1);

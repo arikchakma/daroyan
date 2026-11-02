@@ -5,11 +5,9 @@ import { useEffect, useState } from 'react';
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
 import { Dialog } from '~/components/ui/dialog';
-import { request } from '~/lib/http';
-import { apiClient } from '~/lib/api-client';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { connectProviderOptions, telegramConnectOptions } from '~/queries/alerts';
+import { connectProviderOptions, integrationQueries } from '~/queries/alerts';
 import type { ConnectProvider } from '~/queries/alerts';
 import { CONNECTED_MESSAGE, INTEGRATION_KINDS } from '~/utils/alerts';
 
@@ -69,13 +67,9 @@ export function OneClickConnect(props: OneClickConnectProps) {
   const info = INTEGRATION_KINDS[provider];
 
   const finish = async (integrationId: string) => {
-    const integrations = await queryClient.fetchQuery({
-      queryKey: ['integrations'],
-      queryFn: () => request(apiClient.GET('/v1/integrations')),
-      staleTime: 0,
-    });
+    const integrations = await queryClient.fetchQuery({ ...integrationQueries.list(), staleTime: 0 });
     const saved = integrations.find((integration) => integration.id === integrationId);
-    queryClient.invalidateQueries({ queryKey: ['integrations'] });
+    queryClient.invalidateQueries({ queryKey: integrationQueries.all() });
     toast.success(`Connected ${saved?.name ?? info.label}`);
     if (saved) {
       onSaved?.(saved);
@@ -100,7 +94,7 @@ export function OneClickConnect(props: OneClickConnectProps) {
   });
 
   const { data: telegram } = useQuery({
-    ...telegramConnectOptions(telegramState ?? ''),
+    ...integrationQueries.telegramConnect(telegramState ?? ''),
     enabled: !!telegramState,
   });
   useEffect(() => {
