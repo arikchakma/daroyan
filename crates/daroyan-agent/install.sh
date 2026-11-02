@@ -134,7 +134,7 @@ EOF
   fi
   if command -v docker >/dev/null 2>&1; then
     DOCKER="$(command -v docker)"
-    SUDO_RULES="${SUDO_RULES:+$SUDO_RULES, }$DOCKER start *, $DOCKER stop *, $DOCKER restart *, $DOCKER ps *, $DOCKER logs *"
+    SUDO_RULES="${SUDO_RULES:+$SUDO_RULES, }$DOCKER start *, $DOCKER stop *, $DOCKER restart *, $DOCKER ps *, $DOCKER inspect *, $DOCKER logs *, $DOCKER events *"
   fi
   if [ -n "$SUDO_RULES" ]; then
     if [ -d /etc/sudoers.d ] && command -v visudo >/dev/null 2>&1; then
