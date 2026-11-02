@@ -29,7 +29,7 @@ curl -fsSL https://daroyan.com/install.sh | sudo DAROYAN_TOKEN=dy_agent_... sh
 
 The script creates the `daroyan` user, writes `/etc/daroyan/agent.yml` once (a rerun keeps it), and swaps the binary in with a rename, so a rerun upgrades a running agent safely. It installs a systemd unit, or an OpenRC service on Alpine. With Docker installed, it allows the read-only `docker ps/inspect/logs/events` through sudo.
 
-The agent starts with no capabilities, and with `NoNewPrivileges` when it needs no sudo. The two flags add more:
+The agent starts with no capabilities, and under systemd with `NoNewPrivileges` when it needs no sudo. The two flags add more:
 
 - `DAROYAN_COMMANDS=1` adds a polkit rule for `systemctl start/stop/restart`, or a sudoers entry when polkit is not installed, plus `docker start/stop/restart` through sudo.
 - `DAROYAN_PROCESS_IO=1` adds the two capabilities. They let the agent read any file and any process's memory, so leave them off unless you need per-process disk I/O.

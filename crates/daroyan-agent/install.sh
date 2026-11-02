@@ -33,8 +33,7 @@ for flag in "$COMMANDS" "$PROCESS_IO"; do
   esac
 done
 
-# A rerun without a flag keeps what the server already has. This runs before
-# the binary is replaced, because the new file drops setcap capabilities.
+# Runs before the binary is replaced, because the new file drops setcap capabilities.
 if [ -z "$COMMANDS" ]; then
   COMMANDS=0
   if [ -f /etc/polkit-1/rules.d/50-daroyan.rules ] || grep -qs " restart \*" /etc/sudoers.d/daroyan; then
@@ -118,8 +117,6 @@ fi
 chown root:daroyan "$CONFIG"
 chmod 640 "$CONFIG"
 
-# Lets the agent find a container's processes and read its details, events
-# and logs, and, with DAROYAN_COMMANDS=1, start, stop and restart containers.
 # The agent refuses anything that is not in processes in its config.
 add_docker_rules() {
   if ! command -v docker >/dev/null 2>&1; then
@@ -152,7 +149,6 @@ write_sudoers() {
 
 SUDO_RULES=""
 if [ -d /run/systemd/system ]; then
-  # Polkit covers systemctl when it is installed; sudo covers the rest.
   if [ "$COMMANDS" = 0 ]; then
     rm -f /etc/polkit-1/rules.d/50-daroyan.rules
   elif [ -d /etc/polkit-1/rules.d ]; then
