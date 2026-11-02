@@ -19,6 +19,9 @@ pub enum Command {
     Restart,
     /// Show the agent service status
     Status,
+    /// Serve per-process disk I/O to the agent; run by the daroyan-io service
+    #[command(hide = true)]
+    IoHelper,
 }
 
 #[derive(Args)]

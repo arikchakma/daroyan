@@ -25,14 +25,14 @@ curl -fsSL https://daroyan.com/install.sh | sudo DAROYAN_TOKEN=dy_agent_... sh
 | `DAROYAN_API_URL` | `https://daroyan.com` | The API |
 | `DAROYAN_BINARY` | download | A local binary to install instead of the download |
 | `DAROYAN_COMMANDS` | `0` | `1` lets the agent start, stop and restart units and containers, for `restart` and `agent.commands` |
-| `DAROYAN_PROCESS_IO` | `0` | `1` gives the agent `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` to read other users' `/proc/<pid>/io` for per-process disk I/O |
+| `DAROYAN_PROCESS_IO` | `0` | `1` installs the `daroyan-io` helper, which reads other users' `/proc/<pid>/io` for per-process disk I/O |
 
 The script creates the `daroyan` user, writes `/etc/daroyan/agent.yml` once (a rerun keeps it), and swaps the binary in with a rename, so a rerun upgrades a running agent safely. It installs a systemd unit, or an OpenRC service on Alpine. With Docker installed, it allows the read-only `docker ps/inspect/logs/events` through sudo.
 
-The agent starts with no capabilities, and under systemd with `NoNewPrivileges` when it needs no sudo. The two flags add more:
+The agent never holds capabilities, and under systemd runs with `NoNewPrivileges` when it needs no sudo. The two flags add more:
 
 - `DAROYAN_COMMANDS=1` adds a polkit rule for `systemctl start/stop/restart`, or a sudoers entry when polkit is not installed, plus `docker start/stop/restart` through sudo.
-- `DAROYAN_PROCESS_IO=1` adds the two capabilities. They let the agent read any file and any process's memory, so leave them off unless you need per-process disk I/O.
+- `DAROYAN_PROCESS_IO=1` adds a separate `daroyan-io` service that holds `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, the two capabilities `/proc/<pid>/io` needs. It runs as its own `daroyan-io` user with no network, reads nothing from its socket, and answers only `daroyan` and root. Each connection gets one line per process, `<pid> <read_bytes> <write_bytes>`, on `/run/daroyan-io/io.sock`. It blocks `ptrace`, `execve`, new sockets and `open_by_handle_at` with seccomp, and under systemd it also sees only `/proc`, `/etc/passwd` and its own binary. Without it, the agent reports disk I/O only for its own processes.
 
 A rerun without a flag keeps what the server already has. Set a flag to `0` to remove it.
 

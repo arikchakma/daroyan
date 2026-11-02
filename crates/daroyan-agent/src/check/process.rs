@@ -11,6 +11,7 @@ use log::{info, warn};
 use sysinfo::{Pid, Process, System, Uid, Users};
 
 use crate::check::docker_events::{DockerEvents, read_exit_code, was_oom, was_stopped};
+use crate::collect::process_io::ProcessIo;
 use crate::collect::{now_millis, per_sec};
 use crate::command::{HeldProcesses, hold};
 use crate::config::{ProcessCheck, Restart, Source};
@@ -105,6 +106,7 @@ impl ProcessWatch {
     pub fn check_processes(
         &mut self,
         system: &System,
+        process_io: &ProcessIo,
         elapsed_secs: f64,
         events: &mut Vec<Event>,
     ) -> Vec<ProcessState> {
@@ -117,7 +119,14 @@ impl ProcessWatch {
         checks
             .iter()
             .map(|check| {
-                self.check_process(check, system, &cgroups, elapsed_secs, events)
+                self.check_process(
+                    check,
+                    system,
+                    process_io,
+                    &cgroups,
+                    elapsed_secs,
+                    events,
+                )
             })
             .collect()
     }
@@ -126,6 +135,7 @@ impl ProcessWatch {
         &mut self,
         check: &ProcessCheck,
         system: &System,
+        process_io: &ProcessIo,
         cgroups: &HashMap<Pid, String>,
         elapsed_secs: f64,
         events: &mut Vec<Event>,
@@ -227,8 +237,8 @@ impl ProcessWatch {
         }
 
         let disk: (u64, u64) = family.iter().fold((0, 0), |(read, write), process| {
-            let usage = process.disk_usage();
-            (read + usage.read_bytes, write + usage.written_bytes)
+            let (process_read, process_write) = process_io.usage(process);
+            (read + process_read, write + process_write)
         });
 
         ProcessState {
@@ -549,7 +559,7 @@ mod tests {
                     .with_cmd(sysinfo::UpdateKind::Always),
             );
             let mut events = Vec::new();
-            watch.check_processes(&system, 1.0, &mut events);
+            watch.check_processes(&system, &ProcessIo::default(), 1.0, &mut events);
             events
         };
 

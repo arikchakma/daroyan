@@ -42,7 +42,9 @@ if [ -z "$COMMANDS" ]; then
 fi
 if [ -z "$PROCESS_IO" ]; then
   PROCESS_IO=0
-  if grep -qs "^AmbientCapabilities=.*CAP_SYS_PTRACE" /etc/systemd/system/daroyan.service; then
+  if [ -f /etc/systemd/system/daroyan-io.service ] || [ -f /etc/init.d/daroyan-io ]; then
+    PROCESS_IO=1
+  elif grep -qs "^AmbientCapabilities=.*CAP_SYS_PTRACE" /etc/systemd/system/daroyan.service; then
     PROCESS_IO=1
   elif command -v getcap >/dev/null 2>&1 && getcap /usr/local/bin/daroyan 2>/dev/null | grep -q cap_sys_ptrace; then
     PROCESS_IO=1
@@ -72,13 +74,21 @@ chmod 755 "$TMP_BINARY"
 "$TMP_BINARY" --version >/dev/null
 mv -f "$TMP_BINARY" /usr/local/bin/daroyan
 
-if ! id daroyan >/dev/null 2>&1; then
-  if command -v useradd >/dev/null 2>&1; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin daroyan
-  else
-    addgroup -S daroyan 2>/dev/null || true
-    adduser -S -D -H -G daroyan -s /sbin/nologin daroyan
+add_system_user() {
+  if id "$1" >/dev/null 2>&1; then
+    return
   fi
+  if command -v useradd >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin "$1"
+  else
+    addgroup -S "$1" 2>/dev/null || true
+    adduser -S -D -H -G "$1" -s /sbin/nologin "$1"
+  fi
+}
+
+add_system_user daroyan
+if [ "$PROCESS_IO" = 1 ]; then
+  add_system_user daroyan-io
 fi
 
 # Reading journald and /var/log files for log collection needs these groups.
@@ -185,10 +195,6 @@ ExecStart=/usr/local/bin/daroyan start
 Restart=on-failure
 RestartSec=5
 EOF
-    if [ "$PROCESS_IO" = 1 ]; then
-      echo "# Reading /proc/<pid>/io of other users' processes needs these two capabilities."
-      echo "AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH"
-    fi
     if [ -z "$SUDO_RULES" ]; then
       echo "NoNewPrivileges=yes"
     fi
@@ -198,7 +204,70 @@ EOF
 WantedBy=multi-user.target
 EOF
   } > /etc/systemd/system/daroyan.service
+
+  if [ "$PROCESS_IO" = 1 ]; then
+    cat > /etc/systemd/system/daroyan-io.socket <<'EOF'
+[Unit]
+Description=Daroyan disk I/O helper socket
+
+[Socket]
+ListenStream=/run/daroyan-io/io.sock
+SocketGroup=daroyan
+SocketMode=0660
+
+[Install]
+WantedBy=sockets.target
+EOF
+    cat > /etc/systemd/system/daroyan-io.service <<'EOF'
+[Unit]
+Description=Daroyan disk I/O helper
+Requires=daroyan-io.socket
+
+[Service]
+ExecStart=/usr/local/bin/daroyan io-helper
+StandardInput=socket
+StandardOutput=journal
+User=daroyan-io
+Group=daroyan-io
+# Reading /proc/<pid>/io of other users' processes needs these two capabilities.
+AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+TemporaryFileSystem=/
+BindReadOnlyPaths=/proc /usr/local/bin/daroyan /etc/passwd
+ProcSubset=pid
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service seccomp
+SystemCallFilter=~@debug @mount process_vm_readv process_vm_writev open_by_handle_at name_to_handle_at
+SystemCallErrorNumber=EPERM
+UMask=0077
+EOF
+  else
+    systemctl disable --now daroyan-io.socket daroyan-io.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/daroyan-io.socket /etc/systemd/system/daroyan-io.service
+    rm -rf /run/daroyan-io
+  fi
+
   systemctl daemon-reload
+  if [ "$PROCESS_IO" = 1 ]; then
+    systemctl enable --now daroyan-io.socket
+    systemctl try-restart daroyan-io.service
+  fi
   systemctl enable --now daroyan
   systemctl restart daroyan
 elif command -v rc-service >/dev/null 2>&1; then
@@ -218,15 +287,31 @@ depend() {
 }
 EOF
   chmod 755 /etc/init.d/daroyan
-  chown root:daroyan /usr/local/bin/daroyan
-  chmod 750 /usr/local/bin/daroyan
+
   if [ "$PROCESS_IO" = 1 ]; then
-    if command -v setcap >/dev/null 2>&1; then
-      setcap cap_sys_ptrace,cap_dac_read_search+ep /usr/local/bin/daroyan
-    else
-      echo "setcap was not found, so process disk I/O stays off. Install libcap to fix it." >&2
-    fi
+    cat > /etc/init.d/daroyan-io <<'EOF'
+#!/sbin/openrc-run
+description="Daroyan disk I/O helper"
+supervisor=supervise-daemon
+command=/usr/local/bin/daroyan
+command_args="io-helper"
+command_user="daroyan-io:daroyan-io"
+capabilities="^cap_sys_ptrace,^cap_dac_read_search"
+no_new_privs=yes
+start_pre() {
+  checkpath -d -o daroyan-io:daroyan -m 0750 /run/daroyan-io
+}
+EOF
+    chmod 755 /etc/init.d/daroyan-io
+    rc-update add daroyan-io default >/dev/null
+    rc-service daroyan-io restart
+  elif [ -f /etc/init.d/daroyan-io ]; then
+    rc-service daroyan-io stop >/dev/null 2>&1 || true
+    rc-update del daroyan-io default >/dev/null 2>&1 || true
+    rm -f /etc/init.d/daroyan-io
+    rm -rf /run/daroyan-io
   fi
+
   rc-update add daroyan default >/dev/null
   rc-service daroyan restart
 else
