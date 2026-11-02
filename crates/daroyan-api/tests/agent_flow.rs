@@ -469,10 +469,22 @@ async fn enrolls_reports_and_runs_commands() {
         assert_eq!(guess.status(), StatusCode::UNAUTHORIZED);
         assert!(guesses <= 10, "the API never blocked the guesses");
     }
-    let blocked = http.get(format!("{base}/v1/servers")).send().await.unwrap();
+    let blocked = Client::new()
+        .get(format!("{base}/v1/servers"))
+        .header("cookie", "daroyan_session=wrong")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry_after: u64 =
+        blocked.headers()["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!((1..=60).contains(&retry_after));
     let body: Value = blocked.json().await.unwrap();
     assert_eq!(body["name"], "rate_limit_exceeded");
+
+    let signed_in = http.get(format!("{base}/v1/servers")).send().await.unwrap();
+    assert_eq!(signed_in.status(), StatusCode::OK);
+    assert_eq!(signed_in.headers()["cache-control"], "no-store");
 
     remove_dir(dir);
 }

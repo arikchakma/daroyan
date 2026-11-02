@@ -4,7 +4,10 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use governor::{DefaultDirectRateLimiter, DefaultKeyedRateLimiter, Quota, RateLimiter};
+use governor::clock::{Clock, DefaultClock, QuantaInstant};
+use governor::{
+    DefaultDirectRateLimiter, DefaultKeyedRateLimiter, NotUntil, Quota, RateLimiter,
+};
 
 use crate::error::{Error, ErrorName, Result};
 
@@ -58,26 +61,29 @@ fn to_key(ip: IpAddr) -> IpAddr {
 
 impl Limits {
     pub fn check_global(&self, ip: IpAddr) -> Result<()> {
-        self.global.check_key(&to_key(ip)).map_err(|_| too_many_requests())
+        self.global.check_key(&to_key(ip)).map_err(to_wait_error)
     }
 
     pub fn check_enroll(&self, ip: IpAddr) -> Result<()> {
-        self.enroll.check_key(&to_key(ip)).map_err(|_| too_many_requests())
+        self.enroll.check_key(&to_key(ip)).map_err(to_wait_error)
     }
 
     pub fn check_connect(&self, server_id: &str) -> Result<()> {
-        self.connect
-            .check_key(&server_id.to_string())
-            .map_err(|_| too_many_requests())
+        self.connect.check_key(&server_id.to_string()).map_err(to_wait_error)
     }
 
     pub fn check_auth_blocked(&self, ip: IpAddr) -> Result<()> {
         let failures = self.lock_failures();
-        let is_blocked = failures.get(&to_key(ip)).is_some_and(|window| {
-            window.count >= AUTH_FAILURE_LIMIT
-                && window.started_at.elapsed() < AUTH_FAILURE_WINDOW
-        });
-        if is_blocked { Err(too_many_requests()) } else { Ok(()) }
+        let blocked_for = failures
+            .get(&to_key(ip))
+            .filter(|window| window.count >= AUTH_FAILURE_LIMIT)
+            .and_then(|window| {
+                AUTH_FAILURE_WINDOW.checked_sub(window.started_at.elapsed())
+            });
+        match blocked_for {
+            Some(wait) => Err(too_many_requests(wait)),
+            None => Ok(()),
+        }
     }
 
     pub fn record_auth_failure(&self, ip: IpAddr) {
@@ -148,8 +154,13 @@ impl LogBudgets {
     }
 }
 
-fn too_many_requests() -> Error {
+fn too_many_requests(wait: Duration) -> Error {
     Error::new(ErrorName::RateLimitExceeded, "Too many requests. Please try again later.")
+        .with_retry_after(wait)
+}
+
+fn to_wait_error(not_until: NotUntil<QuantaInstant>) -> Error {
+    too_many_requests(not_until.wait_time_from(DefaultClock::default().now()))
 }
 
 #[cfg(test)]

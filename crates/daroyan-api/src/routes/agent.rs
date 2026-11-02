@@ -49,16 +49,20 @@ async fn enroll_agent(
     Json(body): Json<EnrollRequest>,
 ) -> Result<Json<EnrollResponse>> {
     state.limits.check_enroll(ip)?;
-    state.limits.check_auth_blocked(ip)?;
-    let install_token =
-        read_bearer(&headers).inspect_err(|_| state.limits.record_auth_failure(ip))?;
-    let enrolled = enroll_server(&state.database, &install_token, &body.host)
-        .await
-        .inspect_err(|error| {
-            if error.name() == ErrorName::Unauthorized {
-                state.limits.record_auth_failure(ip);
-            }
-        })?;
+    let enrolled = match read_bearer(&headers) {
+        Ok(install_token) => {
+            enroll_server(&state.database, &install_token, &body.host).await
+        }
+        Err(error) => Err(error),
+    };
+    let enrolled = match enrolled {
+        Err(error) if error.name() == ErrorName::Unauthorized => {
+            state.limits.check_auth_blocked(ip)?;
+            state.limits.record_auth_failure(ip);
+            return Err(error);
+        }
+        enrolled => enrolled?,
+    };
     state.hosts.forget();
     tracing::info!(server_id = %enrolled.server.id, name = %enrolled.server.name, "server enrolled");
     Ok(Json(EnrollResponse {

@@ -1,4 +1,6 @@
-use axum::http::StatusCode;
+use std::time::Duration;
+
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use sea_orm::DbErr;
 use serde::Serialize;
@@ -33,11 +35,12 @@ impl ErrorName {
 pub struct ApiError {
     pub name: ErrorName,
     pub message: String,
+    pub retry_after: Option<Duration>,
 }
 
 impl ApiError {
     pub fn new(name: ErrorName, message: impl Into<String>) -> Self {
-        Self { name, message: message.into() }
+        Self { name, message: message.into(), retry_after: None }
     }
 
     pub fn unknown() -> Self {
@@ -51,6 +54,12 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut response = self.name.status().into_response();
+        if let Some(retry_after) = self.retry_after {
+            let seconds = retry_after.as_secs_f64().ceil().max(1.0) as u64;
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        }
         response.extensions_mut().insert(self);
         response
     }
@@ -68,6 +77,15 @@ pub enum Error {
 impl Error {
     pub fn new(name: ErrorName, message: impl Into<String>) -> Self {
         Self::Api(ApiError::new(name, message))
+    }
+
+    pub fn with_retry_after(self, retry_after: Duration) -> Self {
+        match self {
+            Self::Api(error) => {
+                Self::Api(ApiError { retry_after: Some(retry_after), ..error })
+            }
+            error => error,
+        }
     }
 
     pub fn name(&self) -> ErrorName {
