@@ -1,4 +1,4 @@
-import { getAvatarPaths, AVATAR_GRID, pickPalette } from '~/utils/avatar';
+import { DitheringAvatar } from 'dithering-avatar';
 import { cn } from '~/utils/classname';
 
 type AvatarProps = {
@@ -26,22 +26,15 @@ export function Avatar(props: AvatarProps) {
     );
   }
 
-  const paths = getAvatarPaths(id, pickPalette(id));
-
   return (
-    <svg
-      viewBox={`0 0 ${AVATAR_GRID} ${AVATAR_GRID}`}
-      aria-hidden="true"
-      shapeRendering="crispEdges"
+    <DitheringAvatar
+      name={id}
+      style={{ borderRadius: undefined }}
       className={cn(
         'size-5.5 shrink-0',
         shape === 'square' ? 'rounded-xs' : 'rounded-full',
         className
       )}
-    >
-      {paths.map((path) => (
-        <path key={path.fill} d={path.d} fill={path.fill} />
-      ))}
-    </svg>
+    />
   );
 }

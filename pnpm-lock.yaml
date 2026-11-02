@@ -58,6 +58,9 @@ importers:
       cn:
         specifier: ^0.4.0
         version: 0.4.0
+      dithering-avatar:
+        specifier: ^0.2.0
+        version: 0.2.0(react@19.3.1)
       isbot:
         specifier: ^5.2.2
         version: 5.2.2
@@ -1457,6 +1460,11 @@ packages:
 
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
+
+  dithering-avatar@0.2.0:
+    resolution: {integrity: sha512-+z8/ILS0lsc5U3OTJwYoNl0zZuFp7of3OBMrqVaGKFE4cmDvvBIAesO/8W5+52xRUxkiMsSWnBaHJ9rWm9zg3A==}
+    peerDependencies:
+      react: '>=17'
 
   electron-to-chromium@1.5.456:
     resolution: {integrity: sha512-8hboqI6xesozteFb8aa7OGknvxUtTeRJLz0FoePysUEh/oWbddykIGdgpEJRbPRg/nIMfBf2DFos+H2MtvJl2A==}
@@ -3263,6 +3271,10 @@ snapshots:
   devlop@1.1.0:
     dependencies:
       dequal: 2.0.3
+
+  dithering-avatar@0.2.0(react@19.3.1):
+    dependencies:
+      react: 19.3.1
 
   electron-to-chromium@1.5.456: {}
 
