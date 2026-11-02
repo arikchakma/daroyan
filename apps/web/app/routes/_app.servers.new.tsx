@@ -1,3 +1,4 @@
+import type { Schemas } from '@daroyan/client';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, Navigate } from 'react-router';
@@ -13,6 +14,7 @@ import {
   InstallKeySelect,
   MAX_USES_ITEMS,
 } from '~/components/servers/install-key-select';
+import { queryClient } from '~/lib/query-client';
 import { ONE_OFF_LIMITS, installTokenOptions, revokeInstallTokenOptions } from '~/queries/install-tokens';
 import type { InstallTokenLimits } from '~/queries/install-tokens';
 import { listServersOptions } from '~/queries/servers';
@@ -32,6 +34,21 @@ processes:
 ports:
   - host: redis-1
     port: 6379`;
+
+export function clientLoader() {
+  const servers = queryClient.getQueryData(listServersOptions().queryKey) ?? [];
+  const tokens = queryClient.getQueriesData<Schemas['InstallToken']>({ queryKey: ['install-token'] });
+  for (const [queryKey, token] of tokens) {
+    const isUsed = token && servers.some((server) => new Date(server.created_at) >= new Date(token.created_at));
+    if (!isUsed) {
+      continue;
+    }
+
+    queryClient.removeQueries({ queryKey, exact: true });
+  }
+
+  return null;
+}
 
 function maskToken(token: string) {
   return `${token.slice(0, 13)}…${token.slice(-3)}`;
