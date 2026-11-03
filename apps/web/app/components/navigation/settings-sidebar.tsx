@@ -41,6 +41,7 @@ export function SettingsSidebar() {
           <NavLink
             key={item.path}
             to={item.path}
+            end
             prefetch="intent"
             className="group flex h-7.5 shrink-0 items-center gap-2.5 rounded-lg pr-2 pl-2.5 text-body font-medium text-sidebar-text outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-white/30 aria-[current=page]:bg-sidebar-item-active aria-[current=page]:text-white"
           >

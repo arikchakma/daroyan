@@ -50,6 +50,7 @@ export const SETTINGS_NAV_ITEM: NavItem = {
 export const NAV_ITEMS = NAV_SECTIONS.flatMap((section) => section.items);
 
 export const SETTINGS_ITEMS: NavItem[] = [
+  { label: 'General', icon: 'settings', path: '/settings' },
   { label: 'Members', icon: 'users', path: '/settings/members' },
   { label: 'Integrations', icon: 'bell', path: '/settings/integrations' },
   { label: 'Agents', icon: 'server', path: '/settings/agents' },
