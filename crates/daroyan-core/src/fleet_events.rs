@@ -453,7 +453,11 @@ mod tests {
     #[test]
     fn reports_a_long_outage() {
         let rows = [row(AGENT_DISCONNECTED, 0), row(AGENT_CONNECTED, 90)];
-        let outage = Outage { server_id: "srv".to_string(), from: 0, to: Some(90_000) };
+        let outage = Outage {
+            server_id: "srv".to_string(),
+            from: 0,
+            to: Some(90_000),
+        };
         assert_eq!(find_outages(&rows, 120_000, |_| true), [outage]);
     }
 
