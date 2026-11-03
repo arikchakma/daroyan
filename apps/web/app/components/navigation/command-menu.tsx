@@ -22,7 +22,6 @@ import { uptimeCheckQueries } from '~/queries/uptime';
 import {
   NAV_ITEMS,
   SETTINGS_ITEMS,
-  SETTINGS_NAV_ITEM,
 } from '~/utils/navigation';
 import type { NavItem } from '~/utils/navigation';
 import { getStoredTheme, setTheme, subscribeToTheme } from '~/utils/theme';
@@ -53,7 +52,7 @@ export function CommandMenu(props: CommandMenuProps) {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const hasRunActionRef = useRef(false);
 
-  const section = [...NAV_ITEMS, ...SETTINGS_ITEMS, SETTINGS_NAV_ITEM]
+  const section = [...NAV_ITEMS, ...SETTINGS_ITEMS]
     .filter(
       (item) =>
         pathname === item.path ||
@@ -265,7 +264,7 @@ export function CommandMenu(props: CommandMenuProps) {
     },
     {
       label: 'Settings',
-      actions: [SETTINGS_NAV_ITEM, ...SETTINGS_ITEMS].map(toCommand),
+      actions: SETTINGS_ITEMS.map(toCommand),
     },
     {
       label: 'Account',

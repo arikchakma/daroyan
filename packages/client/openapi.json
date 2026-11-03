@@ -1070,6 +1070,23 @@
         }
       }
     },
+    "/v1/instance": {
+      "get": {
+        "description": "Settings this Daroyan instance reads from its environment: the public URL, how long metrics and logs are kept, and how many owners ALLOWED_EMAILS lists",
+        "operationId": "get_instance",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Instance"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/integrations": {
       "get": {
         "operationId": "list_integrations",
@@ -5036,6 +5053,36 @@
           "uses": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "Instance": {
+        "type": "object",
+        "required": [
+          "retention_days",
+          "log_retention_days",
+          "allowed_email_count"
+        ],
+        "properties": {
+          "allowed_email_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "app_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "log_retention_days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "retention_days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },

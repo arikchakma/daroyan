@@ -1,6 +1,7 @@
 import { useHotkey } from '@tanstack/react-hotkeys';
 import { useQuery } from '@tanstack/react-query';
 import { useState, useSyncExternalStore } from 'react';
+import { Link } from 'react-router';
 
 import { DaroyanLogo } from '~/components/brand/daroyan-logo';
 import { Icon } from '~/components/icons/icon';
@@ -90,8 +91,14 @@ export function AppSidebar(props: AppSidebarProps) {
             }
           />
         ) : (
-          <div className="flex h-8 shrink-0 items-center justify-between pr-0.5 pl-2">
-            <DaroyanLogo className="size-5" />
+          <div className="flex h-8 shrink-0 items-center justify-between pr-0.5 pl-1">
+            <Link
+              to="/"
+              aria-label="Overview"
+              className="flex size-7 items-center justify-center rounded-sm text-white outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+            >
+              <DaroyanLogo className="size-5" />
+            </Link>
             <SidebarTooltip
               label="Collapse Navigation"
               shortcut="Mod+B"
@@ -222,7 +229,7 @@ function AccountMenu(props: AccountMenuProps) {
       <Menu.Trigger
         className={cn(
           'flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-lg pr-1 pl-1.75 text-left outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-white/30',
-          isCollapsed && 'ml-0.5 w-9 flex-none pl-1.75'
+          isCollapsed && 'ml-0.75 w-7.5 flex-none justify-center rounded-md p-0'
         )}
       >
         <Avatar id={me?.id ?? name} src={me?.avatar_url} shape="square" />

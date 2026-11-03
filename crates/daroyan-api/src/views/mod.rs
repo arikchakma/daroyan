@@ -7,6 +7,7 @@ pub mod command;
 pub mod cron;
 pub mod incident;
 pub mod install_token;
+pub mod instance;
 pub mod integration;
 pub mod server;
 pub mod status_page;
