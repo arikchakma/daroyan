@@ -222,15 +222,10 @@ function AccountMenu(props: AccountMenuProps) {
       <Menu.Trigger
         className={cn(
           'flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-lg pr-1 pl-1.75 text-left outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-white/30',
-          isCollapsed && 'mt-1.5 ml-0.75 size-7.5 flex-none justify-center rounded-md p-0'
+          isCollapsed && 'ml-0.75 w-7.5 flex-none justify-center rounded-md p-0'
         )}
       >
-        <Avatar
-          id={me?.id ?? name}
-          src={me?.avatar_url}
-          shape="square"
-          className={cn(isCollapsed && 'size-7.5 rounded-md')}
-        />
+        <Avatar id={me?.id ?? name} src={me?.avatar_url} shape="square" />
         <span
           className={cn(
             'min-w-0 flex-1 truncate text-body font-medium text-sidebar-text',
