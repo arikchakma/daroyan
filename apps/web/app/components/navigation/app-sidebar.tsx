@@ -264,6 +264,10 @@ function AccountMenu(props: AccountMenuProps) {
               <Icon name="log-out" />
               Sign Out
             </Menu.Item>
+            <Menu.Separator />
+            <p className="px-2 py-1.5 text-caption text-text-secondary">
+              Version {__DAROYAN_VERSION__}
+            </p>
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>
