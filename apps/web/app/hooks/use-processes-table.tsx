@@ -1,10 +1,11 @@
 import type { Schemas } from '@daroyan/client';
 import { useMutation } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { Icon } from '~/components/icons/icon';
 import { Badge } from '~/components/ui/badge';
+import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { Menu } from '~/components/ui/menu';
 import { Tooltip } from '~/components/ui/tooltip';
 import { useDataTable } from '~/hooks/use-data-table';
@@ -45,6 +46,7 @@ function ProcessActions(props: ProcessActionsProps) {
   });
 
   const isAdmin = useIsAdmin();
+  const [confirming, setConfirming] = useState<'restart_process' | 'stop_process'>();
 
   const run = (action: CommandAction) =>
     runCommand(
@@ -52,49 +54,78 @@ function ProcessActions(props: ProcessActionsProps) {
       {
         onSuccess: () => {
           toast.success(`${ACTION_DONE[action]} ${process.name}`);
+          setConfirming(undefined);
           void queryClient.invalidateQueries({ queryKey: serverQueries.detail(serverId).queryKey });
         },
       }
     );
+
+  const closeConfirm = (open: boolean) => {
+    if (!open) {
+      setConfirming(undefined);
+    }
+  };
 
   if (!isAdmin) {
     return null;
   }
 
   return (
-    <Menu.Root>
-      <Menu.Trigger
-        aria-label={`Actions for ${process.name}`}
-        disabled={isPending}
-        className={cn(
-          'relative z-1 inline-flex size-6 items-center justify-center rounded-full opacity-0 outline-none group-hover:opacity-100 hover:bg-surface-fill focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-text-link/40 data-popup-open:opacity-100 pointer-coarse:opacity-100',
-          isPending && 'opacity-100'
-        )}
-      >
-        <Icon name={isPending ? 'loader' : 'more'} className={cn(isPending && 'animate-spin')} />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner align="end" sideOffset={4}>
-          <Menu.Popup>
-            <Menu.Item onClick={() => run('restart_process')}>
-              <Icon name="refresh" />
-              Restart
-            </Menu.Item>
-            {process.status === 'running' ? (
-              <Menu.Item onClick={() => run('stop_process')}>
-                <Icon name="pause" />
-                Stop
+    <>
+      <Menu.Root>
+        <Menu.Trigger
+          aria-label={`Actions for ${process.name}`}
+          disabled={isPending}
+          className={cn(
+            'relative z-1 inline-flex size-6 items-center justify-center rounded-full opacity-0 outline-none group-hover:opacity-100 hover:bg-surface-fill focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-text-link/40 data-popup-open:opacity-100 pointer-coarse:opacity-100',
+            isPending && 'opacity-100'
+          )}
+        >
+          <Icon name={isPending ? 'loader' : 'more'} className={cn(isPending && 'animate-spin')} />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner align="end" sideOffset={4}>
+            <Menu.Popup>
+              <Menu.Item onClick={() => setConfirming('restart_process')}>
+                <Icon name="refresh" />
+                Restart
               </Menu.Item>
-            ) : (
-              <Menu.Item onClick={() => run('start_process')}>
-                <Icon name="play" />
-                Start
-              </Menu.Item>
-            )}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+              {process.status === 'running' ? (
+                <Menu.Item onClick={() => setConfirming('stop_process')}>
+                  <Icon name="pause" />
+                  Stop
+                </Menu.Item>
+              ) : (
+                <Menu.Item onClick={() => run('start_process')}>
+                  <Icon name="play" />
+                  Start
+                </Menu.Item>
+              )}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+
+      <ConfirmDialog
+        open={confirming === 'restart_process'}
+        onOpenChange={closeConfirm}
+        tone="default"
+        title={`Restart ${process.name}?`}
+        description="The agent restarts it now. It may not answer for a few seconds."
+        confirmLabel="Restart"
+        isPending={isPending}
+        onConfirm={() => run('restart_process')}
+      />
+      <ConfirmDialog
+        open={confirming === 'stop_process'}
+        onOpenChange={closeConfirm}
+        title={`Stop ${process.name}?`}
+        description="The agent stops it now. Anything that relies on it fails until it starts again."
+        confirmLabel="Stop"
+        isPending={isPending}
+        onConfirm={() => run('stop_process')}
+      />
+    </>
   );
 }
 
