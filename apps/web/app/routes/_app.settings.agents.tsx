@@ -26,7 +26,7 @@ import { queryClient } from "~/lib/query-client";
 import { toast } from "~/lib/toast";
 import {
   createInstallTokenOptions,
-  listInstallTokensOptions,
+  installTokenQueries,
   revokeInstallTokenOptions,
 } from "~/queries/install-tokens";
 import type { InstallTokenLimits } from "~/queries/install-tokens";
@@ -66,7 +66,7 @@ export function meta() {
 
 export default function AgentsPage() {
   const isAdmin = useIsAdmin();
-  const { data: tokens, isLoading } = useQuery(listInstallTokensOptions());
+  const { data: tokens, isLoading } = useQuery(installTokenQueries.list());
   const [isAdding, setIsAdding] = useState(false);
   const [limits, setLimits] = useState(DEFAULT_LIMITS);
   const [revoking, setRevoking] = useState<TokenItem>();
@@ -76,7 +76,7 @@ export default function AgentsPage() {
     ...revokeInstallTokenOptions(),
     meta: { errorMessage: "The key could not be revoked" },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["install-tokens"] });
+      queryClient.invalidateQueries({ queryKey: installTokenQueries.list().queryKey });
       toast.success(`Revoked ${revoking?.name ?? "the key"}`);
       setRevoking(undefined);
     },
@@ -142,7 +142,7 @@ export default function AgentsPage() {
           }
           setIsAdding(open);
         }}
-        queryKey={["install-tokens"]}
+        queryKey={installTokenQueries.list().queryKey}
         mutation={createInstallTokenOptions(limits)}
         noun="Key"
         placeholder="ansible-fleet"

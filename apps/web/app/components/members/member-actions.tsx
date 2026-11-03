@@ -7,7 +7,7 @@ import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { Menu } from "~/components/ui/menu";
 import { queryClient } from "~/lib/query-client";
 import { toast } from "~/lib/toast";
-import { removeMemberOptions, updateMemberOptions } from "~/queries/members";
+import { memberQueries, removeMemberOptions, updateMemberOptions } from "~/queries/members";
 import type { MemberRole } from "~/queries/members";
 
 type MemberActionsProps = {
@@ -29,7 +29,7 @@ export function MemberActions(props: MemberActionsProps) {
       toast.success("Role changed");
       setNextRole(null);
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["members"] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: memberQueries.all() }),
   });
 
   const remove = useMutation({
@@ -43,7 +43,7 @@ export function MemberActions(props: MemberActionsProps) {
       toast.success(isInvite ? "Invite revoked" : "Member removed");
       setIsRemoving(false);
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["members"] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: memberQueries.all() }),
   });
 
   return (

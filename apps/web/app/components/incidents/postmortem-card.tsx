@@ -9,11 +9,13 @@ import { RichTextEditor } from '~/components/rich-text/rich-text-editor';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Checkbox } from '~/components/ui/checkbox';
+import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { Menu } from '~/components/ui/menu';
 import { Switch } from '~/components/ui/switch';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import {
+  incidentQueries,
   publishPostmortemOptions,
   savePostmortemOptions,
   unpublishPostmortemOptions,
@@ -59,6 +61,7 @@ export function PostmortemCard(props: PostmortemCardProps) {
   const [content, setContent] = useState<JSONContent | null>(null);
   const [notify, setNotify] = useState(true);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [isUnpublishing, setIsUnpublishing] = useState(false);
   const notifyId = useId();
   const pending = useRef<JSONContent | null>(null);
   const latestFollowUps = useRef(incident.follow_ups);
@@ -74,7 +77,7 @@ export function PostmortemCard(props: PostmortemCardProps) {
     meta: { errorMessage: 'The postmortem could not be saved' },
     onMutate: () => setSaveState('saving'),
     onSuccess: (next) => {
-      queryClient.setQueryData(['incidents', incident.id], next);
+      queryClient.setQueryData(incidentQueries.detail(incident.id).queryKey, next);
       setSaveState('saved');
     },
     onError: () => setSaveState('idle'),
@@ -84,7 +87,7 @@ export function PostmortemCard(props: PostmortemCardProps) {
     ...publishPostmortemOptions(),
     meta: { errorMessage: 'The postmortem could not be published' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      queryClient.invalidateQueries({ queryKey: incidentQueries.all() });
       toast.success(isPublished ? 'Postmortem updated' : 'Postmortem published');
       setIsEditing(false);
     },
@@ -94,8 +97,9 @@ export function PostmortemCard(props: PostmortemCardProps) {
     ...unpublishPostmortemOptions(),
     meta: { errorMessage: 'The postmortem could not be unpublished' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      queryClient.invalidateQueries({ queryKey: incidentQueries.all() });
       toast.success('Postmortem unpublished');
+      setIsUnpublishing(false);
       setIsEditing(true);
     },
   });
@@ -219,8 +223,7 @@ export function PostmortemCard(props: PostmortemCardProps) {
             <Button
               variant="secondary"
               className="w-fit"
-              disabled={unpublish.isPending}
-              onClick={() => unpublish.mutate({ incidentId: incident.id })}
+              onClick={() => setIsUnpublishing(true)}
             >
               Unpublish
             </Button>
@@ -231,6 +234,16 @@ export function PostmortemCard(props: PostmortemCardProps) {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={isUnpublishing}
+        onOpenChange={setIsUnpublishing}
+        title="Unpublish the postmortem?"
+        description="Visitors stop seeing it on the incident page. It goes back to a draft you can publish again."
+        confirmLabel="Unpublish"
+        isPending={unpublish.isPending}
+        onConfirm={() => unpublish.mutate({ incidentId: incident.id })}
+      />
     </section>
   );
 }

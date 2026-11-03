@@ -15,10 +15,10 @@ import { SaveBar } from '~/components/ui/save-bar';
 import { Switch } from '~/components/ui/switch';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { listCronsOptions } from '~/queries/crons';
-import { createStatusPageOptions, updateStatusPageOptions } from '~/queries/status-pages';
+import { cronQueries } from '~/queries/crons';
+import { createStatusPageOptions, publicStatusQueries, statusPageQueries, updateStatusPageOptions } from '~/queries/status-pages';
 import type { StatusPageInput } from '~/queries/status-pages';
-import { listUptimeChecksOptions } from '~/queries/uptime';
+import { uptimeCheckQueries } from '~/queries/uptime';
 import { cn } from '~/utils/classname';
 import { describeSchedule } from '~/utils/crons';
 import { getMonitorKey } from '~/utils/status-pages';
@@ -71,8 +71,8 @@ function move<T>(list: T[], from: number, to: number) {
 }
 
 export function useMonitors() {
-  const { data: checks = [] } = useQuery(listUptimeChecksOptions());
-  const { data: crons = [] } = useQuery(listCronsOptions());
+  const { data: checks = [] } = useQuery(uptimeCheckQueries.list());
+  const { data: crons = [] } = useQuery(cronQueries.list());
 
   const monitors: Monitor[] = [
     ...checks.map((check) => ({
@@ -147,8 +147,8 @@ function StatusPageFormBody(props: StatusPageFormBodyProps) {
   };
 
   const onSaved = (saved: Schemas['StatusPage']) => {
-    queryClient.invalidateQueries({ queryKey: ['status-pages'] });
-    queryClient.invalidateQueries({ queryKey: ['status'] });
+    queryClient.invalidateQueries({ queryKey: statusPageQueries.all() });
+    queryClient.invalidateQueries({ queryKey: publicStatusQueries.all() });
     toast.success(page ? `Saved ${saved.name}` : `Created ${saved.name}`);
     navigate(`/status-pages/${saved.id}`);
   };

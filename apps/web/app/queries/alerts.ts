@@ -10,51 +10,92 @@ export type AlertStatus = 'firing' | 'resolved' | 'all';
 export type AlertRuleInput = Schemas['CreateAlertRuleBody'];
 export type IntegrationConfig = Schemas['IntegrationConfig'];
 
-export function listAlertsOptions(status: AlertStatus, ruleId?: string) {
-  return queryOptions({
-    queryKey: ['alerts', status, ruleId ?? null],
-    queryFn: () => request(apiClient.GET('/v1/alerts', { params: { query: { status, rule_id: ruleId } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
+export const alertQueries = {
+  all: () => ['alerts'] as const,
+  list: (status: AlertStatus, ruleId?: string) =>
+    queryOptions({
+      queryKey: [...alertQueries.all(), 'list', status, ruleId ?? null],
+      queryFn: () => request(apiClient.GET('/v1/alerts', { params: { query: { status, rule_id: ruleId } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+};
 
-export function alertRuleOptions(ruleId: string) {
-  return queryOptions({
-    queryKey: ['alert-rules', ruleId],
-    queryFn: () =>
-      request(apiClient.GET('/v1/alert-rules/{rule_id}', { params: { path: { rule_id: ruleId } } })),
-  });
-}
+export const alertRuleQueries = {
+  all: () => ['alert-rules'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...alertRuleQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/alert-rules')),
+    }),
+  detail: (ruleId: string) =>
+    queryOptions({
+      queryKey: [...alertRuleQueries.all(), 'detail', ruleId],
+      queryFn: () =>
+        request(apiClient.GET('/v1/alert-rules/{rule_id}', { params: { path: { rule_id: ruleId } } })),
+    }),
+  deliveries: (ruleId: string) =>
+    queryOptions({
+      queryKey: [...alertRuleQueries.detail(ruleId).queryKey, 'deliveries'],
+      queryFn: () =>
+        request(
+          apiClient.GET('/v1/alert-rules/{rule_id}/deliveries', { params: { path: { rule_id: ruleId } } })
+        ),
+      refetchInterval: REFRESH_MS,
+    }),
+  backtest: (body: Schemas['BacktestAlertRuleBody']) =>
+    queryOptions({
+      queryKey: [...alertRuleQueries.all(), 'backtest', body],
+      queryFn: () => request(apiClient.POST('/v1/alert-rules/backtest', { body })),
+      staleTime: 60_000,
+    }),
+};
 
-export function alertDeliveriesOptions(ruleId: string) {
-  return queryOptions({
-    queryKey: ['alert-rules', ruleId, 'deliveries'],
-    queryFn: () =>
-      request(
-        apiClient.GET('/v1/alert-rules/{rule_id}/deliveries', { params: { path: { rule_id: ruleId } } })
-      ),
-    refetchInterval: REFRESH_MS,
-  });
-}
+export const integrationQueries = {
+  all: () => ['integrations'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...integrationQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/integrations')),
+    }),
+  providers: () =>
+    queryOptions({
+      queryKey: [...integrationQueries.all(), 'providers'],
+      queryFn: () => request(apiClient.GET('/v1/integrations/providers')),
+      staleTime: 60_000,
+    }),
+  telegramConnect: (state: string) =>
+    queryOptions({
+      queryKey: [...integrationQueries.all(), 'telegram', state],
+      queryFn: () =>
+        request(apiClient.GET('/v1/integrations/telegram/connect/{state}', { params: { path: { state } } })),
+      refetchInterval: (query) => (query.state.data?.is_connected ? false : 2_000),
+    }),
+  slackInstall: (installId: string) =>
+    queryOptions({
+      queryKey: [...integrationQueries.all(), 'slack-install', installId],
+      queryFn: () =>
+        request(
+          apiClient.GET('/v1/integrations/slack/installs/{install_id}', {
+            params: { path: { install_id: installId } },
+          })
+        ),
+      staleTime: Infinity,
+    }),
+};
 
-export function backtestAlertRuleOptions(body: Schemas['BacktestAlertRuleBody']) {
-  return queryOptions({
-    queryKey: ['alert-rules', 'backtest', body],
-    queryFn: () => request(apiClient.POST('/v1/alert-rules/backtest', { body })),
-    staleTime: 60_000,
-  });
-}
+export const alertMuteQueries = {
+  all: () => ['alert-mutes'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...alertMuteQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/alert-mutes')),
+      refetchInterval: REFRESH_MS,
+    }),
+};
 
 export function testAlertRuleOptions() {
   return mutationOptions({
     mutationFn: (body: Schemas['TestAlertRuleBody']) => request(apiClient.POST('/v1/alert-rules/test', { body })),
-  });
-}
-
-export function listAlertRulesOptions() {
-  return queryOptions({
-    queryKey: ['alert-rules', 'list'],
-    queryFn: () => request(apiClient.GET('/v1/alert-rules')),
   });
 }
 
@@ -84,13 +125,6 @@ export function deleteAlertRuleOptions() {
           params: { path: { rule_id: variables.ruleId } },
         })
       ),
-  });
-}
-
-export function listIntegrationsOptions() {
-  return queryOptions({
-    queryKey: ['integrations'],
-    queryFn: () => request(apiClient.GET('/v1/integrations')),
   });
 }
 
@@ -144,14 +178,6 @@ export function testIntegrationConfigOptions() {
 
 export type ConnectProvider = 'slack' | 'discord' | 'telegram';
 
-export function integrationProvidersOptions() {
-  return queryOptions({
-    queryKey: ['integrations', 'providers'],
-    queryFn: () => request(apiClient.GET('/v1/integrations/providers')),
-    staleTime: 60_000,
-  });
-}
-
 export function connectProviderOptions() {
   return mutationOptions({
     mutationFn: (provider: ConnectProvider) => {
@@ -166,28 +192,6 @@ export function connectProviderOptions() {
   });
 }
 
-export function telegramConnectOptions(state: string) {
-  return queryOptions({
-    queryKey: ['integrations', 'telegram', state],
-    queryFn: () =>
-      request(apiClient.GET('/v1/integrations/telegram/connect/{state}', { params: { path: { state } } })),
-    refetchInterval: (query) => (query.state.data?.is_connected ? false : 2_000),
-  });
-}
-
-export function slackInstallOptions(installId: string) {
-  return queryOptions({
-    queryKey: ['integrations', 'slack-install', installId],
-    queryFn: () =>
-      request(
-        apiClient.GET('/v1/integrations/slack/installs/{install_id}', {
-          params: { path: { install_id: installId } },
-        })
-      ),
-    staleTime: Infinity,
-  });
-}
-
 export function finishSlackInstallOptions() {
   return mutationOptions({
     mutationFn: (variables: { installId: string; channelId: string }) =>
@@ -197,14 +201,6 @@ export function finishSlackInstallOptions() {
           body: { channel_id: variables.channelId },
         })
       ),
-  });
-}
-
-export function listAlertMutesOptions() {
-  return queryOptions({
-    queryKey: ['alert-mutes'],
-    queryFn: () => request(apiClient.GET('/v1/alert-mutes')),
-    refetchInterval: REFRESH_MS,
   });
 }
 

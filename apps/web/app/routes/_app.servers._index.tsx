@@ -11,7 +11,7 @@ import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useServersTable } from '~/hooks/use-servers-table';
 import { useSortParams } from '~/hooks/use-sort-params';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { listServersOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 
 type StatusView = 'all' | Schemas['ServerStatus'];
 
@@ -29,7 +29,7 @@ function isStatusView(value: string | null): value is StatusView {
 
 export default function ServersPage() {
   const isAdmin = useIsAdmin();
-  const { data: servers, isLoading } = useQuery(listServersOptions());
+  const { data: servers, isLoading } = useQuery(serverQueries.list());
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get('view');
   const view: StatusView = isStatusView(viewParam) ? viewParam : 'all';

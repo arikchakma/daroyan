@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
-import { listAlertRulesOptions } from '~/queries/alerts';
+import { alertRuleQueries } from '~/queries/alerts';
 import { isCheckKind } from '~/utils/alerts';
 
 export function getCheckRules(rules: Schemas['AlertRule'][], checkId?: string) {
@@ -30,7 +30,7 @@ export function getNewRulePath(checkId?: string, checkName?: string) {
 export function CheckRules(props: CheckRulesProps) {
   const { checkId, checkName } = props;
 
-  const { data: rules } = useQuery(listAlertRulesOptions());
+  const { data: rules } = useQuery(alertRuleQueries.list());
   const covering = getCheckRules(rules ?? [], checkId);
 
   return (

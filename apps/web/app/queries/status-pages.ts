@@ -8,42 +8,42 @@ const REFRESH_MS = 30_000;
 
 export type StatusPageInput = Schemas['StatusPageBody'];
 
-export function listStatusPagesOptions() {
-  return queryOptions({
-    queryKey: ['status-pages'],
-    queryFn: () => request(apiClient.GET('/v1/status-pages')),
-    refetchInterval: REFRESH_MS,
-  });
-}
+export const statusPageQueries = {
+  all: () => ['status-pages'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...statusPageQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/status-pages')),
+      refetchInterval: REFRESH_MS,
+    }),
+  detail: (pageId: string) =>
+    queryOptions({
+      queryKey: [...statusPageQueries.all(), 'detail', pageId],
+      queryFn: () =>
+        request(apiClient.GET('/v1/status-pages/{page_id}', { params: { path: { page_id: pageId } } })),
+    }),
+};
 
-export function statusPageOptions(pageId: string) {
-  return queryOptions({
-    queryKey: ['status-pages', pageId],
-    queryFn: () =>
-      request(apiClient.GET('/v1/status-pages/{page_id}', { params: { path: { page_id: pageId } } })),
-  });
-}
-
-export function publicStatusPageOptions(slug: string) {
-  return queryOptions({
-    queryKey: ['status', slug],
-    queryFn: () => request(apiClient.GET('/v1/status/{slug}', { params: { path: { slug } } })),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function publicIncidentOptions(slug: string, incidentId: string) {
-  return queryOptions({
-    queryKey: ['status', slug, 'incidents', incidentId],
-    queryFn: () =>
-      request(
-        apiClient.GET('/v1/status/{slug}/incidents/{incident_id}', {
-          params: { path: { slug, incident_id: incidentId } },
-        })
-      ),
-    refetchInterval: REFRESH_MS,
-  });
-}
+export const publicStatusQueries = {
+  all: () => ['status'] as const,
+  page: (slug: string) =>
+    queryOptions({
+      queryKey: [...publicStatusQueries.all(), 'page', slug],
+      queryFn: () => request(apiClient.GET('/v1/status/{slug}', { params: { path: { slug } } })),
+      refetchInterval: REFRESH_MS,
+    }),
+  incident: (slug: string, incidentId: string) =>
+    queryOptions({
+      queryKey: [...publicStatusQueries.page(slug).queryKey, 'incidents', incidentId],
+      queryFn: () =>
+        request(
+          apiClient.GET('/v1/status/{slug}/incidents/{incident_id}', {
+            params: { path: { slug, incident_id: incidentId } },
+          })
+        ),
+      refetchInterval: REFRESH_MS,
+    }),
+};
 
 export function createStatusPageOptions() {
   return mutationOptions({

@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import type { UseMutationOptions } from "@tanstack/react-query";
+import type { QueryKey, UseMutationOptions } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -148,7 +148,7 @@ function TokenRow(props: {
 type AddTokenDialogProps<T extends CreatedTokenItem> = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  queryKey: string[];
+  queryKey: QueryKey;
   mutation: UseMutationOptions<T, Error, { name: string }>;
   placeholder: string;
   nameHelp: string;

@@ -13,8 +13,8 @@ import { PageBar } from '~/components/ui/page-bar';
 import { Pager } from '~/components/ui/pager';
 import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { TRACE_COLUMN_LABELS, useTracesTable } from '~/hooks/use-traces-table';
-import { listServersOptions } from '~/queries/servers';
-import { listTracesOptions, traceStatusOptions } from '~/queries/traces';
+import { serverQueries } from '~/queries/servers';
+import { traceQueries } from '~/queries/traces';
 import { SLOW_MS } from '~/utils/traces';
 
 const PAGE_SIZE = 50;
@@ -65,11 +65,11 @@ export default function TracesPage() {
 
   const [hiddenColumns, setHiddenColumns] = useState(readColumns);
 
-  const { data: status } = useQuery(traceStatusOptions());
-  const { data: servers } = useQuery(listServersOptions());
+  const { data: status } = useQuery(traceQueries.status());
+  const { data: servers } = useQuery(serverQueries.list());
   const server = servers?.find((item) => item.id === serverId);
   const { data, isLoading } = useQuery(
-    listTracesOptions({
+    traceQueries.list({
       rangeMs: range.ms,
       server_id: serverId || undefined,
       status: view === 'error' ? 'error' : undefined,

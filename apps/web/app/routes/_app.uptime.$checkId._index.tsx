@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 import { CheckBody } from '~/components/uptime/check-body';
-import { uptimeCheckOptions } from '~/queries/uptime';
+import { uptimeCheckQueries } from '~/queries/uptime';
 
 import type { Route } from './+types/_app.uptime.$checkId._index';
 
@@ -12,7 +12,7 @@ export function meta() {
 export default function UptimeCheckPage(props: Route.ComponentProps) {
   const { checkId } = props.params;
 
-  const { data: check, error } = useQuery(uptimeCheckOptions(checkId));
+  const { data: check, error } = useQuery(uptimeCheckQueries.detail(checkId));
 
   if (error) {
     return (

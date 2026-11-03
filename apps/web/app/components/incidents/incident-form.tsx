@@ -11,12 +11,12 @@ import { Button } from '~/components/ui/button';
 import { Select } from '~/components/ui/select';
 import { Sheet } from '~/components/ui/sheet';
 import { Switch } from '~/components/ui/switch';
-import { listAlertRulesOptions, listIntegrationsOptions } from '~/queries/alerts';
-import { listCronsOptions } from '~/queries/crons';
-import { listUsersOptions } from '~/queries/incidents';
-import { listServersOptions } from '~/queries/servers';
-import { listStatusPagesOptions } from '~/queries/status-pages';
-import { listUptimeChecksOptions } from '~/queries/uptime';
+import { alertRuleQueries, integrationQueries } from '~/queries/alerts';
+import { cronQueries } from '~/queries/crons';
+import { userQueries } from '~/queries/incidents';
+import { serverQueries } from '~/queries/servers';
+import { statusPageQueries } from '~/queries/status-pages';
+import { uptimeCheckQueries } from '~/queries/uptime';
 import { INTEGRATION_KINDS, isIntegrationKind } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
 import { COMPONENT_STATUS_META, RELATED_LABELS, joinNames } from '~/utils/incidents';
@@ -34,13 +34,13 @@ const RELATED_GROUPS = [
 ];
 
 export function useIncidentDirectory() {
-  const { data: checks = [] } = useQuery(listUptimeChecksOptions());
-  const { data: crons = [] } = useQuery(listCronsOptions());
-  const { data: servers = [] } = useQuery(listServersOptions());
-  const { data: rules = [] } = useQuery(listAlertRulesOptions());
-  const { data: users = [] } = useQuery(listUsersOptions());
-  const { data: integrations = [] } = useQuery(listIntegrationsOptions());
-  const { data: pages = [] } = useQuery(listStatusPagesOptions());
+  const { data: checks = [] } = useQuery(uptimeCheckQueries.list());
+  const { data: crons = [] } = useQuery(cronQueries.list());
+  const { data: servers = [] } = useQuery(serverQueries.list());
+  const { data: rules = [] } = useQuery(alertRuleQueries.list());
+  const { data: users = [] } = useQuery(userQueries.list());
+  const { data: integrations = [] } = useQuery(integrationQueries.list());
+  const { data: pages = [] } = useQuery(statusPageQueries.list());
 
   const monitors: Monitor[] = [
     ...checks.map((check) => ({

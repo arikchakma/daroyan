@@ -15,8 +15,8 @@ import { Switch } from '~/components/ui/switch';
 import { CheckRules, getCheckRules } from '~/components/uptime/check-rules';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { createAlertRuleOptions, listAlertRulesOptions, listIntegrationsOptions } from '~/queries/alerts';
-import { createUptimeCheckOptions, updateUptimeCheckOptions } from '~/queries/uptime';
+import { alertRuleQueries, createAlertRuleOptions, integrationQueries } from '~/queries/alerts';
+import { createUptimeCheckOptions, updateUptimeCheckOptions, uptimeCheckQueries } from '~/queries/uptime';
 import type { UptimeCheckInput } from '~/queries/uptime';
 import { joinNames } from '~/utils/alerts';
 import { formatStreak, INTERVAL_OPTIONS, RETRY_OPTIONS, STREAK_OPTIONS, TIMEOUT_OPTIONS } from '~/utils/uptime';
@@ -96,8 +96,8 @@ function CheckFormBody(props: CheckFormBodyProps) {
     retry_interval_secs: retry,
   };
 
-  const { data: rules } = useQuery(listAlertRulesOptions());
-  const { data: integrations } = useQuery(listIntegrationsOptions());
+  const { data: rules } = useQuery(alertRuleQueries.list());
+  const { data: integrations } = useQuery(integrationQueries.list());
   const isCovered = getCheckRules(rules ?? []).some((rule) => rule.enabled && rule.condition.kind === 'uptime_down');
   const [pickedAlertDown, setPickedAlertDown] = useState<boolean>();
   const alertDown = pickedAlertDown ?? (!!rules && !isCovered);
@@ -113,10 +113,10 @@ function CheckFormBody(props: CheckFormBodyProps) {
           scope: { kind: 'checks', check_ids: [saved.id] },
           integration_ids: (integrations ?? []).map((integration) => integration.id),
         })
-        .then(() => queryClient.invalidateQueries({ queryKey: ['alert-rules'] }))
+        .then(() => queryClient.invalidateQueries({ queryKey: alertRuleQueries.all() }))
         .catch(() => undefined);
     }
-    queryClient.invalidateQueries({ queryKey: ['uptime-checks'] });
+    queryClient.invalidateQueries({ queryKey: uptimeCheckQueries.all() });
     toast.success(check ? `Saved ${saved.name}` : `Created ${saved.name}`);
     navigate(`/uptime/${saved.id}`);
   };

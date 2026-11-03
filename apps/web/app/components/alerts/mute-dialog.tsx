@@ -12,7 +12,7 @@ import { Input } from '~/components/ui/input';
 import { TimePicker } from '~/components/ui/time-picker';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { createAlertMuteOptions } from '~/queries/alerts';
+import { alertMuteQueries, createAlertMuteOptions } from '~/queries/alerts';
 import { formatMinutesLong } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
 import { formatClock } from '~/utils/format';
@@ -77,7 +77,7 @@ export function useCreateMute() {
     ...createAlertMuteOptions(),
     meta: { errorMessage: 'The alert could not be muted' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['alert-mutes'] });
+      queryClient.invalidateQueries({ queryKey: alertMuteQueries.all() });
       toast.success('Muted');
     },
   });

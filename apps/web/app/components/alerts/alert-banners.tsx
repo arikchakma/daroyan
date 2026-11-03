@@ -16,7 +16,7 @@ import { Button } from '~/components/ui/button';
 import { Menu } from '~/components/ui/menu';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { deleteAlertMuteOptions, listAlertMutesOptions, listAlertRulesOptions, listAlertsOptions } from '~/queries/alerts';
+import { alertMuteQueries, alertQueries, alertRuleQueries, deleteAlertMuteOptions } from '~/queries/alerts';
 import {
   describeAlertNow,
   describeMuteEnd,
@@ -45,9 +45,9 @@ type AlertBannersProps = {
 export function AlertBanners(props: AlertBannersProps) {
   const { serverId, checkId, cronId } = props;
 
-  const { data: firing = [], isSuccess: isFiringLoaded } = useQuery(listAlertsOptions('firing'));
-  const { data: mutes = [] } = useQuery(listAlertMutesOptions());
-  const { data: rules = [] } = useQuery(listAlertRulesOptions());
+  const { data: firing = [], isSuccess: isFiringLoaded } = useQuery(alertQueries.list('firing'));
+  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
+  const { data: rules = [] } = useQuery(alertRuleQueries.list());
 
   const [muting, setMuting] = useState<{ alert: Schemas['Alert']; isWholeRule: boolean } | undefined>();
   const [declaring, setDeclaring] = useState<DeclareDefaults | undefined>();
@@ -57,7 +57,7 @@ export function AlertBanners(props: AlertBannersProps) {
     ...deleteAlertMuteOptions(),
     meta: { errorMessage: 'The alert could not be unmuted' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['alert-mutes'] });
+      queryClient.invalidateQueries({ queryKey: alertMuteQueries.all() });
       toast.success('Unmuted');
     },
   });
@@ -262,8 +262,8 @@ type AlertBadgeProps = {
 export function AlertBadge(props: AlertBadgeProps) {
   const { serverId, fallback } = props;
 
-  const { data: firing = [] } = useQuery(listAlertsOptions('firing'));
-  const { data: mutes = [] } = useQuery(listAlertMutesOptions());
+  const { data: firing = [] } = useQuery(alertQueries.list('firing'));
+  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
 
   const alert = firing.find((item) => item.server_id === serverId);
   if (!alert) {

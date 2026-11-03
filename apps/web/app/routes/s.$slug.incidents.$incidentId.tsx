@@ -9,7 +9,7 @@ import { RichText } from '~/components/rich-text/rich-text';
 import { PublicFooterLinks } from '~/components/status-pages/public-status';
 import { Skeleton } from '~/components/ui/skeleton';
 import { ApiError } from '~/lib/http';
-import { publicIncidentOptions, publicStatusPageOptions } from '~/queries/status-pages';
+import { publicStatusQueries } from '~/queries/status-pages';
 import { cn } from '~/utils/classname';
 import { formatClock, formatDate } from '~/utils/format';
 import { formatIncidentDuration, formatWindow, getComponentStatusMeta, getSeverityMeta } from '~/utils/incidents';
@@ -25,8 +25,8 @@ function formatStamp(value: string) {
 
 export default function PublicIncidentRoute() {
   const { slug = '', incidentId = '' } = useParams();
-  const { data: page } = useQuery(publicStatusPageOptions(slug));
-  const { data: incident, error } = useQuery(publicIncidentOptions(slug, incidentId));
+  const { data: page } = useQuery(publicStatusQueries.page(slug));
+  const { data: incident, error } = useQuery(publicStatusQueries.incident(slug, incidentId));
 
   useEffect(() => {
     if (incident) {

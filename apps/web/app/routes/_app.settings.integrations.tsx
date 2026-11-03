@@ -11,7 +11,7 @@ import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { deleteIntegrationOptions, listIntegrationsOptions } from '~/queries/alerts';
+import { deleteIntegrationOptions, integrationQueries } from '~/queries/alerts';
 
 export function meta() {
   return [{ title: 'Integrations · Daroyan' }];
@@ -19,7 +19,7 @@ export function meta() {
 
 export default function IntegrationsPage() {
   const isAdmin = useIsAdmin();
-  const { data: integrations, isLoading } = useQuery(listIntegrationsOptions());
+  const { data: integrations, isLoading } = useQuery(integrationQueries.list());
   const [editing, setEditing] = useState<Schemas['Integration']>();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [removing, setRemoving] = useState<Schemas['Integration']>();
@@ -42,7 +42,7 @@ export default function IntegrationsPage() {
     ...deleteIntegrationOptions(),
     meta: { errorMessage: 'The integration could not be deleted' },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['integrations'] });
+      queryClient.invalidateQueries({ queryKey: integrationQueries.all() });
       toast.success(`Deleted ${removing?.name ?? 'the integration'}`);
       setRemoving(undefined);
     },

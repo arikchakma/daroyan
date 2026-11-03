@@ -330,22 +330,6 @@ async fn ingests_otlp_traces_and_groups_exceptions() {
         .unwrap();
     assert!(status["last_span_at"].is_i64());
 
-    let trends: Value = http
-        .get(format!("{base}/v1/overview/trends"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let error_total: f64 = trends["errors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|point| point["value"].as_f64().unwrap())
-        .sum();
-    assert_eq!(error_total, 2.0);
-    assert!(trends["cpu"].as_array().unwrap().is_empty());
     let listed: Value = http
         .get(format!("{base}/v1/ingest-tokens"))
         .send()

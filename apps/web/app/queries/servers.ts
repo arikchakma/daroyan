@@ -11,52 +11,48 @@ const COMMAND_POLL_LIMIT = 30;
 export type MetricRange = '1h' | '6h' | '24h' | '7d' | '30d';
 export type CommandAction = Schemas['ActionName'];
 
-export function listServersOptions() {
-  return queryOptions({
-    queryKey: ['servers'],
-    queryFn: () => request(apiClient.GET('/v1/servers')),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function serverOptions(serverId: string) {
-  return queryOptions({
-    queryKey: ['servers', serverId],
-    queryFn: () =>
-      request(
-        apiClient.GET('/v1/servers/{server_id}', {
-          params: { path: { server_id: serverId } },
-        })
-      ),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function serverMetricsOptions(serverId: string, range: MetricRange) {
-  return queryOptions({
-    queryKey: ['servers', serverId, 'metrics', range],
-    queryFn: () =>
-      request(
-        apiClient.GET('/v1/servers/{server_id}/metrics', {
-          params: { path: { server_id: serverId }, query: { range } },
-        })
-      ),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function serverEventsOptions(serverId: string) {
-  return queryOptions({
-    queryKey: ['servers', serverId, 'events'],
-    queryFn: () =>
-      request(
-        apiClient.GET('/v1/servers/{server_id}/events', {
-          params: { path: { server_id: serverId } },
-        })
-      ),
-    refetchInterval: REFRESH_MS,
-  });
-}
+export const serverQueries = {
+  all: () => ['servers'] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...serverQueries.all(), 'list'],
+      queryFn: () => request(apiClient.GET('/v1/servers')),
+      refetchInterval: REFRESH_MS,
+    }),
+  detail: (serverId: string) =>
+    queryOptions({
+      queryKey: [...serverQueries.all(), 'detail', serverId],
+      queryFn: () =>
+        request(
+          apiClient.GET('/v1/servers/{server_id}', {
+            params: { path: { server_id: serverId } },
+          })
+        ),
+      refetchInterval: REFRESH_MS,
+    }),
+  metrics: (serverId: string, range: MetricRange) =>
+    queryOptions({
+      queryKey: [...serverQueries.detail(serverId).queryKey, 'metrics', range],
+      queryFn: () =>
+        request(
+          apiClient.GET('/v1/servers/{server_id}/metrics', {
+            params: { path: { server_id: serverId }, query: { range } },
+          })
+        ),
+      refetchInterval: REFRESH_MS,
+    }),
+  events: (serverId: string) =>
+    queryOptions({
+      queryKey: [...serverQueries.detail(serverId).queryKey, 'events'],
+      queryFn: () =>
+        request(
+          apiClient.GET('/v1/servers/{server_id}/events', {
+            params: { path: { server_id: serverId } },
+          })
+        ),
+      refetchInterval: REFRESH_MS,
+    }),
+};
 
 export function renameServerOptions() {
   return mutationOptions({

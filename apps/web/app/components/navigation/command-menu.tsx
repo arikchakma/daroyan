@@ -13,12 +13,12 @@ import type { CommandAction, CommandGroup } from '~/hooks/use-command-actions';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { logout } from '~/lib/auth';
 import { toast } from '~/lib/toast';
-import { listAlertRulesOptions } from '~/queries/alerts';
-import { listCronsOptions } from '~/queries/crons';
-import { listIncidentsOptions } from '~/queries/incidents';
-import { listServersOptions } from '~/queries/servers';
-import { listStatusPagesOptions } from '~/queries/status-pages';
-import { listUptimeChecksOptions } from '~/queries/uptime';
+import { alertRuleQueries } from '~/queries/alerts';
+import { cronQueries } from '~/queries/crons';
+import { incidentQueries } from '~/queries/incidents';
+import { serverQueries } from '~/queries/servers';
+import { statusPageQueries } from '~/queries/status-pages';
+import { uptimeCheckQueries } from '~/queries/uptime';
 import {
   NAV_ITEMS,
   SETTINGS_ITEMS,
@@ -85,12 +85,12 @@ export function CommandMenu(props: CommandMenuProps) {
   const lazy = { enabled: isSearching, throwOnError: false };
   const [servers, checks, crons, rules, incidents, statusPages] = useQueries({
     queries: [
-      { ...listServersOptions(), ...lazy },
-      { ...listUptimeChecksOptions(), ...lazy },
-      { ...listCronsOptions(), ...lazy },
-      { ...listAlertRulesOptions(), ...lazy },
-      { ...listIncidentsOptions(), ...lazy },
-      { ...listStatusPagesOptions(), ...lazy },
+      { ...serverQueries.list(), ...lazy },
+      { ...uptimeCheckQueries.list(), ...lazy },
+      { ...cronQueries.list(), ...lazy },
+      { ...alertRuleQueries.list(), ...lazy },
+      { ...incidentQueries.list(), ...lazy },
+      { ...statusPageQueries.list(), ...lazy },
     ],
   });
 

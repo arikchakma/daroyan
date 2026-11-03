@@ -7,7 +7,7 @@ import { ChartLegend, getNiceMax, MetricChart } from '~/components/servers/metri
 import type { ChartSeries } from '~/components/servers/metric-chart';
 import { Button } from '~/components/ui/button';
 import { Menu } from '~/components/ui/menu';
-import { serverMetricsOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 import type { MetricRange } from '~/queries/servers';
 import { formatCount, formatPercent, formatSpeed, formatUsedOf, getPercent } from '~/utils/format';
 
@@ -37,7 +37,7 @@ export function MetricsSection(props: MetricsSectionProps) {
   const { serverId, host, report } = props;
 
   const [range, setRange] = useState<MetricRange>('1h');
-  const { data: metrics, dataUpdatedAt } = useQuery(serverMetricsOptions(serverId, range));
+  const { data: metrics, dataUpdatedAt } = useQuery(serverQueries.metrics(serverId, range));
   const to = dataUpdatedAt || Date.now();
   const from = to - RANGE_MS[range];
 

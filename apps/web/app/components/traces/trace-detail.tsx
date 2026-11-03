@@ -13,7 +13,7 @@ import { PageBar } from '~/components/ui/page-bar';
 import { useCopyToClipboard } from '~/hooks/use-copy-to-clipboard';
 import { ServiceDot } from '~/hooks/use-traces-table';
 import { toast } from '~/lib/toast';
-import { listServersOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 import { TICKS, formatMicros, formatMicrosClock, getServiceColor, getTraceStatus, stringify } from '~/utils/traces';
 import type { SpanNode } from '~/utils/traces';
 
@@ -39,7 +39,7 @@ export function TraceDetail(props: TraceDetailProps) {
   const errorCount = nodes.filter((node) => node.status === 'error').length;
   const status = getTraceStatus({ http_status: root.http_status, error_count: errorCount, duration_us: root.duration_us });
   const host = readText(root.resource, 'host.name');
-  const { data: servers } = useQuery(listServersOptions());
+  const { data: servers } = useQuery(serverQueries.list());
   const server = servers?.find((item) => item.id === root.server_id);
 
   return (

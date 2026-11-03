@@ -20,14 +20,14 @@ import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import {
+  alertMuteQueries,
+  alertQueries,
+  alertRuleQueries,
   deleteAlertRuleOptions,
-  listAlertRulesOptions,
-  listAlertMutesOptions,
-  listAlertsOptions,
-  listIntegrationsOptions,
+  integrationQueries,
   updateAlertRuleOptions,
 } from '~/queries/alerts';
-import { listServersOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 import {
   describeMuteEnd,
   describeScope,
@@ -60,11 +60,11 @@ export function meta() {
 
 export default function AlertsPage() {
   const isAdmin = useIsAdmin();
-  const { data: rules, isLoading } = useQuery(listAlertRulesOptions());
-  const { data: firing } = useQuery(listAlertsOptions('firing'));
-  const { data: mutes } = useQuery(listAlertMutesOptions());
-  const { data: integrations } = useQuery(listIntegrationsOptions());
-  const { data: servers } = useQuery(listServersOptions());
+  const { data: rules, isLoading } = useQuery(alertRuleQueries.list());
+  const { data: firing } = useQuery(alertQueries.list('firing'));
+  const { data: mutes } = useQuery(alertMuteQueries.list());
+  const { data: integrations } = useQuery(integrationQueries.list());
+  const { data: servers } = useQuery(serverQueries.list());
   const [searchParams, setSearchParams] = useSearchParams();
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -140,8 +140,8 @@ export default function AlertsPage() {
   });
 
   const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['alert-rules'] });
-    queryClient.invalidateQueries({ queryKey: ['alerts'] });
+    queryClient.invalidateQueries({ queryKey: alertRuleQueries.all() });
+    queryClient.invalidateQueries({ queryKey: alertQueries.all() });
     setRowSelection({});
   };
   const { mutateAsync: updateRule } = useMutation({

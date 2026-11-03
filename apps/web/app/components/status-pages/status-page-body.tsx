@@ -25,7 +25,8 @@ import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import {
   deleteStatusPageOptions,
-  publicStatusPageOptions,
+  publicStatusQueries,
+  statusPageQueries,
   toStatusPageInput,
   updateStatusPageOptions,
 } from '~/queries/status-pages';
@@ -56,14 +57,14 @@ export function StatusPageBody(props: StatusPageBodyProps) {
   const [name, setName] = useState(page.name);
   const [slug, setSlug] = useState(page.slug);
   const [isPublic, setIsPublic] = useState(page.is_public);
-  const { data: report } = useQuery(publicStatusPageOptions(page.slug));
+  const { data: report } = useQuery(publicStatusQueries.page(page.slug));
 
   const update = useMutation({
     ...updateStatusPageOptions(),
     meta: { errorMessage: 'The status page could not be saved' },
     onSuccess: (saved) => {
-      queryClient.invalidateQueries({ queryKey: ['status-pages'] });
-      queryClient.invalidateQueries({ queryKey: ['status'] });
+      queryClient.invalidateQueries({ queryKey: statusPageQueries.all() });
+      queryClient.invalidateQueries({ queryKey: publicStatusQueries.all() });
       toast.success(`Saved ${saved.name}`);
     },
   });
@@ -72,7 +73,7 @@ export function StatusPageBody(props: StatusPageBodyProps) {
     meta: { errorMessage: 'The status page could not be deleted' },
     onSuccess: () => {
       navigate('/status-pages');
-      queryClient.invalidateQueries({ queryKey: ['status-pages'], exact: true });
+      queryClient.invalidateQueries({ queryKey: statusPageQueries.list().queryKey });
       toast.success(`Deleted ${page.name}`);
     },
   });

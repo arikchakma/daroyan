@@ -8,7 +8,7 @@ import { Icon } from '~/components/icons/icon';
 import { Badge } from '~/components/ui/badge';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
-import { listServersOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { formatLogStamp, formatLogTime } from '~/utils/format';
 import { describeSpans, formatMicros, getServiceColor, getTraceStatus } from '~/utils/traces';
@@ -45,7 +45,7 @@ type TraceServerProps = {
 function TraceServer(props: TraceServerProps) {
   const { trace } = props;
 
-  const { data: servers } = useQuery(listServersOptions());
+  const { data: servers } = useQuery(serverQueries.list());
   const server = servers?.find((item) => item.id === trace.server_id);
   if (!server) {
     return <span className="truncate">{trace.host ?? '—'}</span>;

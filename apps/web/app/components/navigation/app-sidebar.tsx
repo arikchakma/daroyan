@@ -9,9 +9,9 @@ import { Menu } from '~/components/ui/menu';
 import { Tooltip } from '~/components/ui/tooltip';
 import { useCommandActions } from '~/hooks/use-command-actions';
 import { logout } from '~/lib/auth';
-import { meOptions } from '~/queries/auth';
-import { listAlertsOptions } from '~/queries/alerts';
-import { listIncidentsOptions } from '~/queries/incidents';
+import { authQueries } from '~/queries/auth';
+import { alertQueries } from '~/queries/alerts';
+import { incidentQueries } from '~/queries/incidents';
 import { cn } from '~/utils/classname';
 import { formatHotkey } from '~/utils/hotkey';
 import { isClosed } from '~/utils/incidents';
@@ -33,8 +33,8 @@ export function AppSidebar(props: AppSidebarProps) {
 
   const [isStoredCollapsed, setIsStoredCollapsed] = useState(readSidebarCollapsed);
   const [isCompactExpanded, setIsCompactExpanded] = useState(false);
-  const { data: firing } = useQuery(listAlertsOptions('firing'));
-  const { data: incidents } = useQuery(listIncidentsOptions());
+  const { data: firing } = useQuery(alertQueries.list('firing'));
+  const { data: incidents } = useQuery(incidentQueries.list());
   const openIncidents = incidents?.filter(
     (incident) => !isClosed(incident.status) && incident.status !== 'scheduled'
   ).length;
@@ -213,7 +213,7 @@ type AccountMenuProps = {
 function AccountMenu(props: AccountMenuProps) {
   const { isCollapsed } = props;
 
-  const { data: me } = useQuery(meOptions());
+  const { data: me } = useQuery(authQueries.me());
   const theme = useSyncExternalStore(subscribeToTheme, getStoredTheme, () => 'system');
   const name = me?.name ?? 'Daroyan';
 
@@ -264,6 +264,10 @@ function AccountMenu(props: AccountMenuProps) {
               <Icon name="log-out" />
               Sign Out
             </Menu.Item>
+            <Menu.Separator />
+            <p className="px-2 py-1.5 text-caption text-text-secondary">
+              Version {__DAROYAN_VERSION__}
+            </p>
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>

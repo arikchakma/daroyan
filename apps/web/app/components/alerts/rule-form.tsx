@@ -17,8 +17,8 @@ import { PageBar } from '~/components/ui/page-bar';
 import { SaveBar } from '~/components/ui/save-bar';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { createAlertRuleOptions, listAlertsOptions, listIntegrationsOptions, updateAlertRuleOptions } from '~/queries/alerts';
-import { listStatusPagesOptions } from '~/queries/status-pages';
+import { alertQueries, alertRuleQueries, createAlertRuleOptions, integrationQueries, updateAlertRuleOptions } from '~/queries/alerts';
+import { statusPageQueries } from '~/queries/status-pages';
 import type { NotifyLevel } from '~/utils/alerts';
 import { formatDate } from '~/utils/format';
 import {
@@ -58,9 +58,9 @@ function RuleFormBody(props: RuleFormBodyProps) {
   const formRef = useRef<HTMLFormElement>(null);
   const navigate = useNavigate();
 
-  const { data: integrations } = useQuery(listIntegrationsOptions());
-  const { data: history = [] } = useQuery({ ...listAlertsOptions('all', rule?.id), enabled: !!rule });
-  const { data: statusPages = [] } = useQuery(listStatusPagesOptions());
+  const { data: integrations } = useQuery(integrationQueries.list());
+  const { data: history = [] } = useQuery({ ...alertQueries.list('all', rule?.id), enabled: !!rule });
+  const { data: statusPages = [] } = useQuery(statusPageQueries.list());
 
   const [form, setForm] = useState(() => readInitialRuleForm({ rule, draft, timeZone: getBrowserTimeZone() }));
   const [notifyLevels, setNotifyLevels] = useState(() => readInitialNotifyLevels(rule));
@@ -84,7 +84,7 @@ function RuleFormBody(props: RuleFormBodyProps) {
   };
 
   const onSaved = (saved: Schemas['AlertRule']) => {
-    queryClient.invalidateQueries({ queryKey: ['alert-rules'] });
+    queryClient.invalidateQueries({ queryKey: alertRuleQueries.all() });
     toast.success(rule ? `Saved ${saved.name}` : `Created ${saved.name}`);
     navigate(`/alerts/${saved.id}`);
   };

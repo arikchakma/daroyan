@@ -11,7 +11,7 @@ import { Skeleton } from '~/components/ui/skeleton';
 import { describeRequest, formatAttributes, formatDuration, HTTP_KEYS, LevelBadge } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
 import { toast } from '~/lib/toast';
-import { logContextOptions } from '~/queries/logs';
+import { logQueries } from '~/queries/logs';
 import { cn } from '~/utils/classname';
 import { formatLogClock, formatLogStamp } from '~/utils/format';
 import { getLogOrigin, OTLP_SERVER_ID } from '~/utils/logs';
@@ -122,7 +122,7 @@ function LogBody(props: LogBodyProps) {
   const { line } = props;
 
   const { data: context, isLoading } = useQuery(
-    logContextOptions({ server_id: line.server_id, service: line.service, at: line.at })
+    logQueries.context({ server_id: line.server_id, service: line.service, at: line.at })
   );
   const values = (line.attributes ?? {}) as Record<string, unknown>;
   const request = describeRequest(line);

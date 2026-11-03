@@ -7,7 +7,7 @@ import { Skeleton } from '~/components/ui/skeleton';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { backupStatusOptions, createBackupOptions } from '~/queries/backups';
+import { backupQueries, createBackupOptions } from '~/queries/backups';
 import { formatBytes, formatRelative } from '~/utils/format';
 
 export function meta() {
@@ -16,12 +16,12 @@ export function meta() {
 
 export default function BackupsPage() {
   const isAdmin = useIsAdmin();
-  const { data: status, isLoading } = useQuery(backupStatusOptions());
+  const { data: status, isLoading } = useQuery(backupQueries.status());
   const backUp = useMutation({
     ...createBackupOptions(),
     meta: { errorMessage: 'The backup failed' },
     onSuccess: (backup) => {
-      queryClient.invalidateQueries({ queryKey: ['backups'] });
+      queryClient.invalidateQueries({ queryKey: backupQueries.all() });
       toast.success(`Backed up ${formatBytes(backup.size_bytes)}`);
     },
   });

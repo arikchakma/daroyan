@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router';
 
 import { TraceDetail } from '~/components/traces/trace-detail';
-import { traceOptions } from '~/queries/traces';
+import { traceQueries } from '~/queries/traces';
 import { orderSpans } from '~/utils/traces';
 
 export function meta() {
@@ -11,7 +11,7 @@ export function meta() {
 
 export default function TracePage() {
   const { traceId = '' } = useParams();
-  const { data: spans, isError } = useQuery(traceOptions(traceId));
+  const { data: spans, isError } = useQuery(traceQueries.detail(traceId));
 
   if (isError || spans?.length === 0) {
     return (

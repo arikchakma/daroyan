@@ -9,7 +9,7 @@ import { Switch } from '~/components/ui/switch';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { deleteAlertRuleOptions, updateAlertRuleOptions } from '~/queries/alerts';
+import { alertQueries, alertRuleQueries, deleteAlertRuleOptions, updateAlertRuleOptions } from '~/queries/alerts';
 
 type RuleStatusPanelProps = {
   rule: Schemas['AlertRule'];
@@ -27,7 +27,7 @@ export function RuleStatusPanel(props: RuleStatusPanelProps) {
     ...updateAlertRuleOptions(),
     meta: { errorMessage: 'The rule could not be updated' },
     onSuccess: (saved) => {
-      queryClient.invalidateQueries({ queryKey: ['alert-rules'] });
+      queryClient.invalidateQueries({ queryKey: alertRuleQueries.all() });
       toast.success(saved.enabled ? 'Alerts are on' : 'Alerts are off');
     },
   });
@@ -36,8 +36,8 @@ export function RuleStatusPanel(props: RuleStatusPanelProps) {
     meta: { errorMessage: 'The rule could not be deleted' },
     onSuccess: () => {
       navigate('/alerts');
-      queryClient.invalidateQueries({ queryKey: ['alert-rules', 'list'] });
-      queryClient.invalidateQueries({ queryKey: ['alerts'] });
+      queryClient.invalidateQueries({ queryKey: alertRuleQueries.list().queryKey });
+      queryClient.invalidateQueries({ queryKey: alertQueries.all() });
       toast.success(`Deleted ${rule.name}`);
     },
   });

@@ -3,12 +3,14 @@ import { mutationOptions, queryOptions } from "@tanstack/react-query";
 import { apiClient } from "~/lib/api-client";
 import { request } from "~/lib/http";
 
-export function listMcpTokensOptions() {
-  return queryOptions({
-    queryKey: ["mcp-tokens"],
-    queryFn: () => request(apiClient.GET("/v1/mcp-tokens")),
-  });
-}
+export const mcpTokenQueries = {
+  all: () => ["mcp-tokens"] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...mcpTokenQueries.all(), "list"],
+      queryFn: () => request(apiClient.GET("/v1/mcp-tokens")),
+    }),
+};
 
 export function createMcpTokenOptions() {
   return mutationOptions({

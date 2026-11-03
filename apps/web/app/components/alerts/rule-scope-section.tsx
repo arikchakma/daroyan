@@ -6,10 +6,9 @@ import { PickedTargets } from '~/components/alerts/picked-targets';
 import type { Target } from '~/components/alerts/picked-targets';
 import { SelectField } from '~/components/alerts/select-field';
 import { SettingRow } from '~/components/alerts/setting-row';
-import { apiClient } from '~/lib/api-client';
-import { request } from '~/lib/http';
-import { listServersOptions } from '~/queries/servers';
-import { listUptimeChecksOptions } from '~/queries/uptime';
+import { cronQueries } from '~/queries/crons';
+import { serverQueries } from '~/queries/servers';
+import { uptimeCheckQueries } from '~/queries/uptime';
 import { getMatchesText, readTargetNoun, readTargetNouns } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState, ScopeKind, TargetNoun } from '~/utils/rule-form';
 
@@ -21,9 +20,9 @@ type RuleScopeSectionProps = {
 export function RuleScopeSection(props: RuleScopeSectionProps) {
   const { form, onChange } = props;
 
-  const { data: servers } = useQuery(listServersOptions());
-  const { data: checks } = useQuery(listUptimeChecksOptions());
-  const { data: crons } = useQuery({ queryKey: ['crons'], queryFn: () => request(apiClient.GET('/v1/crons')) });
+  const { data: servers } = useQuery(serverQueries.list());
+  const { data: checks } = useQuery(uptimeCheckQueries.list());
+  const { data: crons } = useQuery({ ...cronQueries.list(), refetchInterval: false });
 
   const { scopeKind } = form;
   const noun = readTargetNoun(form.kind);

@@ -22,25 +22,23 @@ export type LogsParams = {
   limit: number;
 };
 
-export function logsOptions(params: LogsParams, isLive: boolean) {
-  return queryOptions({
-    queryKey: ['logs', params, isLive],
-    queryFn: () => request(apiClient.GET('/v1/logs', { params: { query: params } })),
-    placeholderData: keepPreviousData,
-    refetchInterval: isLive ? 2_000 : false,
-  });
-}
-
-export function logSourcesOptions() {
-  return queryOptions({
-    queryKey: ['log-sources'],
-    queryFn: () => request(apiClient.GET('/v1/logs/sources')),
-  });
-}
-
-export function logContextOptions(line: { server_id: string; service: string; at: number }) {
-  return queryOptions({
-    queryKey: ['log-context', line],
-    queryFn: () => request(apiClient.GET('/v1/logs/context', { params: { query: line } })),
-  });
-}
+export const logQueries = {
+  all: () => ['logs'] as const,
+  list: (params: LogsParams, isLive: boolean) =>
+    queryOptions({
+      queryKey: [...logQueries.all(), 'list', params, isLive],
+      queryFn: () => request(apiClient.GET('/v1/logs', { params: { query: params } })),
+      placeholderData: keepPreviousData,
+      refetchInterval: isLive ? 2_000 : false,
+    }),
+  sources: () =>
+    queryOptions({
+      queryKey: [...logQueries.all(), 'sources'],
+      queryFn: () => request(apiClient.GET('/v1/logs/sources')),
+    }),
+  context: (line: { server_id: string; service: string; at: number }) =>
+    queryOptions({
+      queryKey: [...logQueries.all(), 'context', line],
+      queryFn: () => request(apiClient.GET('/v1/logs/context', { params: { query: line } })),
+    }),
+};

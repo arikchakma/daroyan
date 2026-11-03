@@ -23,8 +23,8 @@ import type { LogRow } from '~/hooks/use-logs-table';
 import { apiClient } from '~/lib/api-client';
 import { request } from '~/lib/http';
 import { toast } from '~/lib/toast';
-import { logsOptions, logSourcesOptions } from '~/queries/logs';
-import { listServersOptions } from '~/queries/servers';
+import { logQueries } from '~/queries/logs';
+import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { joinNames } from '~/utils/alerts';
 import { readListParam } from '~/utils/filter';
@@ -142,10 +142,10 @@ export default function LogsPage() {
   }, [search]);
 
   const isFollowing = isLive && page === 1;
-  const { data: servers } = useQuery(listServersOptions());
-  const { data: sources } = useQuery(logSourcesOptions());
+  const { data: servers } = useQuery(serverQueries.list());
+  const { data: sources } = useQuery(logQueries.sources());
   const { data, isLoading } = useQuery(
-    logsOptions(
+    logQueries.list(
       {
         ...filterParams,
         level: view === 'all' ? undefined : view,

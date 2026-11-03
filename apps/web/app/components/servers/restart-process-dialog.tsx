@@ -6,9 +6,9 @@ import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { useLinkAction } from '~/hooks/use-link-action';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { listAlertsOptions } from '~/queries/alerts';
-import { meOptions } from '~/queries/auth';
-import { runCommandOptions } from '~/queries/servers';
+import { alertQueries } from '~/queries/alerts';
+import { authQueries } from '~/queries/auth';
+import { runCommandOptions, serverQueries } from '~/queries/servers';
 import { formatRelative } from '~/utils/format';
 
 type RestartProcessDialogProps = {
@@ -18,8 +18,8 @@ type RestartProcessDialogProps = {
 export function RestartProcessDialog(props: RestartProcessDialogProps) {
   const { server } = props;
 
-  const { data: me, isSuccess: isMeLoaded } = useQuery(meOptions());
-  const { data: firing = [] } = useQuery(listAlertsOptions('firing'));
+  const { data: me, isSuccess: isMeLoaded } = useQuery(authQueries.me());
+  const { data: firing = [] } = useQuery(alertQueries.list('firing'));
 
   const [name, setName] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -64,7 +64,7 @@ export function RestartProcessDialog(props: RestartProcessDialogProps) {
         onSuccess: () => {
           toast.success(`Restarted ${name}`);
           setIsOpen(false);
-          void queryClient.invalidateQueries({ queryKey: ['servers', server.id] });
+          void queryClient.invalidateQueries({ queryKey: serverQueries.detail(server.id).queryKey });
         },
       }
     );

@@ -179,6 +179,50 @@ pub async fn fit_disk_trend(
         .await
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiskGrowth {
+    pub server_id: String,
+    pub mount: String,
+    pub filesystem: String,
+    pub taken_at: i64,
+    pub used: u64,
+    pub total: u64,
+    pub bytes_per_ms: f64,
+}
+
+pub async fn list_disk_growth(
+    analytics: &Analytics,
+    since: i64,
+    min_window_ms: i64,
+) -> Result<Vec<DiskGrowth>> {
+    analytics
+        .read(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT server_id, mount, arg_max(filesystem, taken_at), max(taken_at), \
+                 arg_max(disk_used, taken_at), arg_max(disk_total, taken_at), \
+                 regr_slope(disk_used, taken_at) \
+                 FROM disk_states WHERE taken_at >= ? GROUP BY server_id, mount \
+                 HAVING max(taken_at) - min(taken_at) >= ? \
+                 AND regr_slope(disk_used, taken_at) > 0",
+            )?;
+
+            statement
+                .query_map(params![since, min_window_ms], |row| {
+                    Ok(DiskGrowth {
+                        server_id: row.get(0)?,
+                        mount: row.get(1)?,
+                        filesystem: row.get(2)?,
+                        taken_at: row.get(3)?,
+                        used: row.get(4)?,
+                        total: row.get(5)?,
+                        bytes_per_ms: row.get(6)?,
+                    })
+                })?
+                .collect()
+        })
+        .await
+}
+
 pub fn append_states(conn: &Connection, rows: &[StateRow]) -> duckdb::Result<()> {
     let mut appender = conn.appender("server_states")?;
     for row in rows {
@@ -254,33 +298,6 @@ pub async fn list_metric_points(
                         tcp_conn_count: row.get(9)?,
                         udp_conn_count: row.get(10)?,
                     })
-                })?
-                .collect()
-        })
-        .await
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-#[schema(as = TrendPoint)]
-pub struct TrendPoint {
-    pub at: i64,
-    pub value: f64,
-}
-
-pub async fn list_fleet_cpu(
-    analytics: &Analytics,
-    from_ms: i64,
-    bucket_ms: i64,
-) -> Result<Vec<TrendPoint>> {
-    analytics
-        .read(move |conn| {
-            let mut statement = conn.prepare(
-                "SELECT (taken_at // ?) * ? AS at, avg(cpu) FROM server_states \
-                 WHERE taken_at >= ? GROUP BY 1 ORDER BY 1",
-            )?;
-            statement
-                .query_map(params![bucket_ms, bucket_ms, from_ms], |row| {
-                    Ok(TrendPoint { at: row.get(0)?, value: row.get(1)? })
                 })?
                 .collect()
         })

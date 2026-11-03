@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router';
 
 import { IssueDetail } from '~/components/issues/issue-detail';
-import { issueEventsOptions, listIssuesOptions } from '~/queries/traces';
+import { issueQueries } from '~/queries/traces';
 
 export function meta() {
   return [{ title: 'Issue · Daroyan' }];
@@ -10,8 +10,8 @@ export function meta() {
 
 export default function IssuePage() {
   const { fingerprint = '' } = useParams();
-  const { data: issues } = useQuery(listIssuesOptions(0));
-  const { data: events = [], isLoading: isEventsLoading } = useQuery(issueEventsOptions(fingerprint));
+  const { data: issues } = useQuery(issueQueries.list(0));
+  const { data: events = [], isLoading: isEventsLoading } = useQuery(issueQueries.events(fingerprint));
   const issue = issues?.find((item) => item.fingerprint === fingerprint);
 
   if (!issues) {

@@ -5,12 +5,14 @@ import { request } from "~/lib/http";
 
 export type MemberRole = "admin" | "member";
 
-export function listMembersOptions() {
-  return queryOptions({
-    queryKey: ["members"],
-    queryFn: () => request(apiClient.GET("/v1/members")),
-  });
-}
+export const memberQueries = {
+  all: () => ["members"] as const,
+  list: () =>
+    queryOptions({
+      queryKey: [...memberQueries.all(), "list"],
+      queryFn: () => request(apiClient.GET("/v1/members")),
+    }),
+};
 
 export function inviteMembersOptions() {
   return mutationOptions({

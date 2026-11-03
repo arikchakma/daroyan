@@ -295,7 +295,7 @@ fn split_image(image: &str) -> (&str, &str) {
     }
 }
 
-fn join_names(names: &[&str]) -> String {
+pub(crate) fn join_names(names: &[&str]) -> String {
     match names {
         [] => String::new(),
         [one] => (*one).to_string(),

@@ -10,7 +10,7 @@ import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useSortParams } from '~/hooks/use-sort-params';
 import { useStatusPagesTable } from '~/hooks/use-status-pages-table';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { listStatusPagesOptions } from '~/queries/status-pages';
+import { statusPageQueries } from '~/queries/status-pages';
 
 type VisibilityView = 'all' | 'public' | 'private';
 
@@ -30,7 +30,7 @@ export function meta() {
 
 export default function StatusPagesPage() {
   const isAdmin = useIsAdmin();
-  const { data: pages, isLoading } = useQuery(listStatusPagesOptions());
+  const { data: pages, isLoading } = useQuery(statusPageQueries.list());
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get('view');
   const view: VisibilityView = isVisibilityView(viewParam) ? viewParam : 'all';

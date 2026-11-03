@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
-import { finishSlackInstallOptions, slackInstallOptions } from '~/queries/alerts';
+import { finishSlackInstallOptions, integrationQueries } from '~/queries/alerts';
 import { CONNECTED_MESSAGE } from '~/utils/alerts';
 
 export function meta() {
@@ -18,7 +18,7 @@ export default function SlackChannelPage() {
   const [channelId, setChannelId] = useState<string>();
   const [search, setSearch] = useState('');
 
-  const { data: install, error } = useQuery({ ...slackInstallOptions(installId), enabled: !!installId });
+  const { data: install, error } = useQuery({ ...integrationQueries.slackInstall(installId), enabled: !!installId });
   const finish = useMutation({
     ...finishSlackInstallOptions(),
     meta: { isSilent: true },

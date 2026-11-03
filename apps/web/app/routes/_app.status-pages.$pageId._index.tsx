@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 import { StatusPageBody } from '~/components/status-pages/status-page-body';
-import { statusPageOptions } from '~/queries/status-pages';
+import { statusPageQueries } from '~/queries/status-pages';
 
 import type { Route } from './+types/_app.status-pages.$pageId._index';
 
@@ -12,7 +12,7 @@ export function meta() {
 export default function StatusPageDetailPage(props: Route.ComponentProps) {
   const { pageId } = props.params;
 
-  const { data: page, error } = useQuery(statusPageOptions(pageId));
+  const { data: page, error } = useQuery(statusPageQueries.detail(pageId));
 
   if (error) {
     return (

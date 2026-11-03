@@ -15,9 +15,9 @@ import {
   MAX_USES_ITEMS,
 } from '~/components/servers/install-key-select';
 import { queryClient } from '~/lib/query-client';
-import { ONE_OFF_LIMITS, installTokenOptions, revokeInstallTokenOptions } from '~/queries/install-tokens';
+import { installTokenQueries, ONE_OFF_LIMITS, revokeInstallTokenOptions } from '~/queries/install-tokens';
 import type { InstallTokenLimits } from '~/queries/install-tokens';
-import { listServersOptions } from '~/queries/servers';
+import { serverQueries } from '~/queries/servers';
 
 const CONFIG_EXAMPLE = `server:
   name: worker-2
@@ -36,8 +36,8 @@ ports:
     port: 6379`;
 
 export async function clientLoader() {
-  const servers = await queryClient.ensureQueryData(listServersOptions());
-  const tokens = queryClient.getQueriesData<Schemas['InstallToken']>({ queryKey: ['install-token'] });
+  const servers = await queryClient.ensureQueryData(serverQueries.list());
+  const tokens = queryClient.getQueriesData<Schemas['InstallToken']>({ queryKey: installTokenQueries.generated() });
   for (const [queryKey, token] of tokens) {
     const isUsed = token && servers.some((server) => new Date(server.created_at) >= new Date(token.created_at));
     if (!isUsed) {
@@ -58,7 +58,7 @@ export default function AddServerPage() {
   const [tokenVersion, setTokenVersion] = useState(0);
   const [limits, setLimits] = useState(ONE_OFF_LIMITS);
   const [isRolling, setIsRolling] = useState(false);
-  const { data: installToken, isFetching } = useQuery(installTokenOptions(tokenVersion, limits));
+  const { data: installToken, isFetching } = useQuery(installTokenQueries.generate(tokenVersion, limits));
   const { mutate: revokeInstallToken } = useMutation({
     ...revokeInstallTokenOptions(),
     meta: { errorMessage: 'The old install token could not be revoked' },
@@ -72,7 +72,7 @@ export default function AddServerPage() {
     setTokenVersion(tokenVersion + 1);
   };
   const { data: servers } = useQuery({
-    ...listServersOptions(),
+    ...serverQueries.list(),
     refetchInterval: 3_000,
     refetchIntervalInBackground: true,
   });

@@ -23,7 +23,7 @@ import { toast } from "~/lib/toast";
 import {
   createIngestTokenOptions,
   deleteIngestTokenOptions,
-  listIngestTokensOptions,
+  ingestTokenQueries,
 } from "~/queries/traces";
 
 export function meta() {
@@ -32,7 +32,7 @@ export function meta() {
 
 export default function TelemetryPage() {
   const isAdmin = useIsAdmin();
-  const { data, isLoading } = useQuery(listIngestTokensOptions());
+  const { data, isLoading } = useQuery(ingestTokenQueries.list());
   const tokens = data?.map((token) => ({
     ...token,
     detail:
@@ -49,7 +49,7 @@ export default function TelemetryPage() {
     ...deleteIngestTokenOptions(),
     meta: { errorMessage: "The token could not be revoked" },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["ingest-tokens"] });
+      queryClient.invalidateQueries({ queryKey: ingestTokenQueries.all() });
       toast.success(`Revoked ${revoking?.name ?? "the token"}`);
       setRevoking(undefined);
     },
@@ -122,7 +122,7 @@ export default function TelemetryPage() {
       <AddTokenDialog
         open={isAdding}
         onOpenChange={setIsAdding}
-        queryKey={["ingest-tokens"]}
+        queryKey={ingestTokenQueries.list().queryKey}
         mutation={createIngestTokenOptions()}
         placeholder="production-api"
         nameHelp="Name it after the service or environment that sends with it."

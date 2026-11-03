@@ -1,9 +1,16 @@
 import { reactRouter } from '@react-router/dev/vite';
 import tailwindcss from '@tailwindcss/vite';
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
+
+const cargoToml = readFileSync(new URL('../../Cargo.toml', import.meta.url), 'utf8');
+const version = cargoToml.match(/^version = "(.+)"$/m)?.[1] ?? 'dev';
 
 export default defineConfig({
   clearScreen: false,
+  define: {
+    __DAROYAN_VERSION__: JSON.stringify(version),
+  },
   resolve: {
     tsconfigPaths: true,
   },

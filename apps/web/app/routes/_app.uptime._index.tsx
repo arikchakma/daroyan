@@ -10,7 +10,7 @@ import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useSortParams } from '~/hooks/use-sort-params';
 import { useUptimeTable } from '~/hooks/use-uptime-table';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { listUptimeChecksOptions } from '~/queries/uptime';
+import { uptimeCheckQueries } from '~/queries/uptime';
 
 type StatusView = 'all' | 'up' | 'down' | 'degraded' | 'paused';
 
@@ -32,7 +32,7 @@ export function meta() {
 
 export default function UptimePage() {
   const isAdmin = useIsAdmin();
-  const { data: checks, isLoading } = useQuery(listUptimeChecksOptions());
+  const { data: checks, isLoading } = useQuery(uptimeCheckQueries.list());
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get('view');
   const view: StatusView = isStatusView(viewParam) ? viewParam : 'all';
