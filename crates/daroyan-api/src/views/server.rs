@@ -19,7 +19,10 @@ pub struct ServerItemView {
     pub cpu_cores: Option<u32>,
     pub mem_total: Option<u64>,
     pub cpu: Option<f32>,
+    pub mem_used: Option<u64>,
     pub mem_percent: Option<f64>,
+    pub disk_used: Option<u64>,
+    pub disk_total: Option<u64>,
     pub disk_percent: Option<f64>,
     pub uptime: Option<u64>,
     #[serde(with = "daroyan_core::time::option")]
@@ -68,6 +71,11 @@ impl ServerItemView {
         let ParsedServer { host, report, labels } = parse_server(&server);
         let mem_total = host.as_ref().map_or(0, |host| host.mem_total);
         let state = report.as_ref().map(|report| &report.state);
+        let disk_used =
+            state.map(|state| state.disks.iter().map(|disk| disk.disk_used).sum());
+        let disk_total =
+            state.map(|state| state.disks.iter().map(|disk| disk.disk_total).sum());
+
         Self {
             status: get_server_status(is_connected, mem_total, report.as_ref()),
             private_ip: host.as_ref().and_then(|host| host.private_ip.clone()),
@@ -76,13 +84,13 @@ impl ServerItemView {
             cpu_cores: host.as_ref().map(|host| host.cpu_cores),
             mem_total: host.as_ref().map(|host| host.mem_total),
             cpu: state.map(|state| state.cpu),
+            mem_used: state.map(|state| state.mem_used),
             mem_percent: state.map(|state| get_percent(state.mem_used, mem_total)),
-            disk_percent: state.map(|state| {
-                get_percent(
-                    state.disks.iter().map(|disk| disk.disk_used).sum(),
-                    state.disks.iter().map(|disk| disk.disk_total).sum(),
-                )
-            }),
+            disk_used,
+            disk_total,
+            disk_percent: disk_used
+                .zip(disk_total)
+                .map(|(used, total)| get_percent(used, total)),
             uptime: state.map(|state| state.uptime),
             id: server.id,
             name: server.name,

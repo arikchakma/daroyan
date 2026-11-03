@@ -2,16 +2,12 @@ import type { Schemas } from '@daroyan/client';
 import { useQuery } from '@tanstack/react-query';
 
 import { Icon } from '~/components/icons/icon';
-import { Sparkline } from '~/components/servers/sparkline';
-import { UsageRing } from '~/components/servers/usage-ring';
+import { Spec } from '~/components/servers/spec';
+import type { SpecProps } from '~/components/servers/spec';
 import type { UsageTone } from '~/components/servers/usage-ring';
 import { serverQueries } from '~/queries/servers';
-import { cn } from '~/utils/classname';
 import { formatBytes, formatDate, formatDuration, formatPercent, formatUsedOf, getPercent } from '~/utils/format';
-
-function usageTone(percent: number): UsageTone {
-  return percent >= 90 ? 'crit' : percent >= 75 ? 'warn' : 'ok';
-}
+import { getUsageTone } from '~/utils/usage';
 
 type SpecGridProps = {
   serverId: string;
@@ -38,9 +34,9 @@ export function SpecGrid(props: SpecGridProps) {
   const diskPercent = getPercent(diskUsed, diskTotal);
   const loadRatio = host.cpu_cores ? state.load1 / host.cpu_cores : 0;
   const loadTone: UsageTone = loadRatio >= 1 ? 'crit' : loadRatio >= 0.75 ? 'warn' : 'ok';
-  const cpuTone = usageTone(cpuPercent);
-  const memTone = usageTone(memPercent);
-  const diskTone = usageTone(diskPercent);
+  const cpuTone = getUsageTone(cpuPercent);
+  const memTone = getUsageTone(memPercent);
+  const diskTone = getUsageTone(diskPercent);
 
   const vitals: SpecProps[] = [
     { label: 'Uptime', value: formatDuration(state.uptime), detail: `since ${formatDate(host.boot_time * 1000)}` },
@@ -82,35 +78,6 @@ export function SpecGrid(props: SpecGridProps) {
           ))}
         </div>
       </details>
-    </div>
-  );
-}
-
-type SpecProps = {
-  label: string;
-  value: string;
-  detail?: string;
-  ring?: { percent: number; tone: UsageTone };
-  spark?: number[];
-  valueCritical?: boolean;
-};
-
-function Spec(props: SpecProps) {
-  const { label, value, detail, ring, spark, valueCritical } = props;
-
-  return (
-    <div className="flex min-w-0 items-center justify-between gap-3 bg-surface-default px-4 py-3.5">
-      <div className="flex min-w-0 flex-col gap-1">
-        <span className="text-caption font-medium text-text-secondary">{label}</span>
-        <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
-          <span className={cn('min-w-0 truncate text-body font-semibold', valueCritical ? 'text-tone-critical-fg' : 'text-text-primary')}>
-            {value}
-          </span>
-          {detail && <span className="min-w-0 shrink-1000 truncate text-caption font-normal text-text-tertiary">{detail}</span>}
-        </div>
-      </div>
-      {ring && <UsageRing percent={ring.percent} tone={ring.tone} />}
-      {spark && <Sparkline values={spark} />}
     </div>
   );
 }

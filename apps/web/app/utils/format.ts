@@ -42,6 +42,10 @@ export function formatUsedOf(used: number, total: number) {
   return `${roundForDisplay(used / divisor)} of ${roundForDisplay(total / divisor)} ${unit}`;
 }
 
+export function formatCoresOf(percent: number, cores: number) {
+  return `${roundForDisplay((percent / 100) * cores)} of ${cores} vCPU`;
+}
+
 export function formatPercent(value: number, digits = 0) {
   return `${value.toFixed(digits)}%`;
 }

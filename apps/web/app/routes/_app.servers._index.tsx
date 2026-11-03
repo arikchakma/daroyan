@@ -1,8 +1,12 @@
 import type { Schemas } from '@daroyan/client';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
+import { LayoutToggle } from '~/components/servers/layout-toggle';
+import { ServerCard } from '~/components/servers/server-card';
+import { ServerCardSkeleton } from '~/components/servers/server-card-skeleton';
 import { Button } from '~/components/ui/button';
 import { DataTable } from '~/components/ui/data-table';
 import { EmptyState, NoResults } from '~/components/ui/empty-state';
@@ -12,6 +16,8 @@ import { useServersTable } from '~/hooks/use-servers-table';
 import { useSortParams } from '~/hooks/use-sort-params';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { serverQueries } from '~/queries/servers';
+import { readServersLayout, saveServersLayout } from '~/utils/servers-layout';
+import type { ServersLayout } from '~/utils/servers-layout';
 
 type StatusView = 'all' | Schemas['ServerStatus'];
 
@@ -34,6 +40,7 @@ export default function ServersPage() {
   const viewParam = searchParams.get('view');
   const view: StatusView = isStatusView(viewParam) ? viewParam : 'all';
   const search = searchParams.get('q') ?? '';
+  const [layout, setLayout] = useState(readServersLayout);
 
   const { sorting, onSortingChange } = useSortParams({
     sorts: { name: 'asc', cpu: 'desc', memory: 'desc', disk: 'desc', lastSeen: 'desc' },
@@ -65,6 +72,11 @@ export default function ServersPage() {
 
   const table = useServersTable({ servers: visible, sorting, onSortingChange });
   const isEmpty = servers?.length === 0;
+
+  const changeLayout = (next: ServersLayout) => {
+    saveServersLayout(next);
+    setLayout(next);
+  };
 
   return (
     <div className="flex min-h-full flex-col bg-surface-default">
@@ -102,8 +114,17 @@ export default function ServersPage() {
             onSearchChange={(next) => setParam('q', next || null)}
             isViewChanged={view !== 'all' || !!search}
             onReset={() => setSearchParams({}, { replace: true })}
+            actions={<LayoutToggle layout={layout} onLayoutChange={changeLayout} />}
           />
-          <DataTable table={table} label="Servers" size="lg" isLoading={isLoading} />
+          {layout === 'grid' ? (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              {isLoading
+                ? [0, 1, 2, 3].map((index) => <ServerCardSkeleton key={index} />)
+                : table.getRowModel().rows.map((row) => <ServerCard key={row.original.id} server={row.original} />)}
+            </div>
+          ) : (
+            <DataTable table={table} label="Servers" size="lg" isLoading={isLoading} />
+          )}
           {servers && visible.length === 0 && (
             <NoResults title="No servers found" onReset={() => setSearchParams({}, { replace: true })} />
           )}
