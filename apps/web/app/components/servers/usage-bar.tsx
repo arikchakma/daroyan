@@ -14,7 +14,7 @@ export function UsageBar(props: UsageBarProps) {
 
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-14 overflow-hidden rounded-[3px] bg-surface-row">
+      <div className="h-1.5 w-14 overflow-hidden rounded-[3px] bg-surface-fill-strong">
         <div
           className="h-full rounded-[3px] bg-chart-primary"
           style={{ width: `${Math.min(percent, 100)}%` }}

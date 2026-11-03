@@ -154,7 +154,7 @@ export default function OverviewPage() {
                   aria-valuenow={doneCount}
                   aria-valuemin={0}
                   aria-valuemax={steps.length}
-                  className="h-1 w-21 overflow-hidden rounded-[2px] bg-surface-panel"
+                  className="h-1 w-21 overflow-hidden rounded-[2px] bg-surface-fill-strong"
                 >
                   <span
                     className="block h-full rounded-[2px] bg-tone-success-fg transition-[width]"
