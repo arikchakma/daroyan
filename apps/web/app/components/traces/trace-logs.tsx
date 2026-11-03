@@ -1,9 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Link } from 'react-router';
 
+import { LogSheet } from '~/components/logs/log-sheet';
 import { LevelBadge } from '~/hooks/use-logs-table';
+import type { LogRow } from '~/hooks/use-logs-table';
 import { logQueries } from '~/queries/logs';
+import { serverQueries } from '~/queries/servers';
 import { formatLogClock } from '~/utils/format';
+import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
 const LOG_LIMIT = 50;
 const WAIT_MS = 5_000;
@@ -25,7 +30,21 @@ export function TraceLogs(props: TraceLogsProps) {
     refetchInterval: (current) =>
       current.state.data?.lines.length === 0 && Date.now() - startedAt < RECENT_MS ? WAIT_MS : false,
   });
-  const lines = [...(data?.lines ?? [])].reverse();
+  const { data: servers } = useQuery(serverQueries.list());
+  const [openId, setOpenId] = useState<string>();
+
+  const serverNames = new Map([
+    [OTLP_SERVER_ID, OTLP_SERVER_NAME],
+    ...(servers ?? []).map((server) => [server.id, server.name] as const),
+  ]);
+  const lines: LogRow[] = [...(data?.lines ?? [])].reverse().map((line, index) => ({
+    ...line,
+    id: `${line.at}-${index}`,
+    serverName: serverNames.get(line.server_id) ?? line.server_id,
+    repeats: 1,
+    repeatSpanMs: 0,
+  }));
+  const openIndex = lines.findIndex((line) => line.id === openId);
 
   return (
     <section className="flex flex-col gap-3">
@@ -47,10 +66,10 @@ export function TraceLogs(props: TraceLogsProps) {
           </p>
         )}
         <ul aria-label="Logs">
-          {lines.map((line, index) => (
+          {lines.map((line) => (
             <li
-              key={`${line.at}-${index}`}
-              className="flex h-10 items-center gap-3 border-b border-border-ring px-4 last:border-b-0"
+              key={line.id}
+              className="relative flex h-10 items-center gap-3 border-b border-border-ring px-4 last:border-b-0 hover:bg-surface-row"
             >
               <span className="shrink-0 font-mono text-code-small text-text-secondary tabular-nums">
                 {formatLogClock(line.at)}
@@ -59,13 +78,25 @@ export function TraceLogs(props: TraceLogsProps) {
                 <LevelBadge level={line.level} />
               </span>
               <span className="w-28 shrink-0 truncate text-caption text-text-secondary">{line.service}</span>
-              <span title={line.message} className="min-w-0 flex-1 truncate font-mono text-code-small text-text-primary">
+              <button
+                type="button"
+                onClick={() => setOpenId(line.id)}
+                className="min-w-0 flex-1 truncate text-left font-mono text-code-small text-text-primary outline-none after:absolute after:inset-0 focus-visible:underline"
+              >
                 {line.message.split('\n')[0]}
-              </span>
+              </button>
             </li>
           ))}
         </ul>
       </div>
+
+      <LogSheet
+        line={lines[openIndex]}
+        canGoPrevious={openIndex > 0}
+        canGoNext={openIndex >= 0 && openIndex < lines.length - 1}
+        onNavigate={(step) => setOpenId(lines[openIndex + step]?.id)}
+        onClose={() => setOpenId(undefined)}
+      />
     </section>
   );
 }
