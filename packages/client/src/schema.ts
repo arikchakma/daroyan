@@ -821,15 +821,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/overview/trends": {
+    "/v1/overview/upcoming": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** @description Hourly fleet CPU and exception counts for the last 24 hours. Times are in ms */
-        get: operations["get_overview_trends"];
+        /** @description What is coming up in the next 30 days: disks projected to fill from their growth this week, TLS certificates about to expire, scheduled maintenance, and agents behind the latest version. Items are sorted by when they happen, undated ones last. soon marks items close enough to act on. Times are in ms */
+        get: operations["list_overview_upcoming"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1968,9 +1968,8 @@ export interface components {
         NoData: "keep" | "alert" | "resolve";
         /** @enum {string} */
         Outcome: "problem" | "recovery" | "neutral";
-        OverviewTrends: {
-            cpu: components["schemas"]["TrendPoint"][];
-            errors: components["schemas"]["TrendPoint"][];
+        OverviewUpcoming: {
+            items: components["schemas"]["UpcomingItem"][];
         };
         PortState: {
             host: string;
@@ -2387,12 +2386,17 @@ export interface components {
             started_at: number;
             trace_id: string;
         };
-        TrendPoint: {
+        UpcomingItem: {
             /** Format: int64 */
-            at: number;
-            /** Format: double */
-            value: number;
+            at?: number | null;
+            detail: string;
+            kind: components["schemas"]["UpcomingKind"];
+            soon: boolean;
+            target_id?: string | null;
+            title: string;
         };
+        /** @enum {string} */
+        UpcomingKind: "disk_full" | "cert_expiry" | "maintenance" | "agent_outdated";
         UpdateAlertRuleBody: {
             condition?: components["schemas"]["Condition"] | null;
             declare_hidden_page_ids?: string[] | null;
@@ -4108,7 +4112,7 @@ export interface operations {
             };
         };
     };
-    get_overview_trends: {
+    list_overview_upcoming: {
         parameters: {
             query?: never;
             header?: never;
@@ -4122,7 +4126,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["OverviewTrends"];
+                    "application/json": components["schemas"]["OverviewUpcoming"];
                 };
             };
         };

@@ -394,7 +394,7 @@ impl Mcp {
             .collect();
         let overview = json!({
             "name": "get_overview",
-            "description": "What needs attention right now, like the overview dashboard: open incidents, firing alerts that are not muted, servers that are down or warning, failing uptime checks and crons, and exceptions from the last 24 hours. Start here when something seems wrong.",
+            "description": "What needs attention right now, like the overview dashboard: open incidents, firing alerts that are not muted, servers that are down or warning, failing uptime checks and crons, and exceptions from the last 24 hours. coming_up lists what happens in the next 30 days: disks about to fill, certificates expiring, scheduled maintenance and outdated agents. Start here when something seems wrong.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
         });
@@ -694,7 +694,7 @@ impl Caller<'_> {
     async fn overview(&self) -> Result<Value, String> {
         let since = (Utc::now() - Duration::days(1)).timestamp_millis();
         let issues_uri = format!("/v1/issues?since={since}");
-        let (alerts, mutes, incidents, servers, checks, crons, issues) = tokio::try_join!(
+        let (alerts, mutes, incidents, servers, checks, crons, issues, upcoming) = tokio::try_join!(
             self.get("/v1/alerts?status=firing"),
             self.get("/v1/alert-mutes"),
             self.get("/v1/incidents"),
@@ -702,10 +702,15 @@ impl Caller<'_> {
             self.get("/v1/uptime-checks"),
             self.get("/v1/crons"),
             self.get(&issues_uri),
+            self.get("/v1/overview/upcoming"),
         )?;
-        Ok(build_overview(
+
+        let mut overview = build_overview(
             &alerts, &mutes, &incidents, &servers, &checks, &crons, &issues,
-        ))
+        );
+        overview["coming_up"] = upcoming["items"].clone();
+
+        Ok(overview)
     }
 }
 

@@ -16,4 +16,5 @@ pub mod rich_text;
 pub mod servers;
 pub mod time;
 pub mod token;
+pub mod upcoming;
 pub mod uptime;

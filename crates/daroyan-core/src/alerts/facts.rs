@@ -24,7 +24,7 @@ use crate::uptime::probe::STATUS_UP;
 
 const TREND_WINDOW_MS: i64 = 6 * 3_600_000;
 const MIN_TREND_MS: i64 = 3_600_000;
-const PSEUDO_FILESYSTEMS: [&str; 6] =
+pub(crate) const PSEUDO_FILESYSTEMS: [&str; 6] =
     ["tmpfs", "devtmpfs", "overlay", "squashfs", "proc", "sysfs"];
 const TOP_MESSAGES: u32 = 3;
 const LAST_LINES: u32 = 3;

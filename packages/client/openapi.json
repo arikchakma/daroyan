@@ -1849,16 +1849,16 @@
         }
       }
     },
-    "/v1/overview/trends": {
+    "/v1/overview/upcoming": {
       "get": {
-        "description": "Hourly fleet CPU and exception counts for the last 24 hours. Times are in ms",
-        "operationId": "get_overview_trends",
+        "description": "What is coming up in the next 30 days: disks projected to fill from their growth this week, TLS certificates about to expire, scheduled maintenance, and agents behind the latest version. Items are sorted by when they happen, undated ones last. soon marks items close enough to act on. Times are in ms",
+        "operationId": "list_overview_upcoming",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OverviewTrends"
+                  "$ref": "#/components/schemas/OverviewUpcoming"
                 }
               }
             }
@@ -5704,23 +5704,16 @@
           "neutral"
         ]
       },
-      "OverviewTrends": {
+      "OverviewUpcoming": {
         "type": "object",
         "required": [
-          "cpu",
-          "errors"
+          "items"
         ],
         "properties": {
-          "cpu": {
+          "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/TrendPoint"
-            }
-          },
-          "errors": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TrendPoint"
+              "$ref": "#/components/schemas/UpcomingItem"
             }
           }
         }
@@ -7232,22 +7225,50 @@
           }
         }
       },
-      "TrendPoint": {
+      "UpcomingItem": {
         "type": "object",
         "required": [
-          "at",
-          "value"
+          "kind",
+          "soon",
+          "title",
+          "detail"
         ],
         "properties": {
           "at": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64"
           },
-          "value": {
-            "type": "number",
-            "format": "double"
+          "detail": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/UpcomingKind"
+          },
+          "soon": {
+            "type": "boolean"
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
           }
         }
+      },
+      "UpcomingKind": {
+        "type": "string",
+        "enum": [
+          "disk_full",
+          "cert_expiry",
+          "maintenance",
+          "agent_outdated"
+        ]
       },
       "UpdateAlertRuleBody": {
         "type": "object",

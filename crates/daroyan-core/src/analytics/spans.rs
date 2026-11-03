@@ -615,29 +615,6 @@ pub async fn list_issue_events(
         .await
 }
 
-pub async fn list_error_counts(
-    analytics: &Analytics,
-    since_us: i64,
-    bucket_us: i64,
-) -> Result<Vec<crate::analytics::server_states::TrendPoint>> {
-    analytics
-        .read(move |conn| {
-            let mut statement = conn.prepare(
-                "SELECT (occurred_at // ?) * ? // 1000 AS at, count(*) FROM span_exceptions \
-                 WHERE occurred_at >= ? GROUP BY 1 ORDER BY 1",
-            )?;
-            statement
-                .query_map(params![bucket_us, bucket_us, since_us], |row| {
-                    Ok(crate::analytics::server_states::TrendPoint {
-                        at: row.get(0)?,
-                        value: row.get::<_, i64>(1)? as f64,
-                    })
-                })?
-                .collect()
-        })
-        .await
-}
-
 pub async fn read_last_span_at(analytics: &Analytics) -> Result<Option<i64>> {
     analytics
         .read(|conn| {
