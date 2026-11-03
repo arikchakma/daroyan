@@ -10,6 +10,7 @@ mod health;
 mod incidents;
 mod ingest_tokens;
 mod install_tokens;
+mod instance;
 mod integrations;
 mod logs;
 mod mcp_tokens;
@@ -31,6 +32,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .merge(health::router())
         .merge(auth::router())
         .merge(backups::router())
+        .merge(instance::router())
         .merge(agent::router())
         .merge(install_tokens::router())
         .merge(servers::router())

@@ -468,6 +468,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Settings this Daroyan instance reads from its environment: the public URL, how long metrics and logs are kept, and how many owners ALLOWED_EMAILS lists */
+        get: operations["get_instance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/integrations": {
         parameters: {
             query?: never;
@@ -1790,6 +1807,14 @@ export interface components {
             name: string;
             /** Format: int32 */
             uses: number;
+        };
+        Instance: {
+            allowed_email_count: number;
+            app_url?: string | null;
+            /** Format: int32 */
+            log_retention_days: number;
+            /** Format: int32 */
+            retention_days: number;
         };
         Integration: {
             /** Format: date-time */
@@ -3503,6 +3528,25 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_instance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instance"];
+                };
             };
         };
     };
