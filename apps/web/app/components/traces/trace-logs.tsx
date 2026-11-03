@@ -50,7 +50,7 @@ export function TraceLogs(props: TraceLogsProps) {
           {lines.map((line, index) => (
             <li
               key={`${line.at}-${index}`}
-              className="flex min-h-10 items-start gap-3 border-b border-border-ring px-4 py-2.5 last:border-b-0"
+              className="flex h-10 items-center gap-3 border-b border-border-ring px-4 last:border-b-0"
             >
               <span className="shrink-0 font-mono text-code-small text-text-secondary tabular-nums">
                 {formatLogClock(line.at)}
@@ -59,8 +59,8 @@ export function TraceLogs(props: TraceLogsProps) {
                 <LevelBadge level={line.level} />
               </span>
               <span className="w-28 shrink-0 truncate text-caption text-text-secondary">{line.service}</span>
-              <span className="min-w-0 flex-1 font-mono text-code-small wrap-anywhere text-text-primary">
-                {line.message}
+              <span title={line.message} className="min-w-0 flex-1 truncate font-mono text-code-small text-text-primary">
+                {line.message.split('\n')[0]}
               </span>
             </li>
           ))}
