@@ -475,7 +475,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Settings this Daroyan instance reads from its environment: the public URL, how long metrics and logs are kept, and how many owners ALLOWED_EMAILS lists */
+        /** @description Settings this Daroyan instance reads from its environment: the public URL and how long metrics and logs are kept */
         get: operations["get_instance"];
         put?: never;
         post?: never;
@@ -1809,7 +1809,6 @@ export interface components {
             uses: number;
         };
         Instance: {
-            allowed_email_count: number;
             app_url?: string | null;
             /** Format: int32 */
             log_retention_days: number;

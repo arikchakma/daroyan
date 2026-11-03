@@ -8,7 +8,7 @@ import { Skeleton } from '~/components/ui/skeleton';
 import { authQueries } from '~/queries/auth';
 import { instanceQueries } from '~/queries/instance';
 import { pluralize } from '~/utils/format';
-import { getOwnersLabel, getRoleLabel } from '~/utils/settings';
+import { getRoleLabel } from '~/utils/settings';
 
 export function meta() {
   return [{ title: 'General · Daroyan' }];
@@ -46,9 +46,6 @@ export default function GeneralSettingsPage() {
           </SettingsRow>
           <SettingsRow label="Logs" envVar="LOG_RETENTION_DAYS">
             {instance ? `Kept ${pluralize(instance.log_retention_days, 'day')}` : <Skeleton className="w-20" />}
-          </SettingsRow>
-          <SettingsRow label="Owners" envVar="ALLOWED_EMAILS">
-            {instance ? getOwnersLabel(instance.allowed_email_count) : <Skeleton className="w-24" />}
           </SettingsRow>
         </SettingsCard>
       </SettingsBlock>

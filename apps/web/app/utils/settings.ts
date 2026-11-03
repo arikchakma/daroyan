@@ -7,11 +7,3 @@ export function getRoleLabel(role: Schemas['Me']['role']) {
 
   return 'Member';
 }
-
-export function getOwnersLabel(count: number) {
-  if (count === 0) {
-    return 'None listed';
-  }
-
-  return `${count} listed`;
-}

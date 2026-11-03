@@ -7,5 +7,4 @@ pub struct InstanceView {
     pub app_url: Option<String>,
     pub retention_days: u32,
     pub log_retention_days: u32,
-    pub allowed_email_count: usize,
 }
