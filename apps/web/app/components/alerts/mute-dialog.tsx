@@ -15,7 +15,7 @@ import { toast } from '~/lib/toast';
 import { alertMuteQueries, createAlertMuteOptions } from '~/queries/alerts';
 import { formatMinutesLong } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
-import { formatClock } from '~/utils/format';
+import { formatClock, HOUR_MS } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
 
 export type MuteLength = '1h' | '4h' | 'tomorrow' | 'resolves' | 'custom';
@@ -28,7 +28,6 @@ export type MuteTarget = {
   name: string;
 };
 
-const HOUR_MS = 3_600_000;
 const SHORT_DAY = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const MONTH_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
 

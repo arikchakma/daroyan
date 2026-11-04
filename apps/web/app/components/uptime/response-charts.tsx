@@ -1,7 +1,7 @@
 import type { Schemas } from '@daroyan/client';
 
 import { ChartLegend, getNiceMax, MetricChart } from '~/components/servers/metric-chart';
-import { DAY_MS } from '~/utils/format';
+import { DAY_MS, getAverage } from '~/utils/format';
 import { formatMs, formatUptime } from '~/utils/uptime';
 
 const BUCKET_MS = 10 * 60 * 1000;
@@ -20,17 +20,12 @@ export function ResponseCharts(props: ResponseChartsProps) {
   const availability = points.map((point) => (point.total > 0 ? ((point.total - point.down) / point.total) * 100 : 100));
   const total = points.reduce((sum, point) => sum + point.total, 0);
   const down = points.reduce((sum, point) => sum + point.down, 0);
-  const measured = points.flatMap((point) => (point.response_ms === null || point.response_ms === undefined ? [] : [point.response_ms]));
-  const average = measured.length > 0 ? measured.reduce((sum, value) => sum + value, 0) / measured.length : null;
+  const average = getAverage(points.map((point) => point.response_ms));
   const max = getNiceMax(response);
   const dns = points.map((point) => point.dns_ms ?? 0);
   const tls = points.map((point) => point.tls_ms ?? 0);
-  const averageOf = (values: (number | null | undefined)[]) => {
-    const present = values.filter((value): value is number => value !== null && value !== undefined);
-    return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) / present.length : null;
-  };
-  const dnsAverage = averageOf(points.map((point) => point.dns_ms));
-  const tlsAverage = averageOf(points.map((point) => point.tls_ms));
+  const dnsAverage = getAverage(points.map((point) => point.dns_ms));
+  const tlsAverage = getAverage(points.map((point) => point.tls_ms));
   const handshakeMax = getNiceMax([...dns, ...tls]);
 
   return (

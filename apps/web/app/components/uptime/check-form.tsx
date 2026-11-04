@@ -18,7 +18,7 @@ import { toast } from '~/lib/toast';
 import { alertRuleQueries, createAlertRuleOptions, integrationQueries } from '~/queries/alerts';
 import { createUptimeCheckOptions, updateUptimeCheckOptions, uptimeCheckQueries } from '~/queries/uptime';
 import type { UptimeCheckInput } from '~/queries/uptime';
-import { joinNames } from '~/utils/alerts';
+import { joinNames } from '~/utils/format';
 import { formatStreak, INTERVAL_OPTIONS, RETRY_OPTIONS, STREAK_OPTIONS, TIMEOUT_OPTIONS } from '~/utils/uptime';
 
 type CheckKind = 'http' | 'tcp';

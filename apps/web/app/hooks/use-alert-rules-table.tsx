@@ -7,6 +7,7 @@ import { Link } from 'react-router';
 import { RuleStatusBadge } from '~/components/alerts/rule-status-badge';
 import type { RuleState } from '~/components/alerts/rule-status-badge';
 import { Icon } from '~/components/icons/icon';
+import { Dash } from '~/components/ui/dash';
 import { SelectAllCheckbox } from '~/components/ui/select-all-checkbox';
 import { SelectRowCheckbox } from '~/components/ui/select-row-checkbox';
 import { SortableHeader } from '~/components/ui/sortable-header';
@@ -137,7 +138,7 @@ export function useAlertRulesTable(options: UseAlertRulesTableOptions) {
             row.original.last_fired_at ? (
               formatRelative(row.original.last_fired_at)
             ) : (
-              <span className="text-text-tertiary">—</span>
+              <Dash />
             ),
         }),
       ]).filter((column) => canSelect || column.id !== 'select'),

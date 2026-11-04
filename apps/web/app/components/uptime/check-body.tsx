@@ -25,8 +25,8 @@ import { toast } from '~/lib/toast';
 import { alertRuleQueries } from '~/queries/alerts';
 import { deleteUptimeCheckOptions, runUptimeCheckOptions, toCheckInput, updateUptimeCheckOptions, uptimeCheckQueries } from '~/queries/uptime';
 import { cn } from '~/utils/classname';
-import { DAY_MS, formatDate, pluralize } from '~/utils/format';
-import { describeExpect, describeTarget, formatInterval, formatLasted, formatMs, formatStreak, formatUptime, getUptime } from '~/utils/uptime';
+import { DAY_MS, formatDate, formatLasted, pluralize } from '~/utils/format';
+import { describeExpect, describeTarget, formatInterval, formatMs, formatStreak, formatUptime, getUptime } from '~/utils/uptime';
 
 type CheckBodyProps = {
   check: Schemas['UptimeCheck'];

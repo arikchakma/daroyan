@@ -6625,6 +6625,22 @@
             ],
             "format": "double"
           },
+          "disk_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "disk_used": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
           "id": {
             "type": "string"
           },
@@ -6649,6 +6665,14 @@
             "format": "double"
           },
           "mem_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "mem_used": {
             "type": [
               "integer",
               "null"

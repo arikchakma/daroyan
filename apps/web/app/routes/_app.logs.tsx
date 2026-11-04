@@ -19,6 +19,7 @@ import { SearchFilter } from '~/components/search/search-filter';
 import { Button } from '~/components/ui/button';
 import { useCommandActions } from '~/hooks/use-command-actions';
 import { collapseRepeats, COLUMN_LABELS, hasHttp, useLogsTable } from '~/hooks/use-logs-table';
+import { useStoredState } from '~/hooks/use-stored-state';
 import type { LogRow } from '~/hooks/use-logs-table';
 import { apiClient } from '~/lib/api-client';
 import { request } from '~/lib/http';
@@ -26,8 +27,8 @@ import { toast } from '~/lib/toast';
 import { logQueries } from '~/queries/logs';
 import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
-import { joinNames } from '~/utils/alerts';
 import { readListParam } from '~/utils/filter';
+import { joinNames } from '~/utils/format';
 import type { SearchFilterField } from '~/utils/filter';
 import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
@@ -35,21 +36,6 @@ const PAGE_SIZE = 50;
 const EXPORT_LIMIT = 5_000;
 const COLUMNS_KEY = 'daroyan.logs.columns';
 const WRAP_KEY = 'daroyan.logs.wrap';
-
-function readStored<T>(key: string, fallback: T): T {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? (JSON.parse(value) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function store(key: string, value: unknown) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {}
-}
 
 const FILTER_KEYS = [
   { key: 'server', param: 'server_id' },
@@ -109,8 +95,8 @@ export default function LogsPage() {
   const [isLive, setIsLive] = useState(false);
   const [until, setUntil] = useState(() => Date.now());
   const [openLine, setOpenLine] = useState<LogRow>();
-  const [isWrapped, setIsWrapped] = useState(() => readStored(WRAP_KEY, false));
-  const [hiddenColumns, setHiddenColumns] = useState<ColumnVisibilityState>(() => readStored(COLUMNS_KEY, {}));
+  const [isWrapped, setIsWrapped] = useStoredState(WRAP_KEY, false);
+  const [hiddenColumns, setHiddenColumns] = useStoredState<ColumnVisibilityState>(COLUMNS_KEY, {});
   const [isExporting, setIsExporting] = useState(false);
 
   const setParams = (changes: Record<string, string | null>) => {
@@ -269,10 +255,7 @@ export default function LogsPage() {
     !hasNoSources && {
       label: isWrapped ? 'Unwrap Lines' : 'Wrap Lines',
       icon: 'align-left',
-      onSelect: () => {
-        setIsWrapped(!isWrapped);
-        store(WRAP_KEY, !isWrapped);
-      },
+      onSelect: () => setIsWrapped(!isWrapped),
     },
     !hasNoSources && !isExporting && { label: 'Export Logs', icon: 'download', onSelect: () => void exportLogs() },
   ]);
@@ -364,20 +347,14 @@ export default function LogsPage() {
             <ColumnMenu
               labels={COLUMN_LABELS}
               hidden={hiddenColumns}
-              onChange={(next) => {
-                setHiddenColumns(next);
-                store(COLUMNS_KEY, next);
-              }}
+              onChange={setHiddenColumns}
             />
             <button
               type="button"
               aria-label="Wrap Lines"
               aria-pressed={isWrapped}
               title="Wrap lines"
-              onClick={() => {
-                setIsWrapped(!isWrapped);
-                store(WRAP_KEY, !isWrapped);
-              }}
+              onClick={() => setIsWrapped(!isWrapped)}
               className="flex size-7 shrink-0 items-center justify-center rounded-sm text-text-secondary outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40 aria-pressed:bg-surface-fill aria-pressed:text-text-primary"
             >
               <Icon name="align-left" />

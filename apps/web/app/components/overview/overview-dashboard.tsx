@@ -11,16 +11,16 @@ import { DetailSection } from '~/components/servers/detail-table';
 import { Button } from '~/components/ui/button';
 import { Menu } from '~/components/ui/menu';
 import { PageBar } from '~/components/ui/page-bar';
+import { useFiringAlerts } from '~/hooks/use-firing-alerts';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { alertMuteQueries, alertQueries } from '~/queries/alerts';
 import { incidentQueries } from '~/queries/incidents';
 import { overviewQueries } from '~/queries/overview';
 import { traceQueries } from '~/queries/traces';
-import { describeFiring, getAlertMute } from '~/utils/alerts';
+import { describeFiring } from '~/utils/alerts';
 import { formatUntil } from '~/utils/crons';
-import { DAY_MS, formatClock, formatRelative, pluralize } from '~/utils/format';
+import { DAY_MS, formatClock, formatRelative, joinNames, pluralize } from '~/utils/format';
 import { getStatusMeta, isClosed, isMaintenance } from '~/utils/incidents';
-import { getAlertHref, joinParts } from '~/utils/overview';
+import { getAlertHref } from '~/utils/overview';
 import { formatMs } from '~/utils/uptime';
 
 const BAD_CRON_STATUSES = ['failed', 'missed', 'late'];
@@ -44,17 +44,12 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
   const { servers, checks, crons } = props;
 
   const isAdmin = useIsAdmin();
-  const { data: firing = [] } = useQuery(alertQueries.list('firing'));
-  const { data: resolved = [] } = useQuery(alertQueries.list('resolved'));
-  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
+  const { active: activeAlerts } = useFiringAlerts();
   const { data: incidents = [] } = useQuery(incidentQueries.list());
   const { data: events } = useQuery(overviewQueries.events());
   const { data: upcoming } = useQuery(overviewQueries.upcoming());
   const { data: services = [] } = useQuery(traceQueries.services(DAY_MS));
 
-  const activeAlerts = firing.filter(
-    (alert) => !getAlertMute(mutes, alert)
-  );
   const alertedIds = new Set(activeAlerts.flatMap((alert) => [alert.server_id, alert.check_id, alert.cron_id]));
   const openIncidents = incidents.filter((incident) => !isMaintenance(incident) && !isClosed(incident.status));
   const downServers = servers.filter((server) => server.status === 'down');
@@ -120,8 +115,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
       })),
   ];
 
-  const lastResolved = resolved[0];
-  const scope = joinParts(
+  const scope = joinNames(
     [
       servers.length > 0 ? pluralize(servers.length, 'server') : '',
       activeChecks.length > 0 ? pluralize(activeChecks.length, 'uptime check') : '',
@@ -183,25 +177,10 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
             )}
           </div>
 
-          <DetailSection
-            title="Needs Attention"
-            summary={attention.length === 0 ? 'Nothing open' : `${attention.length} open`}
-          >
-            <div className="overflow-hidden rounded-2xl border border-border-ring bg-surface-default shadow-card [&>*+*]:border-t [&>*+*]:border-border-row">
-              {attention.length === 0 ? (
-                <div className="flex gap-3 px-4 py-3">
-                  <Icon name="circle-check-fill" className="mt-0.5 shrink-0 text-tone-success-fg" />
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-body">
-                    <span className="font-medium">Nothing needs attention</span>
-                    <span className="truncate text-text-secondary">
-                      {lastResolved?.resolved_at
-                        ? `The last problem, ${lastResolved.rule_name} on ${lastResolved.target_name}, resolved ${formatRelative(lastResolved.resolved_at)}.`
-                        : 'Everything Daroyan watches is healthy.'}
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                attention.map((item) => (
+          {attention.length > 0 && (
+            <DetailSection title="Needs Attention" summary={`${attention.length} open`}>
+              <div className="overflow-hidden rounded-2xl border border-border-ring bg-surface-default shadow-card [&>*+*]:border-t [&>*+*]:border-border-row">
+                {attention.map((item) => (
                   <OverviewRow
                     key={item.key}
                     href={item.href}
@@ -210,12 +189,12 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
                     title={item.title}
                     detail={item.detail}
                   />
-                ))
-              )}
-            </div>
-          </DetailSection>
+                ))}
+              </div>
+            </DetailSection>
+          )}
 
-          {upcoming && <ComingUp items={upcoming.items} />}
+          {upcoming && upcoming.items.length > 0 && <ComingUp items={upcoming.items} />}
 
           <EventsTile events={events} />
         </div>

@@ -51,6 +51,3 @@ export function getUpcomingDate(item: Schemas['UpcomingItem']) {
   return typeof item.at === 'number' ? formatDate(item.at) : undefined;
 }
 
-export function joinParts(parts: string[]) {
-  return parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
-}

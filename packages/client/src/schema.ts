@@ -2239,6 +2239,10 @@ export interface components {
             created_at: string;
             /** Format: double */
             disk_percent?: number | null;
+            /** Format: int64 */
+            disk_total?: number | null;
+            /** Format: int64 */
+            disk_used?: number | null;
             id: string;
             labels: string[];
             /** Format: date-time */
@@ -2247,6 +2251,8 @@ export interface components {
             mem_percent?: number | null;
             /** Format: int64 */
             mem_total?: number | null;
+            /** Format: int64 */
+            mem_used?: number | null;
             name: string;
             platform?: string | null;
             platform_version?: string | null;

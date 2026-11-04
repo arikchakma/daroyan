@@ -4,6 +4,7 @@ import type { ColumnVisibilityState } from '@tanstack/react-table';
 import { useMemo } from 'react';
 
 import { Badge } from '~/components/ui/badge';
+import { Dash } from '~/components/ui/dash';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
 import { cn } from '~/utils/classname';
@@ -81,7 +82,7 @@ function StatusChip(props: { status: unknown }) {
   const { status } = props;
 
   if (typeof status !== 'number') {
-    return <span className="text-text-tertiary">—</span>;
+    return <Dash />;
   }
   return (
     <span

@@ -4,9 +4,9 @@ import { Link } from 'react-router';
 import { Icon } from '~/components/icons/icon';
 import type { IconName } from '~/components/icons/icon-paths';
 import { Button } from '~/components/ui/button';
-import { describeFiring, describeMuteEnd, getAlertTargetPath, joinNames } from '~/utils/alerts';
+import { describeFiring, describeMuteEnd, getAlertTargetPath } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
-import { formatClock } from '~/utils/format';
+import { formatClock, joinNames } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
 
 function getOpenAction(alert: Schemas['Alert']): { icon: IconName; label: string } {

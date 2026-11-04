@@ -23,10 +23,8 @@ import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import { authQueries } from '~/queries/auth';
 import { createIncidentOptions, incidentQueries } from '~/queries/incidents';
-import { formatClock } from '~/utils/format';
+import { formatClock, HOUR_MS } from '~/utils/format';
 import { hasText } from '~/utils/rich-text';
-
-const HOUR_MS = 3_600_000;
 
 type DateTime = { day: string; time: string };
 

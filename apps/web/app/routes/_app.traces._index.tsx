@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnVisibilityState, SortingState } from '@tanstack/react-table';
-import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
@@ -13,13 +12,14 @@ import { PageBar } from '~/components/ui/page-bar';
 import { Pager } from '~/components/ui/pager';
 import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { TRACE_COLUMN_LABELS, useTracesTable } from '~/hooks/use-traces-table';
+import { useStoredState } from '~/hooks/use-stored-state';
 import { serverQueries } from '~/queries/servers';
 import { traceQueries } from '~/queries/traces';
 import { SLOW_MS } from '~/utils/traces';
+import { HOUR_MS } from '~/utils/format';
 
 const PAGE_SIZE = 50;
 const COLUMNS_KEY = 'daroyan.traces.columns';
-const HOUR_MS = 3_600_000;
 
 const RANGES = [
   { value: '1h', label: 'Last Hour', ms: HOUR_MS },
@@ -42,14 +42,6 @@ const SORTS = [
   { value: 'fastest', label: 'Fastest First', sorting: [{ id: 'duration_us', desc: false }] },
 ] satisfies { value: string; label: string; sorting: SortingState }[];
 
-function readColumns(): ColumnVisibilityState {
-  try {
-    return JSON.parse(localStorage.getItem(COLUMNS_KEY) ?? '{}') as ColumnVisibilityState;
-  } catch {
-    return {};
-  }
-}
-
 export function meta() {
   return [{ title: 'Traces · Daroyan' }];
 }
@@ -63,7 +55,7 @@ export default function TracesPage() {
   const serverId = searchParams.get('server') ?? '';
   const page = Math.max(Number(searchParams.get('page')) || 1, 1);
 
-  const [hiddenColumns, setHiddenColumns] = useState(readColumns);
+  const [hiddenColumns, setHiddenColumns] = useStoredState<ColumnVisibilityState>(COLUMNS_KEY, {});
 
   const { data: status } = useQuery(traceQueries.status());
   const { data: servers } = useQuery(serverQueries.list());
@@ -189,12 +181,7 @@ export default function TracesPage() {
               <ColumnMenu
                 labels={TRACE_COLUMN_LABELS}
                 hidden={hiddenColumns}
-                onChange={(next) => {
-                  setHiddenColumns(next);
-                  try {
-                    localStorage.setItem(COLUMNS_KEY, JSON.stringify(next));
-                  } catch {}
-                }}
+                onChange={setHiddenColumns}
               />
               <Menu.Root>
                 <Menu.Trigger

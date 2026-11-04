@@ -1,6 +1,6 @@
 import type { Schemas } from '@daroyan/client';
 
-import { formatClock, formatUnit } from '~/utils/format';
+import { formatClock, formatUnit, joinNames } from '~/utils/format';
 
 export const GRACE_OPTIONS = [
   { value: 60, label: '1 minute' },
@@ -85,8 +85,7 @@ export function formatLateness(run: Pick<Schemas['CronRun'], 'scheduled_at' | 's
 }
 
 export function joinTimes(times: number[]) {
-  const clocks = times.map(formatClock);
-  return clocks.length > 1 ? `${clocks.slice(0, -1).join(', ')} and ${clocks.at(-1)}` : (clocks[0] ?? '');
+  return joinNames(times.map(formatClock));
 }
 
 export function formatOutputSize(output: string) {

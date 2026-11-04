@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
 import { useMemo } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
 
 import { Button } from '~/components/ui/button';
 import { DataTable } from '~/components/ui/data-table';
@@ -10,6 +10,7 @@ import { PageBar } from '~/components/ui/page-bar';
 import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useDataTable } from '~/hooks/use-data-table';
 import { ServiceDot } from '~/hooks/use-traces-table';
+import { useListParams } from '~/hooks/use-list-params';
 import type { DataTableFeatures } from '~/lib/table';
 import { issueQueries } from '~/queries/traces';
 import { formatCount, formatRelative } from '~/utils/format';
@@ -65,9 +66,8 @@ export function meta() {
 }
 
 export default function IssuesPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { searchParams, search, setParam, setSearch, reset } = useListParams();
   const service = searchParams.get('service') ?? '';
-  const search = searchParams.get('q') ?? '';
 
   const { data: issues = [], isLoading } = useQuery(issueQueries.list());
   const services = useMemo(() => [...new Set(issues.map((issue) => issue.service))].sort(), [issues]);
@@ -79,19 +79,6 @@ export default function IssuesPage() {
       .map((issue) => ({ ...issue, id: issue.fingerprint }));
   }, [issues, service, search]);
   const table = useDataTable({ columns, data });
-
-  const setParam = (key: string, value: string | null) =>
-    setSearchParams(
-      (params) => {
-        if (value) {
-          params.set(key, value);
-        } else {
-          params.delete(key);
-        }
-        return params;
-      },
-      { replace: true }
-    );
 
   if (!isLoading && issues.length === 0) {
     return (
@@ -122,13 +109,13 @@ export default function IssuesPage() {
           onViewChange={(next) => setParam('service', next || null)}
           searchLabel="Search exception type or message"
           search={search}
-          onSearchChange={(next) => setParam('q', next || null)}
+          onSearchChange={setSearch}
           isViewChanged={!!service || !!search}
-          onReset={() => setSearchParams({}, { replace: true })}
+          onReset={reset}
         />
         <DataTable table={table} label="Issues" size="lg" isLoading={isLoading} />
         {!isLoading && data.length === 0 && (
-          <NoResults title="No issues found" onReset={() => setSearchParams({}, { replace: true })} />
+          <NoResults title="No issues found" onReset={reset} />
         )}
       </div>
     </div>

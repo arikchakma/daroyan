@@ -1,5 +1,5 @@
 import type { Schemas } from '@daroyan/client';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -10,19 +10,19 @@ import type { MuteLength, MuteTarget } from '~/components/alerts/mute-dialog';
 import { Icon } from '~/components/icons/icon';
 import { DeclareIncidentSheet } from '~/components/incidents/declare-incident-sheet';
 import type { DeclareDefaults } from '~/components/incidents/declare-incident-sheet';
+import { useFiringAlerts } from '~/hooks/use-firing-alerts';
 import { useLinkAction } from '~/hooks/use-link-action';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Menu } from '~/components/ui/menu';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
-import { alertMuteQueries, alertQueries, alertRuleQueries, deleteAlertMuteOptions } from '~/queries/alerts';
+import { alertMuteQueries, deleteAlertMuteOptions } from '~/queries/alerts';
 import {
   describeAlertNow,
   describeMuteEnd,
   describeResolve,
   formatMinutesLong,
-  getAlertMute,
   getMutedService,
   isWholeRuleMute,
 } from '~/utils/alerts';
@@ -45,9 +45,7 @@ type AlertBannersProps = {
 export function AlertBanners(props: AlertBannersProps) {
   const { serverId, checkId, cronId } = props;
 
-  const { data: firing = [], isSuccess: isFiringLoaded } = useQuery(alertQueries.list('firing'));
-  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
-  const { data: rules = [] } = useQuery(alertRuleQueries.list());
+  const { alerts, isLoaded: isFiringLoaded, getMute, getRule } = useFiringAlerts({ serverId, checkId, cronId });
 
   const [muting, setMuting] = useState<{ alert: Schemas['Alert']; isWholeRule: boolean } | undefined>();
   const [declaring, setDeclaring] = useState<DeclareDefaults | undefined>();
@@ -61,13 +59,6 @@ export function AlertBanners(props: AlertBannersProps) {
       toast.success('Unmuted');
     },
   });
-
-  const alerts = firing.filter(
-    (alert) =>
-      (serverId && alert.server_id === serverId) ||
-      (checkId && alert.check_id === checkId) ||
-      (cronId && alert.cron_id === cronId)
-  );
 
   useLinkAction('mute', isFiringLoaded, (alertId) => {
     const alert = alerts.find((item) => item.id === alertId);
@@ -93,20 +84,19 @@ export function AlertBanners(props: AlertBannersProps) {
     return null;
   }
 
-  const findRule = (alert: Schemas['Alert']) => rules.find((rule) => rule.id === alert.rule_id);
   const getTarget = (alert: Schemas['Alert']): MuteTarget => ({
     serverId: alert.server_id,
     checkId: alert.check_id,
     cronId: alert.cron_id,
-    subject: getMutedService(alert, findRule(alert)),
-    name: getMutedService(alert, findRule(alert)) ?? alert.target_name,
+    subject: getMutedService(alert, getRule(alert)),
+    name: getMutedService(alert, getRule(alert)) ?? alert.target_name,
   });
 
   return (
     <>
       {alerts.map((alert) => {
-        const mute = getAlertMute(mutes, alert);
-        const detail = describeAlertNow(alert, rules.find((rule) => rule.id === alert.rule_id)?.summary);
+        const mute = getMute(alert);
+        const detail = describeAlertNow(alert, getRule(alert)?.summary);
         if (mute) {
           const resume = mute.ends_at
             ? ` If it is still firing at ${formatClock(new Date(mute.ends_at).getTime())}, the team gets a message.`
@@ -119,7 +109,7 @@ export function AlertBanners(props: AlertBannersProps) {
                   {alert.rule_name} is muted {describeMuteEnd(mute)}
                 </p>
                 <p className="text-body text-text-primary">
-                  {detail} {mute.creator?.name.split(' ')[0] ?? 'Someone'} muted {isWholeRuleMute(mute) ? 'the whole rule' : `it on ${getMutedService(alert, findRule(alert)) ?? alert.target_name}`}
+                  {detail} {mute.creator?.name.split(' ')[0] ?? 'Someone'} muted {isWholeRuleMute(mute) ? 'the whole rule' : `it on ${getMutedService(alert, getRule(alert)) ?? alert.target_name}`}
                   {mute.ends_at ? ` for ${formatMinutesLong(mute.created_at, mute.ends_at)}` : ' until it resolves'}
                   {mute.reason ? `: "${mute.reason}".` : '.'}
                   {resume}
@@ -170,7 +160,7 @@ export function AlertBanners(props: AlertBannersProps) {
                     <Menu.Positioner align="start">
                       <Menu.Popup>
                         <Menu.Group>
-                          <Menu.GroupLabel>{getMutedService(alert, findRule(alert)) ?? alert.target_name} only</Menu.GroupLabel>
+                          <Menu.GroupLabel>{getMutedService(alert, getRule(alert)) ?? alert.target_name} only</Menu.GroupLabel>
                           {QUICK_LENGTHS.map((length) => (
                             <Menu.Item
                               key={length.value}
@@ -180,7 +170,7 @@ export function AlertBanners(props: AlertBannersProps) {
                                   server_id: alert.server_id,
                                   check_id: alert.check_id,
                                   cron_id: alert.cron_id,
-                                  subject: getMutedService(alert, findRule(alert)),
+                                  subject: getMutedService(alert, getRule(alert)),
                                   ends_at: getMuteEnd(length.value),
                                   time_zone: getBrowserTimeZone(),
                                 })
@@ -219,7 +209,7 @@ export function AlertBanners(props: AlertBannersProps) {
           ruleId={muting.alert.rule_id}
           ruleName={muting.alert.rule_name}
           ruleNoun={muting.alert.check_id ? 'check' : muting.alert.cron_id ? 'cron' : 'server'}
-          resolveHint={describeResolve(rules.find((rule) => rule.id === muting.alert.rule_id)?.condition)}
+          resolveHint={describeResolve(getRule(muting.alert)?.condition)}
           target={muting.isWholeRule ? undefined : getTarget(muting.alert)}
           isFiring
         />
@@ -262,14 +252,13 @@ type AlertBadgeProps = {
 export function AlertBadge(props: AlertBadgeProps) {
   const { serverId, fallback } = props;
 
-  const { data: firing = [] } = useQuery(alertQueries.list('firing'));
-  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
+  const { alerts, active, getMute } = useFiringAlerts({ serverId });
 
-  const alert = firing.find((item) => item.server_id === serverId);
+  const alert = active[0] ?? alerts[0];
   if (!alert) {
     return fallback;
   }
-  if (getAlertMute(mutes, alert)) {
+  if (getMute(alert)) {
     return (
       <Badge tone="neutral">
         <Icon name="bell-off" className="size-3.5" />

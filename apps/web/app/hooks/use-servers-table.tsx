@@ -7,30 +7,18 @@ import { Link } from 'react-router';
 import { Icon } from '~/components/icons/icon';
 import { ServerStatusBadge } from '~/components/servers/server-status-badge';
 import { UsageBar } from '~/components/servers/usage-bar';
+import { Dash } from '~/components/ui/dash';
 import { Menu } from '~/components/ui/menu';
 import { SortableHeader } from '~/components/ui/sortable-header';
 import { useDataTable } from '~/hooks/use-data-table';
 import { resolveUpdater } from '~/lib/table';
 import type { DataTableFeatures } from '~/lib/table';
-import { formatBytes, formatRelative, formatUptimeDays } from '~/utils/format';
+import { formatRelative, formatUptimeDays } from '~/utils/format';
+import { getServerSubtitle, isServerLive } from '~/utils/servers';
 
 type ServerItem = Schemas['ServerItem'];
 
 const helper = createColumnHelper<DataTableFeatures, ServerItem>();
-
-function isLive(server: ServerItem) {
-  return server.status === 'healthy' || server.status === 'warning';
-}
-
-function getSubtitle(server: ServerItem) {
-  return [
-    server.private_ip,
-    [server.platform, server.platform_version].filter(Boolean).join(' '),
-    server.cpu_cores && server.mem_total ? `${server.cpu_cores} vCPU, ${formatBytes(server.mem_total)}` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
 
 type UseServersTableOptions = {
   servers: ServerItem[];
@@ -59,7 +47,7 @@ export function useServersTable(options: UseServersTableOptions) {
                 {row.original.name}
               </Link>
               <span className="truncate text-small text-text-tertiary">
-                {getSubtitle(row.original) || 'Waiting for the first report'}
+                {getServerSubtitle(row.original) || 'Waiting for the first report'}
               </span>
             </span>
           ),
@@ -70,39 +58,39 @@ export function useServersTable(options: UseServersTableOptions) {
           meta: { width: 120, skeleton: 'badge' },
           cell: ({ getValue }) => <ServerStatusBadge status={getValue()} />,
         }),
-        helper.accessor((server) => (isLive(server) ? (server.cpu ?? 0) : -1), {
+        helper.accessor((server) => (isServerLive(server) ? (server.cpu ?? 0) : -1), {
           id: 'cpu',
           header: ({ column }) => <SortableHeader column={column} label="CPU" />,
           sortFn: 'basic',
           sortDescFirst: true,
           meta: { width: 120, hideBelow: 'lg' },
-          cell: ({ row }) => <UsageBar percent={isLive(row.original) ? row.original.cpu : null} />,
+          cell: ({ row }) => <UsageBar percent={isServerLive(row.original) ? row.original.cpu : null} />,
         }),
-        helper.accessor((server) => (isLive(server) ? (server.mem_percent ?? 0) : -1), {
+        helper.accessor((server) => (isServerLive(server) ? (server.mem_percent ?? 0) : -1), {
           id: 'memory',
           header: ({ column }) => <SortableHeader column={column} label="Memory" />,
           sortFn: 'basic',
           sortDescFirst: true,
           meta: { width: 120, hideBelow: 'lg' },
-          cell: ({ row }) => <UsageBar percent={isLive(row.original) ? row.original.mem_percent : null} />,
+          cell: ({ row }) => <UsageBar percent={isServerLive(row.original) ? row.original.mem_percent : null} />,
         }),
-        helper.accessor((server) => (isLive(server) ? (server.disk_percent ?? 0) : -1), {
+        helper.accessor((server) => (isServerLive(server) ? (server.disk_percent ?? 0) : -1), {
           id: 'disk',
           header: ({ column }) => <SortableHeader column={column} label="Disk" />,
           sortFn: 'basic',
           sortDescFirst: true,
           meta: { width: 120, hideBelow: 'lg' },
-          cell: ({ row }) => <UsageBar percent={isLive(row.original) ? row.original.disk_percent : null} />,
+          cell: ({ row }) => <UsageBar percent={isServerLive(row.original) ? row.original.disk_percent : null} />,
         }),
         helper.accessor('uptime', {
           header: 'Uptime',
           enableSorting: false,
           meta: { width: 90, align: 'right', hideBelow: 'md' },
           cell: ({ row }) =>
-            isLive(row.original) && row.original.uptime !== null && row.original.uptime !== undefined ? (
+            isServerLive(row.original) && row.original.uptime !== null && row.original.uptime !== undefined ? (
               formatUptimeDays(row.original.uptime)
             ) : (
-              <span className="text-text-tertiary">—</span>
+              <Dash />
             ),
         }),
         helper.accessor((server) => (server.last_seen_at ? Date.parse(server.last_seen_at) : 0), {

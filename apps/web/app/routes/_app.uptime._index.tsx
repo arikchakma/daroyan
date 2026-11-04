@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
@@ -10,6 +10,7 @@ import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useSortParams } from '~/hooks/use-sort-params';
 import { useUptimeTable } from '~/hooks/use-uptime-table';
 import { useIsAdmin } from '~/hooks/use-is-admin';
+import { useViewParams } from '~/hooks/use-list-params';
 import { uptimeCheckQueries } from '~/queries/uptime';
 
 type StatusView = 'all' | 'up' | 'down' | 'degraded' | 'paused';
@@ -22,9 +23,7 @@ const VIEWS: { value: StatusView; label: string }[] = [
   { value: 'paused', label: 'Paused' },
 ];
 
-function isStatusView(value: string | null): value is StatusView {
-  return VIEWS.some((view) => view.value === value);
-}
+const VIEW_VALUES = VIEWS.map((view) => view.value);
 
 export function meta() {
   return [{ title: 'Uptime · Daroyan' }];
@@ -33,28 +32,12 @@ export function meta() {
 export default function UptimePage() {
   const isAdmin = useIsAdmin();
   const { data: checks, isLoading } = useQuery(uptimeCheckQueries.list());
-  const [searchParams, setSearchParams] = useSearchParams();
-  const viewParam = searchParams.get('view');
-  const view: StatusView = isStatusView(viewParam) ? viewParam : 'all';
-  const search = searchParams.get('q') ?? '';
+  const { search, view, setView, setSearch, reset, isFiltered } = useViewParams(VIEW_VALUES);
 
   const { sorting, onSortingChange } = useSortParams({
     sorts: { name: 'asc', uptime: 'asc', response: 'desc', lastCheck: 'desc' },
     defaultSort: 'name',
   });
-
-  const setParam = (key: string, value: string | null) =>
-    setSearchParams(
-      (params) => {
-        if (value) {
-          params.set(key, value);
-        } else {
-          params.delete(key);
-        }
-        return params;
-      },
-      { replace: true }
-    );
 
   const term = search.trim().toLowerCase();
   const visible = (checks ?? []).filter(
@@ -96,16 +79,16 @@ export default function UptimePage() {
           <ViewsToolbar
             views={VIEWS}
             view={view}
-            onViewChange={(next) => setParam('view', next === 'all' ? null : next)}
+            onViewChange={setView}
             searchLabel="Search by name or URL"
             search={search}
-            onSearchChange={(next) => setParam('q', next || null)}
-            isViewChanged={view !== 'all' || !!search}
-            onReset={() => setSearchParams({}, { replace: true })}
+            onSearchChange={setSearch}
+            isViewChanged={isFiltered}
+            onReset={reset}
           />
           <DataTable table={table} label="Uptime Checks" size="lg" isLoading={isLoading} />
           {checks && visible.length === 0 && (
-            <NoResults title="No checks found" onReset={() => setSearchParams({}, { replace: true })} />
+            <NoResults title="No checks found" onReset={reset} />
           )}
         </div>
       )}

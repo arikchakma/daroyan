@@ -1,6 +1,7 @@
 import type { Schemas } from '@daroyan/client';
 
 import type { IconName } from '~/components/icons/icon-paths';
+import { joinNames } from '~/utils/format';
 
 type PublicComponent = Schemas['PublicStatusComponent'];
 type PublicDay = Schemas['UptimeDay'];
@@ -50,10 +51,6 @@ export function getComponentStatus(status: string) {
 
 export function getPublicUrl(slug: string) {
   return `${window.location.origin}/s/${slug}`;
-}
-
-export function joinNames(names: string[]) {
-  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : (names[0] ?? '');
 }
 
 export function summarizeComponents(components: PublicComponent[]) {

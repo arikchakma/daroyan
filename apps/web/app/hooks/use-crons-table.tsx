@@ -6,6 +6,7 @@ import { Link } from 'react-router';
 
 import { CronRunBars } from '~/components/crons/cron-run-bars';
 import { CronStatusBadge } from '~/components/crons/cron-status-badge';
+import { Dash } from '~/components/ui/dash';
 import { SortableHeader } from '~/components/ui/sortable-header';
 import { useDataTable } from '~/hooks/use-data-table';
 import { resolveUpdater } from '~/lib/table';
@@ -139,6 +140,3 @@ export function NextExpected(props: NextExpectedProps) {
   return <span className="text-text-secondary">{formatUntil(cron.next_expected_at)}</span>;
 }
 
-function Dash() {
-  return <span className="text-text-tertiary">—</span>;
-}

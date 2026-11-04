@@ -26,7 +26,7 @@ import { useIsAdmin } from '~/hooks/use-is-admin';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import { deleteIncidentOptions, incidentQueries, postIncidentUpdateOptions } from '~/queries/incidents';
-import { formatClock } from '~/utils/format';
+import { formatClock, joinNames } from '~/utils/format';
 import {
   RELATED_LABELS,
   describeShownPages,
@@ -40,7 +40,6 @@ import {
   getSeverityMeta,
   isClosed,
   isMaintenance,
-  joinNames,
 } from '~/utils/incidents';
 import type { Incident, IncidentUpdate } from '~/utils/incidents';
 import { INTEGRATION_KINDS, isIntegrationKind } from '~/utils/alerts';

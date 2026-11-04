@@ -21,7 +21,6 @@ import { alertRuleQueries, createAlertRuleOptions, integrationQueries } from '~/
 import { createCronOptions, cronQueries, updateCronOptions } from '~/queries/crons';
 import type { CronInput } from '~/queries/crons';
 import { serverQueries } from '~/queries/servers';
-import { joinNames } from '~/utils/alerts';
 import type { ConditionKind } from '~/utils/alerts';
 import {
   COMMON_SCHEDULES,
@@ -31,6 +30,7 @@ import {
   joinTimes,
   MAX_DURATION_OPTIONS,
 } from '~/utils/crons';
+import { joinNames } from '~/utils/format';
 
 type ScheduleKind = 'cron' | 'every';
 
