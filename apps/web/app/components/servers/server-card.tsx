@@ -5,7 +5,8 @@ import { AlertBadge } from '~/components/alerts/alert-banners';
 import { ServerCardStatus } from '~/components/servers/server-card-status';
 import { ServerStatusBadge } from '~/components/servers/server-status-badge';
 import { Spec } from '~/components/servers/spec';
-import { getServerMeta, getServerSpecs } from '~/utils/servers';
+import { useIsAdmin } from '~/hooks/use-is-admin';
+import { getPendingHint, getServerMeta, getServerSpecs } from '~/utils/servers';
 
 type ServerCardProps = {
   server: Schemas['ServerItem'];
@@ -14,6 +15,7 @@ type ServerCardProps = {
 export function ServerCard(props: ServerCardProps) {
   const { server } = props;
 
+  const isAdmin = useIsAdmin();
   const meta = getServerMeta(server);
   const isPending = server.status === 'pending' || !server.cpu_cores;
 
@@ -51,7 +53,7 @@ export function ServerCard(props: ServerCardProps) {
 
       {isPending ? (
         <p className="border-t border-border-row px-4 py-3.5 text-body text-text-tertiary">
-          Run the install command on the server. CPU, memory and disk show up after the first report.
+          {getPendingHint(isAdmin)}
         </p>
       ) : (
         <div className="grid grid-cols-3 gap-px border-t border-border-row bg-border-row">

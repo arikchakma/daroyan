@@ -81,9 +81,9 @@ export function TraceLogs(props: TraceLogsProps) {
               <button
                 type="button"
                 onClick={() => setOpenId(line.id)}
-                className="min-w-0 flex-1 truncate text-left font-mono text-code-small text-text-primary outline-none after:absolute after:inset-0 focus-visible:underline"
+                className="min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-code-small text-text-primary outline-none after:absolute after:inset-0 focus-visible:underline"
               >
-                {line.message.split('\n')[0]}
+                {line.message.trimStart().split('\n')[0]}
               </button>
             </li>
           ))}
