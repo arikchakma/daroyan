@@ -45,7 +45,6 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
 
   const isAdmin = useIsAdmin();
   const { data: firing = [] } = useQuery(alertQueries.list('firing'));
-  const { data: resolved = [] } = useQuery(alertQueries.list('resolved'));
   const { data: mutes = [] } = useQuery(alertMuteQueries.list());
   const { data: incidents = [] } = useQuery(incidentQueries.list());
   const { data: events } = useQuery(overviewQueries.events());
@@ -120,7 +119,6 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
       })),
   ];
 
-  const lastResolved = resolved[0];
   const scope = joinParts(
     [
       servers.length > 0 ? pluralize(servers.length, 'server') : '',
@@ -183,25 +181,10 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
             )}
           </div>
 
-          <DetailSection
-            title="Needs Attention"
-            summary={attention.length === 0 ? 'Nothing open' : `${attention.length} open`}
-          >
-            <div className="overflow-hidden rounded-2xl border border-border-ring bg-surface-default shadow-card [&>*+*]:border-t [&>*+*]:border-border-row">
-              {attention.length === 0 ? (
-                <div className="flex gap-3 px-4 py-3">
-                  <Icon name="circle-check-fill" className="mt-0.5 shrink-0 text-tone-success-fg" />
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-body">
-                    <span className="font-medium">Nothing needs attention</span>
-                    <span className="truncate text-text-secondary">
-                      {lastResolved?.resolved_at
-                        ? `The last problem, ${lastResolved.rule_name} on ${lastResolved.target_name}, resolved ${formatRelative(lastResolved.resolved_at)}.`
-                        : 'Everything Daroyan watches is healthy.'}
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                attention.map((item) => (
+          {attention.length > 0 && (
+            <DetailSection title="Needs Attention" summary={`${attention.length} open`}>
+              <div className="overflow-hidden rounded-2xl border border-border-ring bg-surface-default shadow-card [&>*+*]:border-t [&>*+*]:border-border-row">
+                {attention.map((item) => (
                   <OverviewRow
                     key={item.key}
                     href={item.href}
@@ -210,12 +193,12 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
                     title={item.title}
                     detail={item.detail}
                   />
-                ))
-              )}
-            </div>
-          </DetailSection>
+                ))}
+              </div>
+            </DetailSection>
+          )}
 
-          {upcoming && <ComingUp items={upcoming.items} />}
+          {upcoming && upcoming.items.length > 0 && <ComingUp items={upcoming.items} />}
 
           <EventsTile events={events} />
         </div>
