@@ -1,8 +1,7 @@
 import type { Schemas } from '@daroyan/client';
-import { useQuery } from '@tanstack/react-query';
 
-import { alertMuteQueries, alertQueries, alertRuleQueries } from '~/queries/alerts';
-import { describeAlertNow, getAlertMute } from '~/utils/alerts';
+import { useFiringAlerts } from '~/hooks/use-firing-alerts';
+import { describeAlertNow } from '~/utils/alerts';
 import { formatRelative } from '~/utils/format';
 
 type ServerCardStatusProps = {
@@ -12,9 +11,7 @@ type ServerCardStatusProps = {
 export function ServerCardStatus(props: ServerCardStatusProps) {
   const { server } = props;
 
-  const { data: firing = [] } = useQuery(alertQueries.list('firing'));
-  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
-  const { data: rules = [] } = useQuery(alertRuleQueries.list());
+  const { active, getRule } = useFiringAlerts({ serverId: server.id });
 
   if (server.status === 'pending' || !server.last_seen_at) {
     return <p className="text-body text-text-tertiary">Waiting for the first report</p>;
@@ -25,10 +22,9 @@ export function ServerCardStatus(props: ServerCardStatusProps) {
     return <p className="text-body text-tone-critical-fg">{lastReport}</p>;
   }
 
-  const alert = firing.find((item) => item.server_id === server.id && !getAlertMute(mutes, item));
+  const alert = active[0];
   if (alert) {
-    const summary = rules.find((rule) => rule.id === alert.rule_id)?.summary;
-    return <p className="truncate text-body text-tone-warning-fg">{describeAlertNow(alert, summary)}</p>;
+    return <p className="truncate text-body text-tone-warning-fg">{describeAlertNow(alert, getRule(alert)?.summary)}</p>;
   }
 
   return <p className="text-body text-text-tertiary">{lastReport}</p>;

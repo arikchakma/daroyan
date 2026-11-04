@@ -2,7 +2,7 @@ import type { Schemas } from '@daroyan/client';
 
 import type { IconName } from '~/components/icons/icon-paths';
 import type { BadgeProps } from '~/components/ui/badge';
-import { formatClock, formatDate, formatDuration } from '~/utils/format';
+import { formatClock, formatDate, formatDuration, joinNames } from '~/utils/format';
 
 type Tone = NonNullable<BadgeProps['tone']>;
 
@@ -141,13 +141,6 @@ export function formatCountdown(value: string, now = Date.now()) {
 
 export function getInitial(name: string) {
   return name.trim().charAt(0).toUpperCase() || '?';
-}
-
-export function joinNames(names: string[]) {
-  if (names.length <= 1) {
-    return names.join('');
-  }
-  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 export function describeShownPages(incident: Pick<Incident, 'status_pages'>) {

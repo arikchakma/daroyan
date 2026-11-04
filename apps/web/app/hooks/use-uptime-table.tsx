@@ -4,6 +4,7 @@ import type { SortingState } from '@tanstack/react-table';
 import { useMemo } from 'react';
 import { Link } from 'react-router';
 
+import { Dash } from '~/components/ui/dash';
 import { UptimeBars } from '~/components/uptime/uptime-bars';
 import { UptimeStatusBadge } from '~/components/uptime/uptime-status-badge';
 import { SortableHeader } from '~/components/ui/sortable-header';
@@ -124,6 +125,3 @@ export function useUptimeTable(options: UseUptimeTableOptions) {
   });
 }
 
-function Dash() {
-  return <span className="text-text-tertiary">—</span>;
-}

@@ -9,6 +9,7 @@ import { Button } from '~/components/ui/button';
 import { CodeBlock } from '~/components/ui/code-block';
 import { PageBar } from '~/components/ui/page-bar';
 import { useIsAdmin } from '~/hooks/use-is-admin';
+import { useStoredState } from '~/hooks/use-stored-state';
 import { integrationQueries } from '~/queries/alerts';
 import { cronQueries } from '~/queries/crons';
 import { installTokenQueries, ONE_OFF_LIMITS } from '~/queries/install-tokens';
@@ -29,14 +30,6 @@ function getGreeting(hour: number) {
 
 const SKIPPED_KEY = 'daroyan.setup.skipped';
 
-function readSkipped(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(SKIPPED_KEY) ?? '[]') as string[];
-  } catch {
-    return [];
-  }
-}
-
 type Step = {
   key: string;
   title: string;
@@ -52,15 +45,12 @@ export default function OverviewPage() {
   const { data: integrations } = useQuery(integrationQueries.list());
   const isAdmin = useIsAdmin();
   const [openKey, setOpenKey] = useState<string>();
-  const [skipped, setSkipped] = useState(readSkipped);
+  const [skipped, setSkipped] = useStoredState<string[]>(SKIPPED_KEY, []);
 
   const setSkip = (keys: string[], isSkipped: boolean) => {
     const next = isSkipped ? [...new Set([...skipped, ...keys])] : skipped.filter((item) => !keys.includes(item));
     setSkipped(next);
     setOpenKey(undefined);
-    try {
-      localStorage.setItem(SKIPPED_KEY, JSON.stringify(next));
-    } catch {}
   };
 
   const isLoaded = !!servers && !!checks && !!crons && !!integrations;

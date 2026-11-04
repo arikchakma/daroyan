@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { DeclareIncidentSheet } from '~/components/incidents/declare-incident-sheet';
@@ -10,6 +9,7 @@ import { EmptyState, NoResults } from '~/components/ui/empty-state';
 import { PageBar } from '~/components/ui/page-bar';
 import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useIncidentsTable } from '~/hooks/use-incidents-table';
+import { useViewParams } from '~/hooks/use-list-params';
 import { incidentQueries } from '~/queries/incidents';
 import { isClosed, sortIncidents } from '~/utils/incidents';
 import type { Incident } from '~/utils/incidents';
@@ -23,6 +23,8 @@ const VIEW_FILTERS: Record<IncidentView, (incident: Incident) => boolean> = {
   resolved: (incident) => isClosed(incident.status),
 };
 
+const VIEW_VALUES = Object.keys(VIEW_FILTERS) as IncidentView[];
+
 const VIEW_LABELS: Record<IncidentView, string> = {
   all: 'All',
   ongoing: 'Ongoing',
@@ -30,34 +32,14 @@ const VIEW_LABELS: Record<IncidentView, string> = {
   resolved: 'Resolved',
 };
 
-function isIncidentView(value: string | null): value is IncidentView {
-  return value !== null && value in VIEW_FILTERS;
-}
-
 export function meta() {
   return [{ title: 'Incidents · Daroyan' }];
 }
 
 export default function IncidentsPage() {
   const { data: incidents, isLoading } = useQuery(incidentQueries.list());
-  const [searchParams, setSearchParams] = useSearchParams();
-  const viewParam = searchParams.get('view');
-  const view: IncidentView = isIncidentView(viewParam) ? viewParam : 'all';
-  const search = searchParams.get('q') ?? '';
+  const { searchParams, search, view, setView, setSearch, setParam, reset, isFiltered } = useViewParams(VIEW_VALUES);
   const creating = searchParams.get('new');
-
-  const setParam = (key: string, value: string | null) =>
-    setSearchParams(
-      (params) => {
-        if (value) {
-          params.set(key, value);
-        } else {
-          params.delete(key);
-        }
-        return params;
-      },
-      { replace: true }
-    );
 
   const all = incidents ?? [];
   const term = search.trim().toLowerCase();
@@ -112,16 +94,16 @@ export default function IncidentsPage() {
           <ViewsToolbar
             views={views}
             view={view}
-            onViewChange={(next) => setParam('view', next === 'all' ? null : next)}
+            onViewChange={setView}
             searchLabel="Search incidents and maintenance"
             search={search}
-            onSearchChange={(next) => setParam('q', next || null)}
-            isViewChanged={view !== 'all' || !!search}
-            onReset={() => setSearchParams({}, { replace: true })}
+            onSearchChange={setSearch}
+            isViewChanged={isFiltered}
+            onReset={reset}
           />
           <DataTable table={table} label="Incidents" size="lg" isLoading={isLoading} />
           {incidents && visible.length === 0 && (
-            <NoResults title="No incidents found" onReset={() => setSearchParams({}, { replace: true })} />
+            <NoResults title="No incidents found" onReset={reset} />
           )}
         </div>
       )}

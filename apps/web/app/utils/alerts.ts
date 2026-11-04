@@ -154,6 +154,32 @@ export function isWholeRuleMute(mute: Schemas['AlertMute']) {
   return !mute.server_id && !mute.check_id && !mute.cron_id;
 }
 
+export type AlertTarget = {
+  serverId?: string;
+  checkId?: string;
+  cronId?: string;
+};
+
+export function getAlertsForTarget(alerts: Schemas['Alert'][], target: AlertTarget) {
+  const { serverId, checkId, cronId } = target;
+
+  return alerts.filter(
+    (alert) =>
+      (serverId && alert.server_id === serverId) ||
+      (checkId && alert.check_id === checkId) ||
+      (cronId && alert.cron_id === cronId)
+  );
+}
+
+export function getSharedMute(alerts: MuteMatch[], mutes: Schemas['AlertMute'][]) {
+  const alertMutes = alerts.map((alert) => getAlertMute(mutes, alert));
+  if (alertMutes.length === 0 || !alertMutes.every(Boolean)) {
+    return undefined;
+  }
+
+  return alertMutes[0];
+}
+
 export function getAlertTargetId(alert: Pick<Schemas['Alert'], 'server_id' | 'check_id' | 'cron_id'>) {
   return alert.server_id ?? alert.check_id ?? alert.cron_id;
 }
@@ -169,7 +195,7 @@ export function getRuleState(
   if (!rule.enabled) {
     return 'disabled';
   }
-  if (isWholeMuted || (own.length > 0 && own.every((alert) => getAlertMute(mutes, alert)))) {
+  if (isWholeMuted || getSharedMute(own, mutes)) {
     return 'muted';
   }
   if (rule.options.message_limit != null && rule.quiet_until && new Date(rule.quiet_until).getTime() > now) {
@@ -304,13 +330,6 @@ export function formatAlertDuration(startedAt: string, endedAt?: string | null, 
   }
   const hours = Math.floor(minutes / 60);
   return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
-}
-
-export function joinNames(names: string[]) {
-  if (names.length <= 1) {
-    return names[0] ?? '';
-  }
-  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 export function getAlertTargetPath(alert: Pick<Schemas['Alert'], 'server_id' | 'check_id' | 'cron_id' | 'subject'>) {

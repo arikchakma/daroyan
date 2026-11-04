@@ -5,62 +5,16 @@ import { AlertBadge } from '~/components/alerts/alert-banners';
 import { ServerCardStatus } from '~/components/servers/server-card-status';
 import { ServerStatusBadge } from '~/components/servers/server-status-badge';
 import { Spec } from '~/components/servers/spec';
-import type { SpecProps } from '~/components/servers/spec';
-import { formatBytes, formatCoresOf, formatPercent, formatUptimeDays, formatUsedOf } from '~/utils/format';
-import { getUsageTone } from '~/utils/usage';
-
-type ServerItem = Schemas['ServerItem'];
-
-function getMeta(server: ServerItem) {
-  const isLive = server.status === 'healthy' || server.status === 'warning';
-
-  return [
-    server.private_ip,
-    [server.platform, server.platform_version].filter(Boolean).join(' '),
-    isLive && server.uptime ? `up ${formatUptimeDays(server.uptime)}` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
-
-function getUsageSpec(label: string, percent: number | null | undefined, detail: string): SpecProps {
-  if (percent === null || percent === undefined) {
-    return { label, value: '—', detail };
-  }
-
-  const tone = getUsageTone(percent);
-
-  return { label, value: formatPercent(percent), detail, ring: { percent, tone }, valueCritical: tone === 'crit' };
-}
-
-function getSpecs(server: ServerItem): SpecProps[] {
-  const cores = server.cpu_cores ?? 0;
-  const memTotal = server.mem_total ?? 0;
-  const diskTotal = server.disk_total ?? 0;
-
-  if (server.status === 'down') {
-    return [
-      getUsageSpec('CPU', null, `${cores} vCPU`),
-      getUsageSpec('Memory', null, formatBytes(memTotal)),
-      getUsageSpec('Disk', null, formatBytes(diskTotal)),
-    ];
-  }
-
-  return [
-    getUsageSpec('CPU', server.cpu, formatCoresOf(server.cpu ?? 0, cores)),
-    getUsageSpec('Memory', server.mem_percent, formatUsedOf(server.mem_used ?? 0, memTotal)),
-    getUsageSpec('Disk', server.disk_percent, formatUsedOf(server.disk_used ?? 0, diskTotal)),
-  ];
-}
+import { getServerMeta, getServerSpecs } from '~/utils/servers';
 
 type ServerCardProps = {
-  server: ServerItem;
+  server: Schemas['ServerItem'];
 };
 
 export function ServerCard(props: ServerCardProps) {
   const { server } = props;
 
-  const meta = getMeta(server);
+  const meta = getServerMeta(server);
   const isPending = server.status === 'pending' || !server.cpu_cores;
 
   return (
@@ -101,7 +55,7 @@ export function ServerCard(props: ServerCardProps) {
         </p>
       ) : (
         <div className="grid grid-cols-3 gap-px border-t border-border-row bg-border-row">
-          {getSpecs(server).map((spec) => (
+          {getServerSpecs(server).map((spec) => (
             <Spec key={spec.label} {...spec} />
           ))}
         </div>

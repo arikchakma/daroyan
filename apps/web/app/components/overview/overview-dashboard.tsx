@@ -11,16 +11,16 @@ import { DetailSection } from '~/components/servers/detail-table';
 import { Button } from '~/components/ui/button';
 import { Menu } from '~/components/ui/menu';
 import { PageBar } from '~/components/ui/page-bar';
+import { useFiringAlerts } from '~/hooks/use-firing-alerts';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { alertMuteQueries, alertQueries } from '~/queries/alerts';
 import { incidentQueries } from '~/queries/incidents';
 import { overviewQueries } from '~/queries/overview';
 import { traceQueries } from '~/queries/traces';
-import { describeFiring, getAlertMute } from '~/utils/alerts';
+import { describeFiring } from '~/utils/alerts';
 import { formatUntil } from '~/utils/crons';
-import { DAY_MS, formatClock, formatRelative, pluralize } from '~/utils/format';
+import { DAY_MS, formatClock, formatRelative, joinNames, pluralize } from '~/utils/format';
 import { getStatusMeta, isClosed, isMaintenance } from '~/utils/incidents';
-import { getAlertHref, joinParts } from '~/utils/overview';
+import { getAlertHref } from '~/utils/overview';
 import { formatMs } from '~/utils/uptime';
 
 const BAD_CRON_STATUSES = ['failed', 'missed', 'late'];
@@ -44,16 +44,12 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
   const { servers, checks, crons } = props;
 
   const isAdmin = useIsAdmin();
-  const { data: firing = [] } = useQuery(alertQueries.list('firing'));
-  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
+  const { active: activeAlerts } = useFiringAlerts();
   const { data: incidents = [] } = useQuery(incidentQueries.list());
   const { data: events } = useQuery(overviewQueries.events());
   const { data: upcoming } = useQuery(overviewQueries.upcoming());
   const { data: services = [] } = useQuery(traceQueries.services(DAY_MS));
 
-  const activeAlerts = firing.filter(
-    (alert) => !getAlertMute(mutes, alert)
-  );
   const alertedIds = new Set(activeAlerts.flatMap((alert) => [alert.server_id, alert.check_id, alert.cron_id]));
   const openIncidents = incidents.filter((incident) => !isMaintenance(incident) && !isClosed(incident.status));
   const downServers = servers.filter((server) => server.status === 'down');
@@ -119,7 +115,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
       })),
   ];
 
-  const scope = joinParts(
+  const scope = joinNames(
     [
       servers.length > 0 ? pluralize(servers.length, 'server') : '',
       activeChecks.length > 0 ? pluralize(activeChecks.length, 'uptime check') : '',

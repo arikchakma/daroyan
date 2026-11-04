@@ -3,7 +3,7 @@ import type { Schemas } from '@daroyan/client';
 import { DetailCard, DetailEmpty, DetailSection } from '~/components/servers/detail-table';
 import { DataTable } from '~/components/ui/data-table';
 import { useFilesystemsTable } from '~/hooks/use-filesystems-table';
-import { getPercent } from '~/utils/format';
+import { getDiskPercent, isUsageCritical } from '~/utils/servers';
 
 type FilesystemsSectionProps = {
   disks: Schemas['DiskState'][];
@@ -13,7 +13,7 @@ export function FilesystemsSection(props: FilesystemsSectionProps) {
   const { disks } = props;
 
   const table = useFilesystemsTable(disks);
-  const full = disks.filter((disk) => getPercent(disk.disk_used, disk.disk_total) >= 90).length;
+  const full = disks.filter((disk) => isUsageCritical(getDiskPercent(disk))).length;
 
   return (
     <DetailSection

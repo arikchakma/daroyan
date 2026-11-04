@@ -138,3 +138,27 @@ export function formatLogClock(value: number, now = Date.now()) {
   const isToday = new Date(value).toDateString() === new Date(now).toDateString();
   return isToday ? clock : `${formatDate(value)} ${clock}`;
 }
+
+export function joinNames(names: string[]) {
+  if (names.length <= 1) {
+    return names[0] ?? '';
+  }
+
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
+export function formatLasted(span: { started_at: string; resolved_at?: string | null }) {
+  const end = span.resolved_at ? Date.parse(span.resolved_at) : Date.now();
+  const seconds = Math.round((end - Date.parse(span.started_at)) / 1000);
+
+  return seconds < 60 ? `${Math.max(seconds, 0)}s` : formatDuration(seconds);
+}
+
+export function getAverage(values: (number | null | undefined)[]) {
+  const present = values.filter((value): value is number => value !== null && value !== undefined);
+  if (present.length === 0) {
+    return null;
+  }
+
+  return present.reduce((sum, value) => sum + value, 0) / present.length;
+}

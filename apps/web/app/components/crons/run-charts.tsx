@@ -1,6 +1,6 @@
 import type { Schemas } from '@daroyan/client';
 
-import { DAY_MS } from '~/utils/format';
+import { DAY_MS, getAverage } from '~/utils/format';
 import { getNiceMax, MetricChart } from '~/components/servers/metric-chart';
 import { formatRunTime } from '~/utils/crons';
 import { formatUptime } from '~/utils/uptime';
@@ -20,21 +20,17 @@ export function RunCharts(props: RunChartsProps) {
   const durations = points.map((point) => point.duration_ms ?? 0);
   const delays = points.map((point) => Math.max(point.delay_ms ?? 0, 0));
   const success = points.map((point) => (point.total > 0 ? (point.ok / point.total) * 100 : 100));
-  const averageOf = (values: (number | null | undefined)[]) => {
-    const present = values.filter((value): value is number => value !== null && value !== undefined);
-    return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) / present.length : null;
-  };
   const total = points.reduce((sum, point) => sum + point.total, 0);
   const ok = points.reduce((sum, point) => sum + point.ok, 0);
   const durationMax = getNiceMax(durations);
   const delayMax = getNiceMax(delays);
-  const delayAverage = averageOf(points.map((point) => point.delay_ms));
+  const delayAverage = getAverage(points.map((point) => point.delay_ms));
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
       <MetricChart
         title="Duration"
-        value={formatRunTime(averageOf(points.map((point) => point.duration_ms)))}
+        value={formatRunTime(getAverage(points.map((point) => point.duration_ms)))}
         detail="average"
         series={[{ label: 'Duration', values: durations }]}
         times={times}

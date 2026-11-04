@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 
 import { Icon } from '~/components/icons/icon';
 import { Badge } from '~/components/ui/badge';
+import { Dash } from '~/components/ui/dash';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
 
@@ -60,7 +61,7 @@ export function usePortsTable(ports: Schemas['PortState'][]) {
           cell: ({ getValue }) => {
             const latency = getValue();
             return latency === null || latency === undefined ? (
-              <span className="text-text-tertiary">—</span>
+              <Dash />
             ) : (
               `${latency} ms`
             );

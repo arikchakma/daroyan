@@ -10,6 +10,7 @@ import { Menu } from '~/components/ui/menu';
 import { serverQueries } from '~/queries/servers';
 import type { MetricRange } from '~/queries/servers';
 import { formatCount, formatPercent, formatSpeed, formatUsedOf, getPercent } from '~/utils/format';
+import { CRITICAL_PERCENT, getDiskTotals, getLoadTone, isUsageCritical } from '~/utils/servers';
 
 const RANGE_MS: Record<MetricRange, number> = {
   '1h': 3_600_000,
@@ -56,8 +57,7 @@ export function MetricsSection(props: MetricsSectionProps) {
   const tcp = pick((point) => point.tcp_conn_count);
   const udp = pick((point) => point.udp_conn_count);
   const load = pick((point) => point.load1);
-  const diskUsed = state?.disks.reduce((sum, disk) => sum + disk.disk_used, 0) ?? 0;
-  const diskTotal = state?.disks.reduce((sum, disk) => sum + disk.disk_total, 0) ?? 0;
+  const disk = getDiskTotals(state?.disks ?? []);
   const ioMax = getNiceMax([...diskRead, ...diskWrite]);
   const netMax = getNiceMax([...netIn, ...netOut]);
   const connMax = getNiceMax([...tcp, ...udp]);
@@ -69,12 +69,12 @@ export function MetricsSection(props: MetricsSectionProps) {
       title: 'CPU',
       value: formatPercent(state?.cpu ?? last?.cpu ?? 0),
       detail: `${host.cpu_cores} vCPU`,
-      isValueCritical: (state?.cpu ?? 0) >= 90,
+      isValueCritical: isUsageCritical(state?.cpu ?? 0),
       series: [{ label: 'CPU', values: pick((point) => point.cpu) }],
       max: 100,
       maxLabel: '100%',
       formatValue: (value) => formatPercent(value, 1),
-      limit: 90,
+      limit: CRITICAL_PERCENT,
     },
     {
       key: 'memory',
@@ -97,7 +97,7 @@ export function MetricsSection(props: MetricsSectionProps) {
       key: 'disk',
       title: 'Disk I/O',
       value: formatSpeed((diskRead.at(-1) ?? 0) + (diskWrite.at(-1) ?? 0)),
-      detail: `${formatPercent(getPercent(diskUsed, diskTotal))} used`,
+      detail: `${formatPercent(disk.percent)} used`,
       series: [
         { label: 'Read', values: diskRead },
         { label: 'Write', values: diskWrite, isSecondary: true },
@@ -112,7 +112,7 @@ export function MetricsSection(props: MetricsSectionProps) {
       title: 'Load',
       value: (state?.load1 ?? 0).toFixed(2),
       detail: `${host.cpu_cores} cores`,
-      isValueCritical: (state?.load1 ?? 0) > host.cpu_cores,
+      isValueCritical: getLoadTone(state?.load1 ?? 0, host.cpu_cores) === 'crit',
       series: [{ label: 'Load', values: load }],
       max: loadMax,
       maxLabel: loadMax.toString(),

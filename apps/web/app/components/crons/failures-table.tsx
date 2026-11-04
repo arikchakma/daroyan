@@ -8,15 +8,9 @@ import { Button } from '~/components/ui/button';
 import { DataTable } from '~/components/ui/data-table';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
-import { formatClock, formatDate, formatDuration } from '~/utils/format';
+import { formatClock, formatDate, formatLasted } from '~/utils/format';
 
 const failureHelper = createColumnHelper<DataTableFeatures, Schemas['CronFailure']>();
-
-function formatLasted(failure: Schemas['CronFailure']) {
-  const end = failure.resolved_at ? Date.parse(failure.resolved_at) : Date.now();
-  const seconds = Math.round((end - Date.parse(failure.started_at)) / 1000);
-  return seconds < 60 ? `${Math.max(seconds, 0)}s` : formatDuration(seconds);
-}
 
 type FailuresTableProps = {
   failures: Schemas['CronFailure'][];

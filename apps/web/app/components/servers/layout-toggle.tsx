@@ -2,7 +2,7 @@ import { Toggle } from '@base-ui/react/toggle';
 import { ToggleGroup } from '@base-ui/react/toggle-group';
 
 import { Icon } from '~/components/icons/icon';
-import type { ServersLayout } from '~/utils/servers-layout';
+import type { ServersLayout } from '~/utils/servers';
 
 type LayoutToggleProps = {
   layout: ServersLayout;

@@ -22,8 +22,9 @@ import {
 } from '~/queries/alerts';
 import type { ConnectProvider } from '~/queries/alerts';
 import type { IntegrationKind } from '~/utils/alerts';
-import { INTEGRATION_KINDS, isIntegrationKind, joinNames } from '~/utils/alerts';
+import { INTEGRATION_KINDS, isIntegrationKind } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
+import { joinNames } from '~/utils/format';
 
 const KIND_ORDER: IntegrationKind[] = ['slack', 'discord', 'telegram', 'webhook'];
 

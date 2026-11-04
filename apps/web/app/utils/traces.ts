@@ -1,7 +1,7 @@
 import type { Schemas } from '@daroyan/client';
 
 import type { BadgeProps } from '~/components/ui/badge';
-import { pluralize } from '~/utils/format';
+import { joinNames, pluralize } from '~/utils/format';
 
 export type TraceSummary = Schemas['TraceSummary'];
 export type TraceSpan = Schemas['TraceSpan'];
@@ -70,7 +70,7 @@ export function describeSpans(trace: Pick<TraceSummary, 'span_count' | 'services
   if (services.length === 1) {
     return `${count} in ${services[0]}`;
   }
-  return `${count} across ${services.slice(0, -1).join(', ')} and ${services.at(-1)}`;
+  return `${count} across ${joinNames(services)}`;
 }
 
 export type SpanNode = TraceSpan & {
@@ -110,7 +110,6 @@ export function orderSpans(spans: TraceSpan[]): SpanNode[] {
   roots.sort(byStart).forEach((root, index) => visit(root, 0, index === roots.length - 1, [], []));
   return ordered;
 }
-
 
 export function shortenId(id: string) {
   return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id;

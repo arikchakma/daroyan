@@ -4,10 +4,9 @@ import { useQuery } from '@tanstack/react-query';
 import { Icon } from '~/components/icons/icon';
 import { Spec } from '~/components/servers/spec';
 import type { SpecProps } from '~/components/servers/spec';
-import type { UsageTone } from '~/components/servers/usage-ring';
 import { serverQueries } from '~/queries/servers';
-import { formatBytes, formatDate, formatDuration, formatPercent, formatUsedOf, getPercent } from '~/utils/format';
-import { getUsageTone } from '~/utils/usage';
+import { formatBytes, formatDate, formatDuration, formatUsedOf, getPercent } from '~/utils/format';
+import { getDiskTotals, getLoadTone, getOsLabel, getTransferTotals, getUsageSpec } from '~/utils/servers';
 
 type SpecGridProps = {
   serverId: string;
@@ -24,31 +23,24 @@ export function SpecGrid(props: SpecGridProps) {
   const trafficSeries = points.map((point) => point.net_in_speed + point.net_out_speed);
 
   const state = report.state;
-  const diskUsed = state.disks.reduce((sum, disk) => sum + disk.disk_used, 0);
-  const diskTotal = state.disks.reduce((sum, disk) => sum + disk.disk_total, 0);
-  const transferIn = state.nics.reduce((sum, nic) => sum + nic.net_in_transfer, 0);
-  const transferOut = state.nics.reduce((sum, nic) => sum + nic.net_out_transfer, 0);
+  const disk = getDiskTotals(state.disks);
+  const transfer = getTransferTotals(state.nics);
 
   const cpuPercent = state.cpu;
   const memPercent = getPercent(state.mem_used, host.mem_total);
-  const diskPercent = getPercent(diskUsed, diskTotal);
-  const loadRatio = host.cpu_cores ? state.load1 / host.cpu_cores : 0;
-  const loadTone: UsageTone = loadRatio >= 1 ? 'crit' : loadRatio >= 0.75 ? 'warn' : 'ok';
-  const cpuTone = getUsageTone(cpuPercent);
-  const memTone = getUsageTone(memPercent);
-  const diskTone = getUsageTone(diskPercent);
+  const loadTone = getLoadTone(state.load1, host.cpu_cores);
 
   const vitals: SpecProps[] = [
     { label: 'Uptime', value: formatDuration(state.uptime), detail: `since ${formatDate(host.boot_time * 1000)}` },
-    { label: 'CPU', value: formatPercent(cpuPercent), detail: `${host.cpu_cores} vCPU`, ring: { percent: cpuPercent, tone: cpuTone }, valueCritical: cpuTone === 'crit' },
-    { label: 'Memory', value: formatPercent(memPercent), detail: formatUsedOf(state.mem_used, host.mem_total), ring: { percent: memPercent, tone: memTone }, valueCritical: memTone === 'crit' },
-    { label: 'Disk', value: formatPercent(diskPercent), detail: formatUsedOf(diskUsed, diskTotal), ring: { percent: diskPercent, tone: diskTone }, valueCritical: diskTone === 'crit' },
+    getUsageSpec('CPU', cpuPercent, `${host.cpu_cores} vCPU`),
+    getUsageSpec('Memory', memPercent, formatUsedOf(state.mem_used, host.mem_total)),
+    getUsageSpec('Disk', disk.percent, formatUsedOf(disk.used, disk.total)),
     { label: 'Load', value: state.load1.toFixed(2), detail: `${host.cpu_cores} cores`, spark: loadSeries, valueCritical: loadTone === 'crit' },
-    { label: 'Traffic', value: formatBytes(transferIn + transferOut), detail: `↑ ${formatBytes(transferOut)}`, spark: trafficSeries },
+    { label: 'Traffic', value: formatBytes(transfer.in + transfer.out), detail: `↑ ${formatBytes(transfer.out)}`, spark: trafficSeries },
   ];
 
   const details: { label: string; value: string }[] = [
-    { label: 'OS', value: [host.platform, host.platform_version].filter(Boolean).join(' ') || '—' },
+    { label: 'OS', value: getOsLabel(host.platform, host.platform_version) || '—' },
     { label: 'Kernel', value: host.kernel || '—' },
     { label: 'Arch', value: host.arch || '—' },
     { label: 'Hostname', value: host.hostname || '—' },

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
@@ -10,6 +10,7 @@ import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useSortParams } from '~/hooks/use-sort-params';
 import { useStatusPagesTable } from '~/hooks/use-status-pages-table';
 import { useIsAdmin } from '~/hooks/use-is-admin';
+import { useViewParams } from '~/hooks/use-list-params';
 import { statusPageQueries } from '~/queries/status-pages';
 
 type VisibilityView = 'all' | 'public' | 'private';
@@ -20,9 +21,7 @@ const VIEWS: { value: VisibilityView; label: string }[] = [
   { value: 'private', label: 'Private' },
 ];
 
-function isVisibilityView(value: string | null): value is VisibilityView {
-  return VIEWS.some((view) => view.value === value);
-}
+const VIEW_VALUES = VIEWS.map((view) => view.value);
 
 export function meta() {
   return [{ title: 'Status Pages · Daroyan' }];
@@ -31,28 +30,12 @@ export function meta() {
 export default function StatusPagesPage() {
   const isAdmin = useIsAdmin();
   const { data: pages, isLoading } = useQuery(statusPageQueries.list());
-  const [searchParams, setSearchParams] = useSearchParams();
-  const viewParam = searchParams.get('view');
-  const view: VisibilityView = isVisibilityView(viewParam) ? viewParam : 'all';
-  const search = searchParams.get('q') ?? '';
+  const { search, view, setView, setSearch, reset, isFiltered } = useViewParams(VIEW_VALUES);
 
   const { sorting, onSortingChange } = useSortParams({
     sorts: { name: 'asc', components: 'desc', updated: 'desc' },
     defaultSort: 'name',
   });
-
-  const setParam = (key: string, value: string | null) =>
-    setSearchParams(
-      (params) => {
-        if (value) {
-          params.set(key, value);
-        } else {
-          params.delete(key);
-        }
-        return params;
-      },
-      { replace: true }
-    );
 
   const term = search.trim().toLowerCase();
   const visible = (pages ?? []).filter(
@@ -94,16 +77,16 @@ export default function StatusPagesPage() {
           <ViewsToolbar
             views={VIEWS}
             view={view}
-            onViewChange={(next) => setParam('view', next === 'all' ? null : next)}
+            onViewChange={setView}
             searchLabel="Search by name or slug"
             search={search}
-            onSearchChange={(next) => setParam('q', next || null)}
-            isViewChanged={view !== 'all' || !!search}
-            onReset={() => setSearchParams({}, { replace: true })}
+            onSearchChange={setSearch}
+            isViewChanged={isFiltered}
+            onReset={reset}
           />
           <DataTable table={table} label="Status Pages" size="lg" isLoading={isLoading} />
           {pages && visible.length === 0 && (
-            <NoResults title="No status pages found" onReset={() => setSearchParams({}, { replace: true })} />
+            <NoResults title="No status pages found" onReset={reset} />
           )}
         </div>
       )}

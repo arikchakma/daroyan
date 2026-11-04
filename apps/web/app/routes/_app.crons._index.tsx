@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
@@ -8,12 +8,13 @@ import { EmptyState, NoResults } from '~/components/ui/empty-state';
 import { PageBar } from '~/components/ui/page-bar';
 import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useCronsTable } from '~/hooks/use-crons-table';
+import { useFiringAlerts } from '~/hooks/use-firing-alerts';
 import type { CronRow } from '~/hooks/use-crons-table';
 import { useSortParams } from '~/hooks/use-sort-params';
 import { useIsAdmin } from '~/hooks/use-is-admin';
-import { alertMuteQueries, alertQueries } from '~/queries/alerts';
+import { useViewParams } from '~/hooks/use-list-params';
 import { cronQueries } from '~/queries/crons';
-import { describeMuteEnd, getAlertMute } from '~/utils/alerts';
+import { describeMuteEnd, getAlertsForTarget, getSharedMute } from '~/utils/alerts';
 
 type StatusView = 'all' | 'ok' | 'late' | 'failed' | 'paused';
 
@@ -25,9 +26,7 @@ const VIEWS: { value: StatusView; label: string }[] = [
   { value: 'paused', label: 'Paused' },
 ];
 
-function isStatusView(value: string | null): value is StatusView {
-  return VIEWS.some((view) => view.value === value);
-}
+const VIEW_VALUES = VIEWS.map((view) => view.value);
 
 export function meta() {
   return [{ title: 'Crons · Daroyan' }];
@@ -36,37 +35,18 @@ export function meta() {
 export default function CronsPage() {
   const isAdmin = useIsAdmin();
   const { data: crons, isLoading } = useQuery(cronQueries.list());
-  const { data: firing = [] } = useQuery(alertQueries.list('firing'));
-  const { data: mutes = [] } = useQuery(alertMuteQueries.list());
-  const [searchParams, setSearchParams] = useSearchParams();
-  const viewParam = searchParams.get('view');
-  const view: StatusView = isStatusView(viewParam) ? viewParam : 'all';
-  const search = searchParams.get('q') ?? '';
+  const { alerts: firing, mutes } = useFiringAlerts();
+  const { search, view, setView, setSearch, reset, isFiltered } = useViewParams(VIEW_VALUES);
 
   const { sorting, onSortingChange } = useSortParams({
     sorts: { name: 'asc', duration: 'desc', lastPing: 'desc', next: 'asc' },
     defaultSort: 'name',
   });
 
-  const setParam = (key: string, value: string | null) =>
-    setSearchParams(
-      (params) => {
-        if (value) {
-          params.set(key, value);
-        } else {
-          params.delete(key);
-        }
-        return params;
-      },
-      { replace: true }
-    );
-
   const term = search.trim().toLowerCase();
   const rows: CronRow[] = (crons ?? []).map((cron) => {
-    const alerts = firing.filter((alert) => alert.cron_id === cron.id);
-    const mutesOfCron = alerts.map((alert) => getAlertMute(mutes, alert));
-    const isMuted = alerts.length > 0 && mutesOfCron.every(Boolean);
-    return isMuted && mutesOfCron[0] ? { ...cron, mutedUntil: describeMuteEnd(mutesOfCron[0]) } : cron;
+    const mute = getSharedMute(getAlertsForTarget(firing, { cronId: cron.id }), mutes);
+    return mute ? { ...cron, mutedUntil: describeMuteEnd(mute) } : cron;
   });
   const visible = rows.filter(
     (cron) =>
@@ -107,16 +87,16 @@ export default function CronsPage() {
           <ViewsToolbar
             views={VIEWS}
             view={view}
-            onViewChange={(next) => setParam('view', next === 'all' ? null : next)}
+            onViewChange={setView}
             searchLabel="Search by name or command"
             search={search}
-            onSearchChange={(next) => setParam('q', next || null)}
-            isViewChanged={view !== 'all' || !!search}
-            onReset={() => setSearchParams({}, { replace: true })}
+            onSearchChange={setSearch}
+            isViewChanged={isFiltered}
+            onReset={reset}
           />
           <DataTable table={table} label="Crons" size="lg" isLoading={isLoading} />
           {crons && visible.length === 0 && (
-            <NoResults title="No crons found" onReset={() => setSearchParams({}, { replace: true })} />
+            <NoResults title="No crons found" onReset={reset} />
           )}
         </div>
       )}

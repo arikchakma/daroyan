@@ -19,7 +19,8 @@ import { statusPageQueries } from '~/queries/status-pages';
 import { uptimeCheckQueries } from '~/queries/uptime';
 import { INTEGRATION_KINDS, isIntegrationKind } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
-import { COMPONENT_STATUS_META, RELATED_LABELS, joinNames } from '~/utils/incidents';
+import { joinNames } from '~/utils/format';
+import { COMPONENT_STATUS_META, RELATED_LABELS } from '~/utils/incidents';
 import { getMonitorKey } from '~/utils/status-pages';
 import type { Monitor } from '~/utils/status-pages';
 

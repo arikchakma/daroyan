@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import { Icon } from '~/components/icons/icon';
 import { Badge } from '~/components/ui/badge';
 import { ConfirmDialog } from '~/components/ui/confirm-dialog';
+import { Dash } from '~/components/ui/dash';
 import { Menu } from '~/components/ui/menu';
 import { Tooltip } from '~/components/ui/tooltip';
 import { useDataTable } from '~/hooks/use-data-table';
@@ -27,10 +28,6 @@ const ACTION_DONE: Record<CommandAction, string> = {
   start_process: 'Started',
   stop_process: 'Stopped',
 };
-
-function Muted() {
-  return <span className="text-text-tertiary">—</span>;
-}
 
 type ProcessActionsProps = {
   serverId: string;
@@ -199,32 +196,32 @@ export function useProcessesTable(options: UseProcessesTableOptions) {
             row.original.status === 'running' && row.original.started_at ? (
               formatDuration((Date.now() - row.original.started_at) / 1000)
             ) : (
-              <Muted />
+              <Dash />
             ),
         }),
         helper.accessor('cpu', {
           header: 'CPU',
           enableSorting: false,
           meta: { width: 68, align: 'right' },
-          cell: ({ row }) => (row.original.status === 'running' ? formatPercent(row.original.cpu, 1) : <Muted />),
+          cell: ({ row }) => (row.original.status === 'running' ? formatPercent(row.original.cpu, 1) : <Dash />),
         }),
         helper.accessor('mem_used', {
           header: 'Memory',
           enableSorting: false,
           meta: { width: 80, align: 'right' },
-          cell: ({ row }) => (row.original.status === 'running' ? formatBytes(row.original.mem_used) : <Muted />),
+          cell: ({ row }) => (row.original.status === 'running' ? formatBytes(row.original.mem_used) : <Dash />),
         }),
         helper.accessor('read_speed', {
           header: 'Read',
           enableSorting: false,
           meta: { width: 84, align: 'right', hideBelow: 'md' },
-          cell: ({ getValue }) => (getValue() > 0 ? formatSpeed(getValue()) : <Muted />),
+          cell: ({ getValue }) => (getValue() > 0 ? formatSpeed(getValue()) : <Dash />),
         }),
         helper.accessor('write_speed', {
           header: 'Write',
           enableSorting: false,
           meta: { width: 84, align: 'right', hideBelow: 'md' },
-          cell: ({ getValue }) => (getValue() > 0 ? formatSpeed(getValue()) : <Muted />),
+          cell: ({ getValue }) => (getValue() > 0 ? formatSpeed(getValue()) : <Dash />),
         }),
         helper.display({
           id: 'actions',

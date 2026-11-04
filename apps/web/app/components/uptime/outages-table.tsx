@@ -6,10 +6,9 @@ import { Icon } from '~/components/icons/icon';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { DataTable } from '~/components/ui/data-table';
-import { formatLasted } from '~/utils/uptime';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
-import { formatClock, formatDate } from '~/utils/format';
+import { formatClock, formatDate, formatLasted } from '~/utils/format';
 
 const outageHelper = createColumnHelper<DataTableFeatures, Schemas['UptimeOutage']>();
 

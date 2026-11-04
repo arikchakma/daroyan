@@ -8,7 +8,6 @@ import {
   hasThreshold,
   isCheckKind,
   isCronKind,
-  joinNames,
   readLogCondition,
   readSubjectName,
   readThreshold,
@@ -16,7 +15,7 @@ import {
   RESOLVE_OPTIONS,
   WINDOW_OPTIONS,
 } from '~/utils/alerts';
-import { pluralize } from '~/utils/format';
+import { joinNames, pluralize } from '~/utils/format';
 
 export type ScopeKind = 'all' | 'label' | 'picked';
 

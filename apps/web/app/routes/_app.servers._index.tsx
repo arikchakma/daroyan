@@ -1,7 +1,6 @@
 import type { Schemas } from '@daroyan/client';
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { LayoutToggle } from '~/components/servers/layout-toggle';
@@ -14,10 +13,12 @@ import { PageBar } from '~/components/ui/page-bar';
 import { ViewsToolbar } from '~/components/ui/views-toolbar';
 import { useServersTable } from '~/hooks/use-servers-table';
 import { useSortParams } from '~/hooks/use-sort-params';
+import { useStoredState } from '~/hooks/use-stored-state';
 import { useIsAdmin } from '~/hooks/use-is-admin';
+import { useViewParams } from '~/hooks/use-list-params';
 import { serverQueries } from '~/queries/servers';
-import { readServersLayout, saveServersLayout } from '~/utils/servers-layout';
-import type { ServersLayout } from '~/utils/servers-layout';
+import { LAYOUT_KEY } from '~/utils/servers';
+import type { ServersLayout } from '~/utils/servers';
 
 type StatusView = 'all' | Schemas['ServerStatus'];
 
@@ -29,36 +30,18 @@ const VIEWS: { value: StatusView; label: string }[] = [
   { value: 'pending', label: 'Pending' },
 ];
 
-function isStatusView(value: string | null): value is StatusView {
-  return VIEWS.some((view) => view.value === value);
-}
+const VIEW_VALUES = VIEWS.map((view) => view.value);
 
 export default function ServersPage() {
   const isAdmin = useIsAdmin();
   const { data: servers, isLoading } = useQuery(serverQueries.list());
-  const [searchParams, setSearchParams] = useSearchParams();
-  const viewParam = searchParams.get('view');
-  const view: StatusView = isStatusView(viewParam) ? viewParam : 'all';
-  const search = searchParams.get('q') ?? '';
-  const [layout, setLayout] = useState(readServersLayout);
+  const { search, view, setView, setSearch, reset, isFiltered } = useViewParams(VIEW_VALUES);
+  const [layout, setLayout] = useStoredState<ServersLayout>(LAYOUT_KEY, 'list');
 
   const { sorting, onSortingChange } = useSortParams({
     sorts: { name: 'asc', cpu: 'desc', memory: 'desc', disk: 'desc', lastSeen: 'desc' },
     defaultSort: 'name',
   });
-
-  const setParam = (key: string, value: string | null) =>
-    setSearchParams(
-      (params) => {
-        if (value) {
-          params.set(key, value);
-        } else {
-          params.delete(key);
-        }
-        return params;
-      },
-      { replace: true }
-    );
 
   const term = search.trim().toLowerCase();
   const visible = (servers ?? []).filter(
@@ -72,11 +55,6 @@ export default function ServersPage() {
 
   const table = useServersTable({ servers: visible, sorting, onSortingChange });
   const isEmpty = servers?.length === 0;
-
-  const changeLayout = (next: ServersLayout) => {
-    saveServersLayout(next);
-    setLayout(next);
-  };
 
   return (
     <div className="flex min-h-full flex-col bg-surface-default">
@@ -108,13 +86,13 @@ export default function ServersPage() {
           <ViewsToolbar
             views={VIEWS}
             view={view}
-            onViewChange={(next) => setParam('view', next === 'all' ? null : next)}
+            onViewChange={setView}
             searchLabel="Search by name, IP or label"
             search={search}
-            onSearchChange={(next) => setParam('q', next || null)}
-            isViewChanged={view !== 'all' || !!search}
-            onReset={() => setSearchParams({}, { replace: true })}
-            actions={<LayoutToggle layout={layout} onLayoutChange={changeLayout} />}
+            onSearchChange={setSearch}
+            isViewChanged={isFiltered}
+            onReset={reset}
+            actions={<LayoutToggle layout={layout} onLayoutChange={setLayout} />}
           />
           {layout === 'grid' ? (
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -126,7 +104,7 @@ export default function ServersPage() {
             <DataTable table={table} label="Servers" size="lg" isLoading={isLoading} />
           )}
           {servers && visible.length === 0 && (
-            <NoResults title="No servers found" onReset={() => setSearchParams({}, { replace: true })} />
+            <NoResults title="No servers found" onReset={reset} />
           )}
         </div>
       )}

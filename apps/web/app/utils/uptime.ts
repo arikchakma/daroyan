@@ -1,7 +1,5 @@
 import type { Schemas } from '@daroyan/client';
 
-import { formatDuration } from '~/utils/format';
-
 export const INTERVAL_OPTIONS = [
   { value: 30, label: '30 seconds' },
   { value: 60, label: '1 minute' },
@@ -78,8 +76,3 @@ export function getUptime(days: Schemas['UptimeDay'][]) {
   return total > 0 ? (total - down) / total : null;
 }
 
-export function formatLasted(outage: Schemas['UptimeOutage']) {
-  const end = outage.resolved_at ? Date.parse(outage.resolved_at) : Date.now();
-  const seconds = Math.round((end - Date.parse(outage.started_at)) / 1000);
-  return seconds < 60 ? `${Math.max(seconds, 0)}s` : formatDuration(seconds);
-}

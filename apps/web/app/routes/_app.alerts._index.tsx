@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type { RowSelectionState } from '@tanstack/react-table';
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
 
 import type { RuleState } from '~/components/alerts/rule-status-badge';
 import { Icon } from '~/components/icons/icon';
@@ -17,6 +17,7 @@ import { useAlertRulesTable } from '~/hooks/use-alert-rules-table';
 import type { RuleRow } from '~/hooks/use-alert-rules-table';
 import { useSortParams } from '~/hooks/use-sort-params';
 import { useIsAdmin } from '~/hooks/use-is-admin';
+import { useViewParams } from '~/hooks/use-list-params';
 import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import {
@@ -50,9 +51,7 @@ const VIEWS: { value: RuleView; label: string }[] = [
   { value: 'disabled', label: 'Disabled' },
 ];
 
-function isRuleView(value: string | null): value is RuleView {
-  return VIEWS.some((view) => view.value === value);
-}
+const VIEW_VALUES = VIEWS.map((view) => view.value);
 
 export function meta() {
   return [{ title: 'Alerts · Daroyan' }];
@@ -65,31 +64,14 @@ export default function AlertsPage() {
   const { data: mutes } = useQuery(alertMuteQueries.list());
   const { data: integrations } = useQuery(integrationQueries.list());
   const { data: servers } = useQuery(serverQueries.list());
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { search, view, setView, setSearch, reset, isFiltered } = useViewParams(VIEW_VALUES);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-
-  const viewParam = searchParams.get('view');
-  const view: RuleView = isRuleView(viewParam) ? viewParam : 'all';
-  const search = searchParams.get('q') ?? '';
 
   const { sorting, onSortingChange } = useSortParams({
     sorts: { name: 'asc', status: 'asc', lastFired: 'desc' },
     defaultSort: 'status',
   });
-
-  const setParam = (key: string, value: string | null) =>
-    setSearchParams(
-      (params) => {
-        if (value) {
-          params.set(key, value);
-        } else {
-          params.delete(key);
-        }
-        return params;
-      },
-      { replace: true }
-    );
 
   const rows: RuleRow[] = (rules ?? []).map((rule) => {
     const state = getRuleState(rule, firing ?? [], mutes ?? []);
@@ -202,12 +184,12 @@ export default function AlertsPage() {
           <ViewsToolbar
             views={VIEWS}
             view={view}
-            onViewChange={(next) => setParam('view', next === 'all' ? null : next)}
+            onViewChange={setView}
             searchLabel="Search by name or condition"
             search={search}
-            onSearchChange={(next) => setParam('q', next || null)}
-            isViewChanged={view !== 'all' || !!search}
-            onReset={() => setSearchParams({}, { replace: true })}
+            onSearchChange={setSearch}
+            isViewChanged={isFiltered}
+            onReset={reset}
           />
           <DataTable
             table={table}
@@ -240,14 +222,14 @@ export default function AlertsPage() {
                 {rules.length === 1 ? 'Your rule is quiet.' : `All ${rules.length} rules are quiet.`} A rule shows
                 up here while it fires.
               </p>
-              <Button variant="secondary" className="mt-3 w-fit" onClick={() => setParam('view', null)}>
+              <Button variant="secondary" className="mt-3 w-fit" onClick={() => setView('all')}>
                 View All Rules
               </Button>
             </div>
           ) : (
             rules &&
             visible.length === 0 && (
-              <NoResults title="No rules found" onReset={() => setSearchParams({}, { replace: true })} />
+              <NoResults title="No rules found" onReset={reset} />
             )
           )}
         </div>
