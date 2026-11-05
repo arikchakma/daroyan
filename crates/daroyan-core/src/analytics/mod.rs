@@ -6,6 +6,7 @@ pub mod server_states;
 pub mod spans;
 pub mod uptime_results;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -33,6 +34,8 @@ const MEMORY_SETTINGS: &str = "SET memory_limit = '512MB'; SET threads = 2;";
 const PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const UPTIME_RETENTION_DAYS: i64 = 90;
 const MAX_PENDING_ROWS: usize = 200_000;
+const MAX_SERVER_ROWS: usize = MAX_PENDING_ROWS / 10;
+const MAX_REPORT_EVENTS: usize = 1_000;
 const KEPT_BACKUPS: usize = 8;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const BACKUP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -52,6 +55,12 @@ pub struct Backup {
 }
 
 #[derive(Default)]
+struct ServerShare {
+    logs: usize,
+    report: usize,
+}
+
+#[derive(Default)]
 struct Pending {
     states: Vec<StateRow>,
     disks: Vec<DiskRow>,
@@ -59,6 +68,7 @@ struct Pending {
     logs: Vec<LogRow>,
     spans: Vec<SpanRow>,
     exceptions: Vec<ExceptionRow>,
+    shares: HashMap<String, ServerShare>,
 }
 
 impl Analytics {
@@ -98,6 +108,11 @@ impl Analytics {
     }
 
     pub fn buffer_report(&self, server_id: &str, report: &Report) {
+        let events = &report.events[..report.events.len().min(MAX_REPORT_EVENTS)];
+        let disks = to_disk_rows(server_id, &report.state);
+        let events = to_event_rows(server_id, events);
+        let rows = 1 + disks.len() + events.len();
+
         let mut pending = lock(&self.pending);
         if pending.states.len() + pending.disks.len() + pending.events.len()
             >= MAX_PENDING_ROWS
@@ -105,9 +120,17 @@ impl Analytics {
             tracing::warn!(server_id, "dropped a report, the write buffer is full");
             return;
         }
+
+        let share = pending.shares.entry(server_id.to_string()).or_default();
+        if share.report + rows > MAX_SERVER_ROWS {
+            tracing::warn!(server_id, "dropped a report, the server used its share");
+            return;
+        }
+
+        share.report += rows;
         pending.states.push(StateRow::from_state(server_id, &report.state));
-        pending.disks.extend(to_disk_rows(server_id, &report.state));
-        pending.events.extend(to_event_rows(server_id, &report.events));
+        pending.disks.extend(disks);
+        pending.events.extend(events);
     }
 
     pub fn buffer_server_event(&self, server_id: &str, kind: &str) {
@@ -137,6 +160,18 @@ impl Analytics {
             );
             return;
         }
+
+        let share = pending.shares.entry(server_id.to_string()).or_default();
+        if share.logs + rows.len() > MAX_SERVER_ROWS {
+            tracing::warn!(
+                server_id,
+                dropped = rows.len(),
+                "dropped logs, the server used its share"
+            );
+            return;
+        }
+
+        share.logs += rows.len();
         pending.logs.extend(rows);
     }
 
@@ -342,7 +377,40 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::Analytics;
+    use daroyan_protocol::log::LogBatch;
+    use serde_json::json;
+
+    use super::{Analytics, MAX_SERVER_ROWS};
+
+    fn batch(lines: usize) -> LogBatch {
+        let line = json!({ "at": 1, "service": "app", "stream": "file", "severity": 9, "message": "hi" });
+        let lines = (0..lines)
+            .map(|_| serde_json::from_value(line.clone()).unwrap())
+            .collect();
+
+        LogBatch { lines, dropped: 0 }
+    }
+
+    #[test]
+    fn keeps_room_for_other_servers_when_one_floods() {
+        let dir =
+            std::env::temp_dir().join(format!("daroyan-shares-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let analytics = Analytics::open(&dir.join("live.duckdb")).unwrap();
+
+        for _ in 0..(MAX_SERVER_ROWS / 5_000 + 2) {
+            analytics.buffer_logs("srv_noisy", batch(5_000));
+        }
+        analytics.buffer_logs("srv_quiet", batch(1));
+
+        let pending = super::lock(&analytics.pending);
+        assert_eq!(pending.shares["srv_noisy"].logs, MAX_SERVER_ROWS);
+        assert_eq!(pending.shares["srv_quiet"].logs, 1);
+        assert_eq!(pending.logs.len(), MAX_SERVER_ROWS + 1);
+        drop(pending);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn slow_reads_do_not_block_writes() {
