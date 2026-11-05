@@ -36,7 +36,8 @@ done
 # Runs before the binary is replaced, because the new file drops setcap capabilities.
 if [ -z "$COMMANDS" ]; then
   COMMANDS=0
-  if [ -f /etc/polkit-1/rules.d/50-daroyan.rules ] || grep -qs " restart \*" /etc/sudoers.d/daroyan; then
+  if grep -qs -- "grants .*--commands" /etc/systemd/system/daroyan.service /etc/init.d/daroyan ||
+    [ -f /etc/polkit-1/rules.d/50-daroyan.rules ] || grep -qs " restart " /etc/sudoers.d/daroyan; then
     COMMANDS=1
   fi
 fi
@@ -127,63 +128,24 @@ fi
 chown root:daroyan "$CONFIG"
 chmod 640 "$CONFIG"
 
-# The agent refuses anything that is not in processes in its config.
-add_docker_rules() {
-  if ! command -v docker >/dev/null 2>&1; then
-    return
-  fi
-  DOCKER="$(command -v docker)"
-  RULES="$DOCKER ps *, $DOCKER inspect *, $DOCKER logs *, $DOCKER events *"
-  if [ "$COMMANDS" = 1 ]; then
-    RULES="$DOCKER start *, $DOCKER stop *, $DOCKER restart *, $RULES"
-  fi
-  SUDO_RULES="${SUDO_RULES:+$SUDO_RULES, }$RULES"
-}
+GRANTS="/usr/local/bin/daroyan grants --config $CONFIG"
+if [ "$COMMANDS" = 1 ]; then
+  GRANTS="$GRANTS --commands"
+fi
 
-write_sudoers() {
-  if [ -z "$SUDO_RULES" ]; then
-    rm -f /etc/sudoers.d/daroyan
-    return
-  fi
-  if [ -d /etc/sudoers.d ] && command -v visudo >/dev/null 2>&1; then
-    echo "daroyan ALL=(root) NOPASSWD: $SUDO_RULES" > /etc/sudoers.d/daroyan
-    chmod 440 /etc/sudoers.d/daroyan
-    if ! visudo -cf /etc/sudoers.d/daroyan >/dev/null; then
-      rm -f /etc/sudoers.d/daroyan
-      echo "Could not add the sudoers entry. Docker checks and process restarts will not work." >&2
-    fi
-  else
-    echo "No sudo found. Docker checks and process restarts will not work." >&2
-  fi
-}
+NEEDS_SUDO=0
+if command -v docker >/dev/null 2>&1; then
+  NEEDS_SUDO=1
+elif [ "$COMMANDS" = 1 ] && [ ! -d /etc/polkit-1/rules.d ]; then
+  NEEDS_SUDO=1
+fi
+if [ "$NEEDS_SUDO" = 1 ] && ! command -v visudo >/dev/null 2>&1; then
+  echo "No sudo found. Docker checks and process restarts will not work." >&2
+fi
 
-SUDO_RULES=""
 if [ -d /run/systemd/system ]; then
-  if [ "$COMMANDS" = 0 ]; then
-    rm -f /etc/polkit-1/rules.d/50-daroyan.rules
-  elif [ -d /etc/polkit-1/rules.d ]; then
-    cat > /etc/polkit-1/rules.d/50-daroyan.rules <<'EOF'
-polkit.addRule(function (action, subject) {
-  if (action.id != "org.freedesktop.systemd1.manage-units" || subject.user != "daroyan") {
-    return polkit.Result.NOT_HANDLED;
-  }
-  var unit = action.lookup("unit") || "";
-  var verb = action.lookup("verb");
-  if (/\.service$/.test(unit) && unit != "debug-shell.service" &&
-      (verb == "start" || verb == "stop" || verb == "restart")) {
-    return polkit.Result.YES;
-  }
-});
-EOF
-  else
-    SYSTEMCTL="$(command -v systemctl)"
-    SUDO_RULES="$SYSTEMCTL start *, $SYSTEMCTL stop *, $SYSTEMCTL restart *"
-  fi
-  add_docker_rules
-  write_sudoers
-
   {
-    cat <<'EOF'
+    cat <<EOF
 [Unit]
 Description=Daroyan monitoring agent
 After=network-online.target
@@ -191,11 +153,12 @@ Wants=network-online.target
 
 [Service]
 User=daroyan
+ExecStartPre=+$GRANTS
 ExecStart=/usr/local/bin/daroyan start
 Restart=on-failure
 RestartSec=5
 EOF
-    if [ -z "$SUDO_RULES" ]; then
+    if [ "$NEEDS_SUDO" = 0 ]; then
       echo "NoNewPrivileges=yes"
     fi
     cat <<'EOF'
@@ -271,10 +234,7 @@ EOF
   systemctl enable --now daroyan
   systemctl restart daroyan
 elif command -v rc-service >/dev/null 2>&1; then
-  add_docker_rules
-  write_sudoers
-
-  cat > /etc/init.d/daroyan <<'EOF'
+  cat > /etc/init.d/daroyan <<EOF
 #!/sbin/openrc-run
 description="Daroyan monitoring agent"
 command=/usr/local/bin/daroyan
@@ -284,6 +244,9 @@ command_background=true
 pidfile=/run/daroyan.pid
 depend() {
   need net
+}
+start_pre() {
+  $GRANTS
 }
 EOF
   chmod 755 /etc/init.d/daroyan

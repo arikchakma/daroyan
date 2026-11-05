@@ -409,7 +409,7 @@ fn has_cgroup_part(cgroup: &str, is_part: &dyn Fn(&str) -> bool) -> bool {
         .any(|path| path.split('/').any(is_part))
 }
 
-fn to_unit_name(unit: &str) -> String {
+pub(crate) fn to_unit_name(unit: &str) -> String {
     match unit.rsplit_once('.') {
         Some((_, suffix)) if UNIT_TYPES.contains(&suffix) => unit.to_string(),
         _ => format!("{unit}.service"),

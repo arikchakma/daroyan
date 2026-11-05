@@ -144,7 +144,19 @@ fn resolve_container(container: &str) -> String {
     if !container.contains('*') {
         return container.to_string();
     }
-    find_container_id(container).unwrap_or_else(|| container.to_string())
+    find_container_name(container).unwrap_or_else(|| container.to_string())
+}
+
+fn find_container_name(container: &str) -> Option<String> {
+    let filter = build_name_filter(container);
+    run_with_sudo_fallback(
+        "docker",
+        &["ps", "--all", "--filter", &filter, "--format", "{{.Names}}"],
+    )
+    .ok()?
+    .lines()
+    .find(|name| !name.is_empty())
+    .map(str::to_string)
 }
 
 fn build_name_filter(container: &str) -> String {

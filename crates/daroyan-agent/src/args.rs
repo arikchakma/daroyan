@@ -22,6 +22,9 @@ pub enum Command {
     /// Serve per-process disk I/O to the agent; run by the daroyan-io service
     #[command(hide = true)]
     IoHelper,
+    /// Write the polkit and sudoers grants for the configured processes; run as root before each start
+    #[command(hide = true)]
+    Grants(GrantsArgs),
 }
 
 #[derive(Args)]
@@ -32,4 +35,14 @@ pub struct StartArgs {
     /// Override the log level in the config
     #[arg(long)]
     pub log_level: Option<String>,
+}
+
+#[derive(Args)]
+pub struct GrantsArgs {
+    /// Path to the config file
+    #[arg(long, default_value = "/etc/daroyan/agent.yml")]
+    pub config: PathBuf,
+    /// Grant start, stop and restart for the configured processes
+    #[arg(long)]
+    pub commands: bool,
 }

@@ -5,6 +5,7 @@ mod command;
 mod config;
 mod connection;
 mod enroll;
+mod grants;
 #[cfg(target_os = "linux")]
 mod io_helper;
 mod logger;
@@ -26,5 +27,6 @@ fn main() -> Result<()> {
         Command::IoHelper => io_helper::serve(),
         #[cfg(not(target_os = "linux"))]
         Command::IoHelper => anyhow::bail!("the disk I/O helper only runs on Linux"),
+        Command::Grants(args) => grants::write_grants(&args),
     }
 }
