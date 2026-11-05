@@ -14,7 +14,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 
-use crate::config::{Config, Source};
+use crate::config::{Config, DockerTarget, Source};
 use crate::logs::file::FilePosition;
 use crate::logs::parse::{RawLine, to_log_line};
 
@@ -29,7 +29,7 @@ struct LogSource {
 }
 
 enum SourceKind {
-    Docker { pattern: String },
+    Docker { target: DockerTarget },
     Journal { unit: String },
     File { path: PathBuf },
 }
@@ -231,7 +231,7 @@ fn list_sources(config: &Config) -> Vec<LogSource> {
     let processes = config.processes.iter().filter_map(|check| {
         let settings = check.logs.as_ref()?;
         let kind = match &check.source {
-            Source::Docker(pattern) => SourceKind::Docker { pattern: pattern.clone() },
+            Source::Docker(target) => SourceKind::Docker { target: target.clone() },
             Source::Systemd(unit) => SourceKind::Journal { unit: unit.clone() },
             Source::Process(_) => return None,
         };
@@ -255,15 +255,16 @@ fn read_source(
     now: Duration,
 ) -> Vec<RawLine> {
     match &source.kind {
-        SourceKind::Docker { pattern } => {
-            let mut containers = positions.docker.get(pattern).cloned();
+        SourceKind::Docker { target } => {
+            let key = target.to_string();
+            let mut containers = positions.docker.get(&key).cloned();
             let lines = docker::read_docker(
-                pattern,
+                target,
                 &mut containers,
                 i64::try_from(now.as_nanos()).unwrap_or(i64::MAX),
             );
             if let Some(containers) = containers {
-                positions.docker.insert(pattern.clone(), containers);
+                positions.docker.insert(key, containers);
             }
             lines
         }

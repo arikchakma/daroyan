@@ -15,6 +15,10 @@ processes:
   - name: Redis Cache
     docker: redis-cache
     logs: true
+  - name: Shop Web
+    docker:
+      compose: shop/web
+    logs: true
   - name: Nginx
     systemd: nginx
     logs:

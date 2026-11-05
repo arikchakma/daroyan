@@ -31,7 +31,9 @@ The script creates the `daroyan` user, writes `/etc/daroyan/agent.yml` once (a r
 
 The agent never holds capabilities, and under systemd runs with `NoNewPrivileges` when it needs no sudo. The two flags add more:
 
-- `DAROYAN_COMMANDS=1` lets the agent start, stop and restart only the `systemd` and `docker` entries in `processes`. Before each start, `daroyan grants` runs as root and writes a polkit rule that lists those units by name, or a sudoers entry for them when polkit is not installed, plus `docker start/stop/restart` for those containers. Entries with only `restart` get only `restart`. Edit `processes`, then run `daroyan restart`, and the grants follow. For a container name with `*`, the grant lists each container that matches when the agent starts. A container created later is added on the next `daroyan restart`.
+- `DAROYAN_COMMANDS=1` lets the agent start, stop and restart the `systemd` and `docker` entries in `processes`, and nothing else. Before each start, `daroyan grants` runs as root. It writes a polkit rule that names those units, or a sudoers entry if polkit is not installed. It also writes a sudoers entry for `docker start/stop/restart` on those containers. An entry with only `restart` gets only `restart`. If you change `processes`, run `daroyan restart` to update the rules.
+
+  The sudoers entry names each container. For a `*` pattern, `compose` or `labels`, the agent lists the matching containers when it starts. A container that is created later is added on the next `daroyan restart`. Kamal puts a version in each new container name, so run `daroyan restart` after each Kamal deploy. If you do not, the agent cannot restart the new container.
 - `DAROYAN_PROCESS_IO=1` adds a separate `daroyan-io` service that holds `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, the two capabilities `/proc/<pid>/io` needs. It runs as its own `daroyan-io` user with no network, reads nothing from its socket, and answers only `daroyan` and root. Each connection gets one line per process, `<pid> <read_bytes> <write_bytes>`, on `/run/daroyan-io/io.sock`. It blocks `ptrace`, `execve`, new sockets and `open_by_handle_at` with seccomp, and under systemd it also sees only `/proc`, `/etc/passwd` and its own binary. Without it, the agent reports disk I/O only for its own processes.
 
 A rerun without a flag keeps what the server already has. Set a flag to `0` to remove it.
@@ -52,6 +54,10 @@ processes:
       attempts: 3                # at most 3 restarts
       within: 10m                # in any 10 minutes
   - docker: redis-cache          # watch and control this container
+  - name: Shop Web
+    docker:
+      compose: shop/web          # every container of this Compose service
+    logs: true
   - process: "*celery worker*"   # watch only, by command line
     user: app
 ports:
@@ -65,7 +71,7 @@ Each process entry has exactly one source. The source decides how the agent find
 | Source | Finds | Control |
 | --- | --- | --- |
 | `systemd: <unit>` | Every process in the unit's cgroup. `.service` is added when the name has no suffix | Start, stop, restart with `systemctl` |
-| `docker: <container>` | Every process in the container's cgroup. The id comes from `docker ps`. `*` matches any text, for example `app-*` for blue-green containers | Start, stop, restart with `docker` |
+| `docker: <container>` | Every process in each running container that matches. See Docker containers | Start, stop, restart with `docker` |
 | `process: <pattern>` | `name` exact, `name*` prefix, `*name` suffix (process name or executable), `*text*` anywhere in the command line. Quote patterns that start with `*` | Watch only |
 
 | Key | Default | Use |
@@ -74,7 +80,7 @@ Each process entry has exactly one source. The source decides how the agent find
 | `api.token` | `DAROYAN_TOKEN` | The install token. The agent uses it only once, to enroll |
 | `server.name` | hostname | The name in the dashboard when the server enrolls. Later changes are ignored; rename the server in the dashboard |
 | `server.labels` | `[]` | Labels in the dashboard |
-| `processes[].name` | the source value | The label in the dashboard. Names must be unique |
+| `processes[].name` | the source value | The label in the dashboard. Names must be unique. Required for `compose` and `labels` |
 | `processes[].user` | any | Count only processes owned by this user |
 | `processes[].restart.attempts` | no restarts | Restart a stopped `systemd` or `docker` entry up to this many times. An error on `process` entries. Needs `DAROYAN_COMMANDS=1` at install |
 | `processes[].logs` | `false` | Send this process's logs. `docker` reads `docker logs`, `systemd` reads the journal. An error on `process` entries. `logs: { format: nginx }` sets the format; see Logs |
@@ -91,11 +97,58 @@ Each process entry has exactly one source. The source decides how the agent find
 | `agent.log_budget` | `1MB` | The most log data sent per minute, as `512KB` or `2MB`. Lines over it are dropped and counted |
 | `agent.state_path` | `/var/lib/daroyan` | Holds `server.json`, the server id and token, mode 600 |
 
+### Docker containers
+
+You can pick containers in four ways:
+
+| Write | Matches | Use it for |
+| --- | --- | --- |
+| `docker: redis-cache` | The container with this exact name | One container with a fixed name |
+| `docker: app-*` | Each container with a matching name. `*` matches any text | Names that change, when no other container has a similar name |
+| `docker: { compose: shop/web }` | Each container of the Compose service `web` in the project `shop` | Apps that you run with Docker Compose |
+| `docker: { labels: { service: shop } }` | Each container that has all of these labels | Kamal, blue-green deploys, `docker run --label` |
+
+A name pattern can match more than you want. For example, `web*` also matches `web-site`. Use `compose` or `labels` to prevent this.
+
+A label is a key and a value on a container. Docker Compose puts the project and the service labels on each container that it starts, so `compose` needs no change to your app. Kamal puts `service`, `role` and `destination` on each container. To see the labels of a container, run:
+
+```sh
+docker inspect --format '{{json .Config.Labels}}' <container>
+```
+
+An entry with `compose` or `labels` must have a `name`. You can use `compose` and `labels` together. Then a container must match both.
+
+```yaml
+processes:
+  - name: Shop Web
+    docker:
+      compose: shop/web
+  - name: Shop
+    docker:
+      labels:
+        service: shop
+        role: web
+  - name: Shop Blue
+    docker:
+      compose: shop/web
+      labels:
+        color: blue
+```
+
+#### When more than one container matches
+
+The agent uses only the containers that run. A blue-green deploy, `docker-rollout` and Kamal keep the old container on the server, stopped, next to the new one. These stopped containers do not make the entry show as stopped. The entry is stopped only when no matching container runs.
+
+- The CPU, memory and disk numbers are the totals of all running containers.
+- The dashboard shows the newest running container.
+- Stop and restart act on each running container.
+- If no container runs, start and restart act on the container that started last. In a blue-green deploy, this is the color that was live.
+
 ## Logs
 
 Mark a `docker` or `systemd` process with `logs: true`, or list a file under `files`. Every 2 seconds the agent reads new lines, finds each line's level, and sends them over its connection.
 
-- Docker: `docker logs --timestamps`, for every container that matches the name, so both colors of a blue-green deploy are read. A container that appears later is read from its first line.
+- Docker: `docker logs --timestamps` for each matching container, so the agent reads both colors of a blue-green deploy. A container that appears later is read from its first line.
 - systemd: `journalctl --unit --output json`, from a saved cursor. The level comes from the journal priority.
 - Files: read from a saved offset. A new inode or a shorter file means rotation, and reading starts again at 0.
 - Level: a JSON line uses its `level`, `severity`, `lvl` or `levelname` field, and its other fields become attributes. Otherwise a level word near the start of the line. Otherwise stderr is a warning and anything else is info.

@@ -10,8 +10,7 @@ use serde_json::{Map, Value};
 
 use crate::args::GrantsArgs;
 use crate::check::process::to_unit_name;
-use crate::config::{Config, ProcessCheck, Source, load_config};
-use crate::service::find_container_names;
+use crate::config::{Config, DockerTarget, ProcessCheck, Source, load_config};
 
 const POLKIT_RULE: &str = "/etc/polkit-1/rules.d/50-daroyan.rules";
 const SUDOERS: &str = "/etc/sudoers.d/daroyan";
@@ -37,7 +36,7 @@ pub fn write_grants(args: &GrantsArgs) -> Result<()> {
 
     let config = load_config(&args.config)?;
     let grants = if args.commands {
-        collect_grants(&config, find_container_names)
+        collect_grants(&config, DockerTarget::list_names)
     } else {
         Vec::new()
     };
@@ -55,7 +54,7 @@ pub fn write_grants(args: &GrantsArgs) -> Result<()> {
 
 fn collect_grants(
     config: &Config,
-    find_containers: impl Fn(&str) -> Vec<String>,
+    find_containers: impl Fn(&DockerTarget) -> Vec<String>,
 ) -> Vec<Grant> {
     let mut grants = Vec::new();
 
@@ -85,24 +84,38 @@ fn allowed_verbs(
 
 fn resolve_targets(
     source: &Source,
-    find_containers: impl Fn(&str) -> Vec<String>,
+    find_containers: impl Fn(&DockerTarget) -> Vec<String>,
 ) -> Vec<Target> {
     match source {
         Source::Systemd(unit) if is_safe_name(unit) => vec![Target::Unit(unit.clone())],
-        Source::Docker(container) if is_safe_name(container) => {
+        Source::Docker(DockerTarget::Name(container)) if is_safe_name(container) => {
             vec![Target::Container(container.clone())]
         }
-        Source::Docker(pattern) if is_safe_pattern(pattern) => find_containers(pattern)
-            .into_iter()
-            .filter(|name| is_safe_name(name))
-            .map(Target::Container)
-            .collect(),
+        Source::Docker(target @ DockerTarget::Name(pattern))
+            if is_safe_pattern(pattern) =>
+        {
+            list_safe_containers(target, find_containers)
+        }
+        Source::Docker(target @ DockerTarget::Labels(_)) => {
+            list_safe_containers(target, find_containers)
+        }
         Source::Process(_) => Vec::new(),
-        Source::Systemd(name) | Source::Docker(name) => {
-            eprintln!("skipping {name}: its name has characters a grant can't hold");
+        Source::Systemd(_) | Source::Docker(_) => {
+            eprintln!("skipping {source}: its name has characters a grant can't hold");
             Vec::new()
         }
     }
+}
+
+fn list_safe_containers(
+    target: &DockerTarget,
+    find_containers: impl Fn(&DockerTarget) -> Vec<String>,
+) -> Vec<Target> {
+    find_containers(target)
+        .into_iter()
+        .filter(|name| is_safe_name(name))
+        .map(Target::Container)
+        .collect()
 }
 
 fn is_safe_name(name: &str) -> bool {
@@ -287,8 +300,8 @@ mod tests {
     #[test]
     fn lists_each_container_a_pattern_matches() {
         let config = config("processes:\n  - docker: app-*\nagent:\n  commands: true\n");
-        let grants = collect_grants(&config, |pattern| {
-            assert_eq!(pattern, "app-*");
+        let grants = collect_grants(&config, |target| {
+            assert_eq!(target, &DockerTarget::Name("app-*".into()));
             vec!["app-blue".into(), "app-green".into(), "bad name".into()]
         });
 
@@ -312,6 +325,34 @@ mod tests {
         assert!(rules.contains("/usr/bin/docker restart app-blue,"));
         assert!(!rules.contains("app-*"));
         assert!(!rules.contains("restart *"));
+    }
+
+    #[test]
+    fn lists_each_container_a_label_selector_matches() {
+        let config = config(
+            "processes:\n  - name: Shop\n    docker:\n      compose: shop/web\n    restart:\n      attempts: 3\n",
+        );
+        let grants = collect_grants(&config, |target| {
+            assert_eq!(
+                target.to_string(),
+                "com.docker.compose.project=shop,com.docker.compose.service=web"
+            );
+            vec!["shop-web-1".into(), "shop-web-2".into()]
+        });
+
+        assert_eq!(
+            grants,
+            vec![
+                Grant {
+                    target: Target::Container("shop-web-1".into()),
+                    verbs: RESTART_ONLY
+                },
+                Grant {
+                    target: Target::Container("shop-web-2".into()),
+                    verbs: RESTART_ONLY
+                },
+            ]
+        );
     }
 
     #[test]

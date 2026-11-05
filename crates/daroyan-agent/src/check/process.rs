@@ -15,9 +15,7 @@ use crate::collect::process_io::ProcessIo;
 use crate::collect::{now_millis, per_sec};
 use crate::command::{HeldProcesses, hold};
 use crate::config::{ProcessCheck, Restart, Source};
-use crate::service::{
-    Controller, find_container_id, inspect_container, resolve_controller,
-};
+use crate::service::{Controller, inspect_container, resolve_controller};
 
 const UNIT_TYPES: [&str; 11] = [
     "service",
@@ -33,11 +31,16 @@ const UNIT_TYPES: [&str; 11] = [
     "scope",
 ];
 
+struct RunningContainers {
+    ids: Vec<String>,
+    changes: u64,
+}
+
 pub struct ProcessWatch {
     checks: Vec<ProcessCheck>,
     controllers: HashMap<String, Controller>,
     uids: HashMap<String, Option<Uid>>,
-    container_ids: HashMap<String, String>,
+    container_ids: HashMap<String, RunningContainers>,
     running: HashMap<String, bool>,
     main_pids: HashMap<String, Pid>,
     restarts: HashMap<String, Vec<Instant>>,
@@ -269,27 +272,29 @@ impl ProcessWatch {
         system: &'a System,
         cgroups: &HashMap<Pid, String>,
     ) -> Vec<&'a Process> {
-        let Source::Docker(container) = &check.source else {
-            return self.match_processes(check, system, cgroups, None);
+        let Source::Docker(target) = &check.source else {
+            return self.match_processes(check, system, cgroups, &[]);
         };
 
-        let cached = self.container_ids.remove(container);
-        let mut id = cached.clone().or_else(|| find_container_id(container));
-        let mut matches = self.match_processes(check, system, cgroups, id.as_deref());
+        let changes = self.docker.as_ref().map_or(0, DockerEvents::changes);
+        let cached = self
+            .container_ids
+            .remove(&check.name)
+            .filter(|cached| cached.changes == changes)
+            .map(|cached| cached.ids);
+        let is_cached = cached.is_some();
 
-        if matches.is_empty()
-            && let Some(cached) = &cached
-            && let Some(fresh) = find_container_id(container)
-            && fresh != *cached
-        {
-            matches = self.match_processes(check, system, cgroups, Some(&fresh));
-            id = Some(fresh);
+        let mut ids = cached.unwrap_or_else(|| target.list_running_ids());
+        let mut matches = self.match_processes(check, system, cgroups, &ids);
+
+        if matches.is_empty() && is_cached {
+            ids = target.list_running_ids();
+            matches = self.match_processes(check, system, cgroups, &ids);
         }
 
-        if !matches.is_empty()
-            && let Some(id) = id
-        {
-            self.container_ids.insert(container.clone(), id);
+        if !matches.is_empty() {
+            self.container_ids
+                .insert(check.name.clone(), RunningContainers { ids, changes });
         }
 
         matches
@@ -300,7 +305,7 @@ impl ProcessWatch {
         check: &ProcessCheck,
         system: &'a System,
         cgroups: &HashMap<Pid, String>,
-        container_id: Option<&str>,
+        container_ids: &[String],
     ) -> Vec<&'a Process> {
         let uid = self.uids.get(&check.name);
         let in_cgroup = |process: &Process, is_part: &dyn Fn(&str) -> bool| {
@@ -318,16 +323,19 @@ impl ProcessWatch {
                     let unit = to_unit_name(unit);
                     in_cgroup(process, &|part| part == unit)
                 }
-                Source::Docker(_) => container_id
-                    .is_some_and(|id| in_cgroup(process, &|part| part.contains(id))),
+                Source::Docker(_) => in_cgroup(process, &|part| {
+                    container_ids.iter().any(|id| part.contains(id.as_str()))
+                }),
                 Source::Process(pattern) => is_matched(process, pattern),
             })
             .collect()
     }
 
     fn read_container(&mut self, check: &ProcessCheck) -> Option<Container> {
-        let Source::Docker(container) = &check.source else { return None };
-        let id = self.container_ids.get(container)?.clone();
+        if !matches!(check.source, Source::Docker(_)) {
+            return None;
+        }
+        let id = self.container_ids.get(&check.name)?.ids.first()?.clone();
 
         if let Some(info) = self.containers.get(&id) {
             return Some(info.clone());
