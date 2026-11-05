@@ -682,7 +682,9 @@ impl AlertMessage<'_> {
     fn action_links(&self) -> Vec<Link> {
         let id = self.alert.id.as_str();
         let mute = match self.condition {
-            Condition::Offline | Condition::ProcessStopped { .. } => None,
+            Condition::Offline
+            | Condition::ProcessStopped { .. }
+            | Condition::ProcessDegraded { .. } => None,
             _ => self.target_link("Mute", "mute", id),
         };
 
@@ -715,7 +717,7 @@ impl AlertMessage<'_> {
                 params.extend(service.map(|service| ("service", service.to_string())));
                 params.extend(text.iter().map(|text| ("q", text.clone())));
             }
-            Condition::ProcessStopped { .. } => {
+            Condition::ProcessStopped { .. } | Condition::ProcessDegraded { .. } => {
                 params.push(("service", self.alert.subject.clone()));
             }
             _ => {}

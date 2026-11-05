@@ -32,7 +32,10 @@ pub fn get_server_status(
             .disks
             .iter()
             .any(|disk| get_percent(disk.disk_used, disk.disk_total) >= WARNING_PERCENT)
-        || report.processes.iter().any(|process| process.count == 0)
+        || report.processes.iter().any(|process| {
+            process.count == 0
+                || process.containers.is_some_and(|containers| containers.is_short())
+        })
         || report.ports.iter().any(|port| !port.open);
     if is_busy { ServerStatus::Warning } else { ServerStatus::Healthy }
 }
@@ -46,7 +49,7 @@ pub fn get_percent(used: u64, total: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use daroyan_protocol::report::State;
+    use daroyan_protocol::report::{ContainerCount, ProcessState, ProcessStatus, State};
 
     use super::*;
 
@@ -90,6 +93,36 @@ mod tests {
         );
         assert_eq!(
             get_server_status(true, 4, Some(&make_report(10.0))),
+            ServerStatus::Warning
+        );
+    }
+
+    #[test]
+    fn warns_when_a_docker_service_has_too_few_containers() {
+        let with_running = |running: u32| {
+            let mut report = make_report(10.0);
+            report.processes.push(ProcessState {
+                name: "Worker".to_string(),
+                status: ProcessStatus::Running,
+                count: running,
+                started_at: None,
+                cpu: 0.0,
+                mem_used: 0,
+                read_speed: 0,
+                write_speed: 0,
+                controllable: false,
+                container: None,
+                containers: Some(ContainerCount { running, min_running: 3 }),
+            });
+            report
+        };
+
+        assert_eq!(
+            get_server_status(true, 8, Some(&with_running(3))),
+            ServerStatus::Healthy
+        );
+        assert_eq!(
+            get_server_status(true, 8, Some(&with_running(1))),
             ServerStatus::Warning
         );
     }

@@ -87,6 +87,21 @@ pub struct ProcessState {
     pub controllable: bool,
     #[serde(default)]
     pub container: Option<Container>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub containers: Option<ContainerCount>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct ContainerCount {
+    pub running: u32,
+    pub min_running: u32,
+}
+
+impl ContainerCount {
+    pub fn is_short(&self) -> bool {
+        self.running < self.min_running
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

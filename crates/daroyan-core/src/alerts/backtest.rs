@@ -47,8 +47,10 @@ pub async fn backtest_rule(
     for_secs: u32,
     days: i64,
 ) -> Result<Option<Vec<BacktestHit>>> {
-    if matches!(condition, Condition::PortClosed { .. })
-        || condition.target() != Target::Server
+    if matches!(
+        condition,
+        Condition::PortClosed { .. } | Condition::ProcessDegraded { .. }
+    ) || condition.target() != Target::Server
     {
         return Ok(None);
     }

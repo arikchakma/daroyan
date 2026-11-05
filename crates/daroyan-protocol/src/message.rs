@@ -55,6 +55,18 @@ mod tests {
     }
 
     #[test]
+    fn container_counts_are_optional_on_the_wire() {
+        let old = r#"{"name":"Web","status":"running","count":1,"started_at":null,"cpu":0.0,"mem_used":0,"read_speed":0,"write_speed":0}"#;
+        let process: crate::report::ProcessState = serde_json::from_str(old).unwrap();
+        assert_eq!(process.containers, None);
+        assert!(!serde_json::to_string(&process).unwrap().contains("containers"));
+
+        let new = old.replace("}", r#","containers":{"running":1,"min_running":3}}"#);
+        let process: crate::report::ProcessState = serde_json::from_str(&new).unwrap();
+        assert!(process.containers.unwrap().is_short());
+    }
+
+    #[test]
     fn reads_unknown_event_kinds_from_newer_agents() {
         let text = r#"{"at":1,"kind":"file_changed","path":"/etc/nginx/nginx.conf"}"#;
         let event: crate::report::Event = serde_json::from_str(text).unwrap();

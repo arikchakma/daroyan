@@ -18,6 +18,7 @@ processes:
   - name: Shop Web
     docker:
       compose: shop/web
+    min_running: 2
     logs: true
   - name: Nginx
     systemd: nginx

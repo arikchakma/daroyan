@@ -18,6 +18,7 @@ import { runCommandOptions, serverQueries } from '~/queries/servers';
 import type { CommandAction } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { formatBytes, formatDuration, formatPercent, formatSpeed } from '~/utils/format';
+import { isProcessDegraded } from '~/utils/servers';
 
 type ProcessRow = Schemas['ProcessState'] & { id: string };
 
@@ -153,6 +154,39 @@ function WatchOnlyHint(props: WatchOnlyHintProps) {
   );
 }
 
+type ProcessStatusBadgeProps = {
+  process: Schemas['ProcessState'];
+};
+
+function ProcessStatusBadge(props: ProcessStatusBadgeProps) {
+  const { process } = props;
+
+  if (isProcessDegraded(process)) {
+    return (
+      <Badge tone="warning">
+        <Icon name="triangle-alert" />
+        {process.containers?.running} of {process.containers?.min_running}
+      </Badge>
+    );
+  }
+
+  if (process.status === 'running') {
+    return (
+      <Badge tone="success">
+        <Icon name="check" />
+        Running
+      </Badge>
+    );
+  }
+
+  return (
+    <Badge tone="critical">
+      <Icon name="circle-x" />
+      Stopped
+    </Badge>
+  );
+}
+
 type UseProcessesTableOptions = {
   serverId: string;
   processes: Schemas['ProcessState'][];
@@ -175,18 +209,7 @@ export function useProcessesTable(options: UseProcessesTableOptions) {
           header: 'Status',
           enableSorting: false,
           meta: { width: 110, skeleton: 'badge' },
-          cell: ({ getValue }) =>
-            getValue() === 'running' ? (
-              <Badge tone="success">
-                <Icon name="check" />
-                Running
-              </Badge>
-            ) : (
-              <Badge tone="critical">
-                <Icon name="circle-x" />
-                Stopped
-              </Badge>
-            ),
+          cell: ({ row }) => <ProcessStatusBadge process={row.original} />,
         }),
         helper.accessor('started_at', {
           header: 'Uptime',

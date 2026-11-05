@@ -24,6 +24,7 @@ export const METRIC_GROUPS: { label: string; items: { kind: ConditionKind; label
       { kind: 'load', label: 'Load (1m)' },
       { kind: 'offline', label: 'Server offline' },
       { kind: 'process_stopped', label: 'Process stopped' },
+      { kind: 'process_degraded', label: 'Process degraded' },
       { kind: 'port_closed', label: 'Port closed' },
     ],
   },
@@ -274,8 +275,12 @@ export function hasThreshold(kind: ConditionKind) {
   return hasAggregation(kind) || kind === 'cert_days' || kind === 'logs';
 }
 
+export function isProcessKind(kind: ConditionKind) {
+  return kind === 'process_stopped' || kind === 'process_degraded';
+}
+
 export function hasSubjectName(kind: ConditionKind) {
-  return kind === 'process_stopped' || kind === 'port_closed';
+  return isProcessKind(kind) || kind === 'port_closed';
 }
 
 export function readThreshold(condition: Schemas['Condition']) {
@@ -362,6 +367,8 @@ export function describeResolve(condition?: Schemas['Condition']) {
       return 'Ends when the check is up again';
     case 'process_stopped':
       return `Ends when ${readSubjectName(condition) ?? 'the process'} runs again`;
+    case 'process_degraded':
+      return `Ends when ${readSubjectName(condition) ?? 'the process'} runs min_running containers again`;
     case 'port_closed':
       return `Ends when ${readSubjectName(condition) ?? 'the port'} opens again`;
     case 'cert_days':

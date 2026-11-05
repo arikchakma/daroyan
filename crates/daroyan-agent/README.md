@@ -84,6 +84,7 @@ Each process entry has exactly one source. The source decides how the agent find
 | `processes[].user` | any | Count only processes owned by this user |
 | `processes[].restart.attempts` | no restarts | Restart a stopped `systemd` or `docker` entry up to this many times. An error on `process` entries. Needs `DAROYAN_COMMANDS=1` at install |
 | `processes[].logs` | `false` | Send this process's logs. `docker` reads `docker logs`, `systemd` reads the journal. An error on `process` entries. `logs: { format: nginx }` sets the format; see Logs |
+| `processes[].min_running` | none | The number of containers that must run for a `docker` entry. If fewer run, the entry is degraded. An error on other entries. See Docker containers |
 | `processes[].restart.within` | `10m` | The window for `attempts`, as `30s`, `10m` or `1h`. Once spent, the agent sends a `process_restart_gave_up` event and stops trying until the process runs again |
 | `files[].name`, `files[].path` | none | A log file to send. The agent follows it and handles rotation. The `daroyan` user must be able to read it; see Logs |
 | `files[].format` | `auto` | The file's log format; see Logs |
@@ -143,6 +144,28 @@ The agent uses only the containers that run. A blue-green deploy, `docker-rollou
 - The dashboard shows the newest running container.
 - Stop and restart act on each running container.
 - If no container runs, start and restart act on the container that started last. In a blue-green deploy, this is the color that was live.
+
+#### Set how many containers must run
+
+The labels on a container do not tell how many containers its service needs. If a service runs more than one replica, set `min_running` on the entry:
+
+```yaml
+processes:
+  - name: Shop Worker
+    docker:
+      compose: shop/worker
+    min_running: 3
+    restart:
+      attempts: 3
+```
+
+- If 3 or more containers run, the entry is running. More is not a problem, because a deploy can start new containers before it stops the old ones.
+- If 1 or 2 containers run, the entry is degraded. The dashboard shows "1 of 3" and the server shows a warning. Use the "Process degraded" alert rule to get a message.
+- If no container runs, the entry is stopped, as before.
+- If no container runs, start and restart act on the 3 containers that started last.
+- If the entry has `restart` and stays degraded for 30 seconds, the agent restarts stopped containers that use the same image as the running ones, up to `min_running`. It does not touch the running ones, and it does not start an old blue-green color. Each try counts as one of the `attempts`. If no such container exists, the agent does nothing and does not use an attempt.
+
+Without `min_running`, one running container is enough. For a blue-green deploy, set `min_running` to the number of containers in one color, not in both.
 
 ## Logs
 

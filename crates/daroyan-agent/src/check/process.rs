@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::Hash;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use daroyan_protocol::report::{
-    Container, Event, EventKind, ProcessState, ProcessStatus,
+    Container, ContainerCount, Event, EventKind, ProcessState, ProcessStatus,
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use sysinfo::{Pid, Process, System, Uid, Users};
 
 use crate::check::docker_events::{DockerEvents, read_exit_code, was_oom, was_stopped};
@@ -15,7 +15,9 @@ use crate::collect::process_io::ProcessIo;
 use crate::collect::{now_millis, per_sec};
 use crate::command::{HeldProcesses, hold};
 use crate::config::{ProcessCheck, Restart, Source};
-use crate::service::{Controller, inspect_container, resolve_controller};
+use crate::service::{
+    Controller, inspect_container, resolve_controller, restart_containers,
+};
 
 const UNIT_TYPES: [&str; 11] = [
     "service",
@@ -31,6 +33,8 @@ const UNIT_TYPES: [&str; 11] = [
     "scope",
 ];
 
+const SHORT_GRACE: Duration = Duration::from_secs(30);
+
 struct RunningContainers {
     ids: Vec<String>,
     changes: u64,
@@ -44,6 +48,7 @@ pub struct ProcessWatch {
     running: HashMap<String, bool>,
     main_pids: HashMap<String, Pid>,
     restarts: HashMap<String, Vec<Instant>>,
+    short_since: HashMap<String, Instant>,
     gave_up: HashSet<String>,
     held: HeldProcesses,
     commands: bool,
@@ -95,6 +100,7 @@ impl ProcessWatch {
             running: HashMap::new(),
             main_pids: HashMap::new(),
             restarts: HashMap::new(),
+            short_since: HashMap::new(),
             gave_up: HashSet::new(),
             held,
             commands,
@@ -154,6 +160,13 @@ impl ProcessWatch {
             .min_by_key(|process| (process.start_time(), process.pid()));
         let started_at = main.map(|process| process.start_time());
         let is_running = !matches.is_empty();
+        let running_containers = self.count_running_containers(check, is_running);
+        let is_short = check
+            .min_running
+            .zip(running_containers)
+            .is_some_and(|(min_running, running)| running < min_running);
+        let is_short_too_long =
+            self.is_short_too_long(&check.name, is_running && is_short);
         let was_running =
             self.running.insert(check.name.clone(), is_running).unwrap_or(false);
 
@@ -201,7 +214,7 @@ impl ProcessWatch {
             self.started.insert(check.name.clone(), started_at);
         }
 
-        if is_running {
+        if is_running && !is_short {
             self.gave_up.remove(&check.name);
         }
 
@@ -231,12 +244,12 @@ impl ProcessWatch {
         }
 
         let is_held = hold(&self.held).stopped.contains(&check.name);
-        if !is_running
+        if (!is_running || is_short_too_long)
             && !is_held
             && controller.is_controllable()
             && let Some(restart) = check.restart
         {
-            self.restart_process(&check.name, &controller, restart, events);
+            self.restart_process(&check.name, &controller, is_running, restart, events);
         }
 
         let disk: (u64, u64) = family.iter().fold((0, 0), |(read, write), process| {
@@ -259,7 +272,46 @@ impl ProcessWatch {
             write_speed: per_sec(disk.1, elapsed_secs),
             controllable: self.commands && controller.is_controllable(),
             container,
+            containers: check
+                .min_running
+                .zip(running_containers)
+                .map(|(min_running, running)| ContainerCount { running, min_running }),
         }
+    }
+
+    fn is_short_too_long(&mut self, name: &str, is_short: bool) -> bool {
+        if !is_short {
+            self.short_since.remove(name);
+            return false;
+        }
+
+        let since =
+            *self.short_since.entry(name.to_string()).or_insert_with(Instant::now);
+        if since.elapsed() < SHORT_GRACE {
+            return false;
+        }
+
+        self.short_since.remove(name);
+        true
+    }
+
+    fn count_running_containers(
+        &self,
+        check: &ProcessCheck,
+        is_running: bool,
+    ) -> Option<u32> {
+        if !matches!(check.source, Source::Docker(_)) {
+            return None;
+        }
+        if !is_running {
+            return Some(0);
+        }
+
+        let running = self
+            .container_ids
+            .get(&check.name)
+            .map_or(0, |cached| cached.ids.len());
+        Some(running as u32)
     }
 
     pub fn families(&self) -> &HashMap<String, HashSet<Pid>> {
@@ -354,12 +406,20 @@ impl ProcessWatch {
         &mut self,
         name: &str,
         controller: &Controller,
+        only_missing: bool,
         restart: Restart,
         events: &mut Vec<Event>,
     ) {
         if self.gave_up.contains(name) {
             return;
         }
+
+        let missing = only_missing.then(|| controller.find_missing());
+        if missing.as_ref().is_some_and(Vec::is_empty) {
+            debug!("{name} is short, but no stopped container runs its current image");
+            return;
+        }
+
         let attempts = self.restarts.entry(name.to_string()).or_default();
         if !take_attempt(attempts, Instant::now(), restart) {
             warn!("{name} is still down after {} restarts, giving up", restart.attempts);
@@ -372,7 +432,12 @@ impl ProcessWatch {
         }
         let attempt = attempts.len();
 
-        match controller.run("restart") {
+        let result = match &missing {
+            Some(containers) => restart_containers(containers),
+            None => controller.run("restart"),
+        };
+
+        match result {
             Ok(()) => {
                 info!("restarted {name}, attempt {attempt} of {}", restart.attempts);
                 events.push(new_event(EventKind::ProcessRestarted {
@@ -554,6 +619,7 @@ mod tests {
             user: None,
             restart: None,
             logs: None,
+            min_running: None,
         };
         let mut watch = ProcessWatch::new(vec![check], false, HeldProcesses::default());
         let spawn =
