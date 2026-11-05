@@ -10,7 +10,8 @@ use serde_json::{Map, Value};
 
 use crate::args::GrantsArgs;
 use crate::check::process::to_unit_name;
-use crate::config::{Config, Source, load_config};
+use crate::config::{Config, ProcessCheck, Source, load_config};
+use crate::service::find_container_names;
 
 const POLKIT_RULE: &str = "/etc/polkit-1/rules.d/50-daroyan.rules";
 const SUDOERS: &str = "/etc/sudoers.d/daroyan";
@@ -35,7 +36,11 @@ pub fn write_grants(args: &GrantsArgs) -> Result<()> {
     }
 
     let config = load_config(&args.config)?;
-    let grants = if args.commands { collect_grants(&config) } else { Vec::new() };
+    let grants = if args.commands {
+        collect_grants(&config, find_container_names)
+    } else {
+        Vec::new()
+    };
     let uses_polkit = Path::new("/run/systemd/system").is_dir()
         && Path::new("/etc/polkit-1/rules.d").is_dir();
     let systemctl = find_program("systemctl").filter(|_| !uses_polkit);
@@ -48,48 +53,72 @@ pub fn write_grants(args: &GrantsArgs) -> Result<()> {
     replace_file(Path::new(SUDOERS), sudoers.as_deref(), 0o440, Some(check_sudoers))
 }
 
-fn collect_grants(config: &Config) -> Vec<Grant> {
-    config
-        .processes
-        .iter()
-        .filter_map(|check| {
-            let verbs = if config.agent.commands {
-                ALL_VERBS
-            } else if check.restart.is_some() {
-                RESTART_ONLY
-            } else {
-                return None;
-            };
+fn collect_grants(
+    config: &Config,
+    find_containers: impl Fn(&str) -> Vec<String>,
+) -> Vec<Grant> {
+    let mut grants = Vec::new();
 
-            let target = match &check.source {
-                Source::Systemd(unit) if is_safe_name(unit, false) => {
-                    Target::Unit(unit.clone())
-                }
-                Source::Docker(container) if is_safe_name(container, true) => {
-                    Target::Container(container.clone())
-                }
-                Source::Process(_) => return None,
-                Source::Systemd(name) | Source::Docker(name) => {
-                    eprintln!(
-                        "skipping {name}: its name has characters a grant can't hold"
-                    );
-                    return None;
-                }
-            };
+    for check in &config.processes {
+        let Some(verbs) = allowed_verbs(config, check) else {
+            continue;
+        };
 
-            Some(Grant { target, verbs })
-        })
-        .collect()
+        for target in resolve_targets(&check.source, &find_containers) {
+            grants.push(Grant { target, verbs });
+        }
+    }
+
+    grants
 }
 
-fn is_safe_name(name: &str, allows_wildcard: bool) -> bool {
-    !name.is_empty()
-        && !name.starts_with('-')
-        && name.chars().all(|character| {
-            character.is_ascii_alphanumeric()
-                || matches!(character, '_' | '.' | '-' | '@' | ':')
-                || (allows_wildcard && character == '*')
-        })
+fn allowed_verbs(
+    config: &Config,
+    check: &ProcessCheck,
+) -> Option<&'static [&'static str]> {
+    if config.agent.commands {
+        return Some(ALL_VERBS);
+    }
+
+    check.restart.is_some().then_some(RESTART_ONLY)
+}
+
+fn resolve_targets(
+    source: &Source,
+    find_containers: impl Fn(&str) -> Vec<String>,
+) -> Vec<Target> {
+    match source {
+        Source::Systemd(unit) if is_safe_name(unit) => vec![Target::Unit(unit.clone())],
+        Source::Docker(container) if is_safe_name(container) => {
+            vec![Target::Container(container.clone())]
+        }
+        Source::Docker(pattern) if is_safe_pattern(pattern) => find_containers(pattern)
+            .into_iter()
+            .filter(|name| is_safe_name(name))
+            .map(Target::Container)
+            .collect(),
+        Source::Process(_) => Vec::new(),
+        Source::Systemd(name) | Source::Docker(name) => {
+            eprintln!("skipping {name}: its name has characters a grant can't hold");
+            Vec::new()
+        }
+    }
+}
+
+fn is_safe_name(name: &str) -> bool {
+    !name.starts_with('-') && !name.is_empty() && name.chars().all(is_safe_character)
+}
+
+fn is_safe_pattern(pattern: &str) -> bool {
+    !pattern.starts_with('-')
+        && pattern.contains('*')
+        && pattern
+            .chars()
+            .all(|character| character == '*' || is_safe_character(character))
+}
+
+fn is_safe_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-' | '@' | ':')
 }
 
 fn render_polkit(grants: &[Grant]) -> Option<String> {
@@ -236,9 +265,9 @@ mod tests {
     #[test]
     fn grants_only_configured_entries() {
         let config = config(
-            "processes:\n  - systemd: nginx\n  - docker: app-*\n  - process: cron\nagent:\n  commands: true\n",
+            "processes:\n  - systemd: nginx\n  - docker: db\n  - process: cron\nagent:\n  commands: true\n",
         );
-        let grants = collect_grants(&config);
+        let grants = collect_grants(&config, |_| Vec::new());
 
         assert_eq!(
             grants,
@@ -248,11 +277,41 @@ mod tests {
                     verbs: ALL_VERBS
                 },
                 Grant {
-                    target: Target::Container("app-*".into()),
+                    target: Target::Container("db".into()),
                     verbs: ALL_VERBS
                 },
             ]
         );
+    }
+
+    #[test]
+    fn lists_each_container_a_pattern_matches() {
+        let config = config("processes:\n  - docker: app-*\nagent:\n  commands: true\n");
+        let grants = collect_grants(&config, |pattern| {
+            assert_eq!(pattern, "app-*");
+            vec!["app-blue".into(), "app-green".into(), "bad name".into()]
+        });
+
+        assert_eq!(
+            grants,
+            vec![
+                Grant {
+                    target: Target::Container("app-blue".into()),
+                    verbs: ALL_VERBS
+                },
+                Grant {
+                    target: Target::Container("app-green".into()),
+                    verbs: ALL_VERBS
+                },
+            ]
+        );
+
+        let sudoers =
+            render_sudoers(&grants, Some(Path::new("/usr/bin/docker")), None).unwrap();
+        let rules = sudoers.lines().nth(1).unwrap();
+        assert!(rules.contains("/usr/bin/docker restart app-blue,"));
+        assert!(!rules.contains("app-*"));
+        assert!(!rules.contains("restart *"));
     }
 
     #[test]
@@ -262,7 +321,7 @@ mod tests {
         );
 
         assert_eq!(
-            collect_grants(&config),
+            collect_grants(&config, |_| Vec::new()),
             vec![Grant {
                 target: Target::Unit("redis".into()),
                 verbs: RESTART_ONLY
@@ -276,7 +335,7 @@ mod tests {
             "processes:\n  - systemd: \"nginx --help\"\n  - systemd: \"-x\"\nagent:\n  commands: true\n",
         );
 
-        assert!(collect_grants(&config).is_empty());
+        assert!(collect_grants(&config, |_| Vec::new()).is_empty());
     }
 
     #[test]
