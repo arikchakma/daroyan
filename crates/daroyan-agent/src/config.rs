@@ -147,6 +147,7 @@ pub struct ProcessCheck {
     pub user: Option<String>,
     pub restart: Option<Restart>,
     pub logs: Option<LogSettings>,
+    pub min_running: Option<u32>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -180,6 +181,7 @@ struct RawProcessCheck {
     user: Option<String>,
     restart: Option<Restart>,
     logs: Option<RawLogs>,
+    min_running: Option<u32>,
 }
 
 enum RawDocker {
@@ -313,12 +315,23 @@ impl TryFrom<RawProcessCheck> for ProcessCheck {
                 "{name} has restart.attempts 0. Leave restart out instead"
             ));
         }
+        if raw.min_running.is_some() && !matches!(source, Source::Docker(_)) {
+            return Err(format!(
+                "{name} has min_running, but only a docker entry can run more than one container"
+            ));
+        }
+        if raw.min_running == Some(0) {
+            return Err(format!(
+                "{name} has min_running 0. Use 1 or more, or leave min_running out"
+            ));
+        }
         Ok(Self {
             name,
             source,
             user: raw.user,
             restart: raw.restart,
             logs,
+            min_running: raw.min_running,
         })
     }
 }
@@ -706,6 +719,29 @@ processes:
             .contains("Use only compose")
         );
         assert!(error("      - web\n").contains("a container name, or a map"));
+    }
+
+    #[test]
+    fn takes_min_running_only_on_docker_entries() {
+        let parse =
+            |entry: &str| parse_config(&format!("processes:\n  - name: x\n{entry}"));
+        let error = |entry: &str| format!("{:#}", parse(entry).unwrap_err());
+
+        let config =
+            parse("    docker:\n      compose: shop/worker\n    min_running: 3\n")
+                .unwrap();
+        assert_eq!(config.processes[0].min_running, Some(3));
+        assert_eq!(parse("    docker: web\n").unwrap().processes[0].min_running, None);
+
+        assert!(error("    docker: web\n    min_running: 0\n").contains("min_running 0"));
+        assert!(
+            error("    systemd: nginx\n    min_running: 2\n")
+                .contains("only a docker entry")
+        );
+        assert!(
+            error("    process: node\n    min_running: 2\n")
+                .contains("only a docker entry")
+        );
     }
 
     #[test]

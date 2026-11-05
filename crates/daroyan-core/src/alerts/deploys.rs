@@ -443,6 +443,7 @@ mod tests {
             write_speed: 0,
             controllable: false,
             container,
+            containers: None,
         }
     }
 

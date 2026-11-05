@@ -1,3 +1,5 @@
+use daroyan_protocol::report::ContainerCount;
+
 use crate::alerts::rules::{Condition, LogGroup, format_duration};
 use crate::servers::report::LastReport;
 use crate::servers::status::get_percent;
@@ -116,6 +118,20 @@ pub fn find_readings(
             .filter(|process| process.count == 0)
             .map(|process| make_reading(&process.name, 1.0, "Stopped".to_string()))
             .collect(),
+        Condition::ProcessDegraded { name } => report
+            .processes
+            .iter()
+            .filter(|process| name.as_ref().is_none_or(|name| &process.name == name))
+            .filter(|process| process.count > 0)
+            .filter_map(|process| {
+                let containers = process.containers.filter(ContainerCount::is_short)?;
+                let label = format!(
+                    "{} of {} running",
+                    containers.running, containers.min_running
+                );
+                Some(make_reading(&process.name, 1.0, label))
+            })
+            .collect(),
         Condition::PortClosed { name } => report
             .ports
             .iter()
@@ -220,6 +236,7 @@ mod tests {
             write_speed: 0,
             controllable: true,
             container: None,
+            containers: None,
         }
     }
 
@@ -267,6 +284,50 @@ mod tests {
             .is_empty()
         );
         assert_eq!(breaching(Condition::PortClosed { name: None }, true), ["Redis"]);
+    }
+
+    #[test]
+    fn finds_docker_services_with_too_few_containers() {
+        let with_containers = |name: &str, running: u32, min_running: u32| ProcessState {
+            containers: Some(ContainerCount { running, min_running }),
+            ..make_process(name, running)
+        };
+        let report = LastReport {
+            processes: vec![
+                with_containers("Web", 2, 2),
+                with_containers("Worker", 1, 3),
+                with_containers("Api", 3, 2),
+                with_containers("Queue", 0, 2),
+                make_process("Nginx", 1),
+            ],
+            ..make_report()
+        };
+        let server = ServerSnapshot {
+            is_connected: true,
+            mem_total: 100,
+            report: Some(&report),
+            log_counts: &[],
+        };
+
+        let readings =
+            find_readings(&Condition::ProcessDegraded { name: None }, &server).unwrap();
+        assert_eq!(
+            readings,
+            [Reading {
+                subject: "Worker".to_string(),
+                value: 1.0,
+                label: "1 of 3 running".to_string()
+            }]
+        );
+        assert_eq!(
+            find_readings(
+                &Condition::ProcessDegraded { name: Some("Web".to_string()) },
+                &server
+            )
+            .unwrap(),
+            []
+        );
+        assert!(rate(&Condition::ProcessDegraded { name: None }, None, 1.0) != Level::Ok);
     }
 
     #[test]

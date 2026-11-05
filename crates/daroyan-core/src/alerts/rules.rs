@@ -26,6 +26,9 @@ pub enum Condition {
     ProcessStopped {
         name: Option<String>,
     },
+    ProcessDegraded {
+        name: Option<String>,
+    },
     PortClosed {
         name: Option<String>,
     },
@@ -395,6 +398,7 @@ pub fn validate_options(
             return invalid("The days must be between 1 and 365");
         }
         Condition::ProcessStopped { name: Some(name) }
+        | Condition::ProcessDegraded { name: Some(name) }
         | Condition::PortClosed { name: Some(name) }
             if name.trim().is_empty() =>
         {
@@ -545,6 +549,9 @@ pub fn describe_condition(condition: &Condition, for_secs: u32) -> String {
         Condition::ProcessStopped { name } => {
             format!("{} stopped", name.as_deref().unwrap_or("A process"))
         }
+        Condition::ProcessDegraded { name } => {
+            format!("{} degraded", name.as_deref().unwrap_or("A process"))
+        }
         Condition::PortClosed { name } => {
             format!("{} closed", name.as_deref().unwrap_or("A port"))
         }
@@ -688,6 +695,9 @@ mod tests {
             condition,
             Condition::ProcessStopped { name: Some("Nginx".to_string()) }
         );
+        let degraded: Condition =
+            serde_json::from_str(r#"{"kind":"process_degraded","name":null}"#).unwrap();
+        assert_eq!(degraded, Condition::ProcessDegraded { name: None });
         let scope: Scope =
             serde_json::from_str(r#"{"kind":"servers","server_ids":["srv_1"]}"#).unwrap();
         assert!(scope.includes("srv_1", &[]));
@@ -751,6 +761,13 @@ mod tests {
         assert_eq!(
             describe_condition(&Condition::ProcessStopped { name: None }, 60),
             "A process stopped for 1m"
+        );
+        assert_eq!(
+            describe_condition(
+                &Condition::ProcessDegraded { name: Some("Worker".to_string()) },
+                120
+            ),
+            "Worker degraded for 2m"
         );
         assert_eq!(format_duration(5400), "1h 30m");
         let windowed = RuleOptions {

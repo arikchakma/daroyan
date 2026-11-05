@@ -3304,6 +3304,26 @@
               "kind": {
                 "type": "string",
                 "enum": [
+                  "process_degraded"
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
                   "port_closed"
                 ]
               },
@@ -3501,6 +3521,25 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ContainerCount": {
+        "type": "object",
+        "required": [
+          "running",
+          "min_running"
+        ],
+        "properties": {
+          "min_running": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "running": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -5832,6 +5871,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Container"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "containers": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContainerCount"
               },
               {
                 "type": "null"

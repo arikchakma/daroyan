@@ -1346,6 +1346,10 @@ export interface components {
             name?: string | null;
         } | {
             /** @enum {string} */
+            kind: "process_degraded";
+            name?: string | null;
+        } | {
+            /** @enum {string} */
             kind: "port_closed";
             name?: string | null;
         } | {
@@ -1392,6 +1396,12 @@ export interface components {
             name: string;
             project?: string | null;
             service?: string | null;
+        };
+        ContainerCount: {
+            /** Format: int32 */
+            min_running: number;
+            /** Format: int32 */
+            running: number;
         };
         CreateAlertMuteBody: {
             check_id?: string | null;
@@ -2012,6 +2022,7 @@ export interface components {
         };
         ProcessState: {
             container?: components["schemas"]["Container"] | null;
+            containers?: components["schemas"]["ContainerCount"] | null;
             controllable?: boolean;
             /** Format: int32 */
             count: number;

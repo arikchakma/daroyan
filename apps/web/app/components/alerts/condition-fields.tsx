@@ -4,7 +4,7 @@ import { LogConditionFields } from '~/components/alerts/log-condition-fields';
 import { UnitField } from '~/components/alerts/unit-field';
 import { FieldRow } from '~/components/ui/field-row';
 import { Input } from '~/components/ui/input';
-import { getUnit, hasSubjectName, hasThreshold } from '~/utils/alerts';
+import { getUnit, hasSubjectName, hasThreshold, isProcessKind } from '~/utils/alerts';
 import { isLimitValid, isOptionalNumber } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState } from '~/utils/rule-form';
 
@@ -52,7 +52,7 @@ export function ConditionFields(props: ConditionFieldsProps) {
   }
 
   if (hasSubjectName(kind)) {
-    const isProcess = kind === 'process_stopped';
+    const isProcess = isProcessKind(kind);
 
     return (
       <FieldGrid>

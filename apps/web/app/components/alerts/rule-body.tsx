@@ -50,6 +50,7 @@ import {
   isCheckKind,
   isCronKind,
   isIntegrationKind,
+  isProcessKind,
   isWholeRuleMute,
   readSubjectName,
   readThreshold,
@@ -469,5 +470,5 @@ function describeLimit(condition: Schemas['Condition']) {
   if (condition.kind === 'uptime_down') {
     return 'Check down';
   }
-  return readSubjectName(condition) ?? `Any ${condition.kind === 'process_stopped' ? 'process' : 'port'}`;
+  return readSubjectName(condition) ?? `Any ${isProcessKind(condition.kind) ? 'process' : 'port'}`;
 }

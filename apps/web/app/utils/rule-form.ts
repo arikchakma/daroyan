@@ -80,6 +80,7 @@ export const TEMPLATES: RuleTemplate[] = [
   { label: 'Disk almost full', name: 'Disk Almost Full', kind: 'disk', critical: '90', warning: '80', forSecs: 900 },
   { label: 'Memory pressure', name: 'Memory Pressure', kind: 'memory', critical: '90', windowSecs: 300, forSecs: 0 },
   { label: 'Process stopped', name: 'Process Stopped', kind: 'process_stopped', forSecs: 60 },
+  { label: 'Process degraded', name: 'Process Degraded', kind: 'process_degraded', forSecs: 120 },
   { label: 'Errors in logs', name: 'Errors in Logs', kind: 'logs', critical: '10', forSecs: 0 },
   { label: 'Uptime check down', name: 'Uptime Check Down', kind: 'uptime_down', forSecs: 0 },
   {
@@ -113,6 +114,7 @@ export const CONDITION_LABELS: Record<ConditionKind, string> = {
   load: 'Load above a limit',
   offline: 'Server offline',
   process_stopped: 'Process stopped',
+  process_degraded: 'Process degraded',
   port_closed: 'Port closed',
   uptime_down: 'Check is down',
   response_time: 'Response time above a limit',
@@ -341,6 +343,7 @@ export function readCondition(form: RuleFormState): Schemas['Condition'] | undef
     case 'cron_failed':
       return { kind };
     case 'process_stopped':
+    case 'process_degraded':
     case 'port_closed':
       return { kind, name: form.subjectName.trim() || null };
     case 'logs':

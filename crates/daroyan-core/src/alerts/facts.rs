@@ -196,7 +196,7 @@ impl FactSources<'_> {
                     top: report.top,
                 })
             }
-            Condition::ProcessStopped { .. } => {
+            Condition::ProcessStopped { .. } | Condition::ProcessDegraded { .. } => {
                 let Some(server) = self.server else { return Ok(AlertFacts::None) };
 
                 let exit = find_last_exit(

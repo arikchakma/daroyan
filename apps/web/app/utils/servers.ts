@@ -136,3 +136,8 @@ export function getServerSpecs(server: ServerItem): SpecProps[] {
     getDiskSpec(server),
   ];
 }
+
+export function isProcessDegraded(process: Schemas['ProcessState']) {
+  const { status, containers } = process;
+  return status === 'running' && !!containers && containers.running < containers.min_running;
+}

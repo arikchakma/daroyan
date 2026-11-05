@@ -11,7 +11,7 @@ use crate::config::{DockerTarget, ProcessCheck, Source};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Controller {
     Systemd(String),
-    Docker(DockerTarget),
+    Docker { target: DockerTarget, min_running: usize },
     None,
 }
 
@@ -25,8 +25,8 @@ impl Controller {
             Self::Systemd(unit) => {
                 run_with_sudo_fallback("systemctl", &[verb, unit]).map(drop)
             }
-            Self::Docker(target) => {
-                let containers = target.pick_for(verb);
+            Self::Docker { target, min_running } => {
+                let containers = target.pick_for(verb, *min_running);
                 if containers.is_empty() {
                     bail!("no container matches {target}");
                 }
@@ -37,6 +37,19 @@ impl Controller {
                 "it is watch-only, so Daroyan cannot {verb} it. Watch it with systemd or docker to control it"
             ),
         }
+    }
+
+    pub fn restart_missing(&self) -> Result<()> {
+        let Self::Docker { target, min_running } = self else {
+            return self.run("restart");
+        };
+
+        let containers = target.pick_missing(*min_running);
+        if containers.is_empty() {
+            bail!("no stopped container of {target} to start");
+        }
+
+        run_on_each("restart", &containers)
     }
 
     pub fn read_exit(&self) -> ExitInfo {
@@ -50,8 +63,9 @@ impl Controller {
                 .output()
                 .map(|output| parse_systemd_exit(&String::from_utf8_lossy(&output.stdout)))
                 .unwrap_or_default(),
-            Self::Docker(target) => target
-                .pick_newest()
+            Self::Docker { target, .. } => target
+                .pick_newest(1)
+                .first()
                 .and_then(|container| {
                     run_with_sudo_fallback(
                         "docker",
@@ -59,7 +73,7 @@ impl Controller {
                             "inspect",
                             "--format",
                             "{{.RestartCount}} {{json .State}}",
-                            &container,
+                            container,
                         ],
                     )
                     .ok()
@@ -166,7 +180,10 @@ fn run_on_each(verb: &str, containers: &[String]) -> Result<()> {
 pub fn resolve_controller(check: &ProcessCheck) -> Controller {
     match &check.source {
         Source::Systemd(unit) => Controller::Systemd(unit.clone()),
-        Source::Docker(target) => Controller::Docker(target.clone()),
+        Source::Docker(target) => Controller::Docker {
+            target: target.clone(),
+            min_running: check.min_running.unwrap_or(1) as usize,
+        },
         Source::Process(_) => Controller::None,
     }
 }
@@ -191,25 +208,30 @@ impl DockerTarget {
         }
     }
 
-    fn pick_newest(&self) -> Option<String> {
+    fn pick_newest(&self, count: usize) -> Vec<String> {
         if let Some(name) = self.exact_name() {
-            return Some(name.to_string());
+            return vec![name.to_string()];
         }
 
         let names = self.list_names();
-        if names.len() < 2 {
-            return names.into_iter().next();
+        if names.len() <= count {
+            return names;
         }
 
         let mut args = vec!["inspect", "--format", "{{.Name}} {{.State.StartedAt}}"];
         args.extend(names.iter().map(String::as_str));
-        run_with_sudo_fallback("docker", &args)
-            .ok()
-            .and_then(|output| pick_last_started(&output))
-            .or_else(|| names.into_iter().next())
+        let picked = run_with_sudo_fallback("docker", &args)
+            .map(|output| pick_last_started(&output, count))
+            .unwrap_or_default();
+
+        if picked.is_empty() {
+            return names.into_iter().take(count).collect();
+        }
+
+        picked
     }
 
-    fn pick_for(&self, verb: &str) -> Vec<String> {
+    fn pick_for(&self, verb: &str, min_running: usize) -> Vec<String> {
         if let Some(name) = self.exact_name() {
             return vec![name.to_string()];
         }
@@ -221,7 +243,16 @@ impl DockerTarget {
             }
         }
 
-        self.pick_newest().into_iter().collect()
+        self.pick_newest(min_running)
+    }
+
+    fn pick_missing(&self, min_running: usize) -> Vec<String> {
+        let running = self.list_containers("{{.Names}}", Some("status=running"));
+
+        self.pick_newest(min_running)
+            .into_iter()
+            .filter(|name| !running.contains(name))
+            .collect()
     }
 
     fn list_containers(&self, format: &str, status: Option<&str>) -> Vec<String> {
@@ -297,15 +328,21 @@ fn parse_container(output: &str) -> Option<Container> {
     })
 }
 
-fn pick_last_started(output: &str) -> Option<String> {
-    output
+fn pick_last_started(output: &str, count: usize) -> Vec<String> {
+    let mut containers: Vec<_> = output
         .lines()
         .filter_map(|line| line.split_once(' '))
         .filter_map(|(name, started)| {
             Some((DateTime::parse_from_rfc3339(started).ok()?, name))
         })
-        .max_by_key(|(started, _)| *started)
+        .collect();
+    containers.sort_by_key(|(started, _)| std::cmp::Reverse(*started));
+
+    containers
+        .into_iter()
+        .take(count)
         .map(|(_, name)| name.trim_start_matches('/').to_string())
+        .collect()
 }
 
 pub fn control_agent(verb: &str) -> Result<()> {
@@ -389,15 +426,16 @@ mod tests {
     #[test]
     fn picks_the_container_started_last() {
         let output = "/green 2026-11-05T15:08:51.1Z\n/blue 2026-11-05T15:26:41.5Z\n/old 0001-01-01T00:00:00Z\n";
-        assert_eq!(pick_last_started(output).as_deref(), Some("blue"));
-        assert_eq!(pick_last_started("garbage"), None);
+        assert_eq!(pick_last_started(output, 1), ["blue"]);
+        assert_eq!(pick_last_started(output, 2), ["blue", "green"]);
+        assert!(pick_last_started("garbage", 1).is_empty());
     }
 
     #[test]
     fn controls_an_exact_container_by_its_name() {
         let target = DockerTarget::Name("redis-cache".to_string());
-        assert_eq!(target.pick_for("stop"), ["redis-cache"]);
-        assert_eq!(target.pick_newest().as_deref(), Some("redis-cache"));
+        assert_eq!(target.pick_for("stop", 1), ["redis-cache"]);
+        assert_eq!(target.pick_newest(3), ["redis-cache"]);
     }
 
     fn make_check(source: Source) -> ProcessCheck {
@@ -407,6 +445,7 @@ mod tests {
             user: None,
             restart: None,
             logs: None,
+            min_running: None,
         }
     }
 
@@ -490,7 +529,10 @@ mod tests {
         let target = DockerTarget::Name("redis-cache".to_string());
         let docker = make_check(Source::Docker(target.clone()));
         let process = make_check(Source::Process("redis-server".to_string()));
-        assert_eq!(resolve_controller(&docker), Controller::Docker(target));
+        assert_eq!(
+            resolve_controller(&docker),
+            Controller::Docker { target, min_running: 1 }
+        );
         assert_eq!(resolve_controller(&process), Controller::None);
         assert!(Controller::None.run("restart").is_err());
     }
