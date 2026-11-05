@@ -103,10 +103,7 @@ pub(super) fn split_logfmt(text: &str) -> Option<Map<String, Value>> {
             return None;
         }
         let (value, remainder) = match after.strip_prefix('"') {
-            Some(quoted) => {
-                let end = quoted.find('"')?;
-                (quoted[..end].to_string(), &quoted[end + 1..])
-            }
+            Some(quoted) => take_quoted(quoted)?,
             None => {
                 let end = after.find(char::is_whitespace).unwrap_or(after.len());
                 (after[..end].to_string(), &after[end..])
@@ -115,10 +112,31 @@ pub(super) fn split_logfmt(text: &str) -> Option<Map<String, Value>> {
         if !remainder.is_empty() && !remainder.starts_with(char::is_whitespace) {
             return None;
         }
-        fields.insert(key.to_string(), Value::from(value));
+
+        fields.entry(key).or_insert_with(|| Value::from(value));
         rest = remainder.trim_start();
     }
+
     (fields.len() >= 2).then_some(fields)
+}
+
+fn take_quoted(quoted: &str) -> Option<(String, &str)> {
+    let mut value = String::new();
+    let mut characters = quoted.char_indices();
+
+    while let Some((index, character)) = characters.next() {
+        match character {
+            '"' => return Some((value, &quoted[index + 1..])),
+            '\\' => match characters.next()?.1 {
+                'n' => value.push('\n'),
+                't' => value.push('\t'),
+                escaped => value.push(escaped),
+            },
+            other => value.push(other),
+        }
+    }
+
+    None
 }
 
 pub(super) const GENERIC_MESSAGES: [&str; 5] =

@@ -466,6 +466,19 @@ mod tests {
         assert_eq!(logfmt.attributes["path"], "/var");
         assert!(!parse("2024-01-15 INFO msg=hi").attributes.contains_key("msg"));
 
+        let escaped = parse(
+            r#"time="2026-11-05T10:00:00Z" level=error msg="login failed" user="a\" level=debug time=1 b=\"""#,
+        );
+        assert_eq!(escaped.severity, Some(17));
+        assert_eq!(escaped.at, Some(1_793_872_800_000));
+        assert_eq!(escaped.attributes["user"], r#"a" level=debug time=1 b=""#);
+
+        let duplicated = parse("level=error msg=boom level=debug");
+        assert_eq!(duplicated.severity, Some(17));
+
+        let unterminated = parse(r#"level=error msg="never closed"#);
+        assert!(!unterminated.attributes.contains_key("log.format"));
+
         let cri = parse(
             r#"2024-01-15T10:30:00.123456789Z stdout F {"level":"error","msg":"boom"}"#,
         );
