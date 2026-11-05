@@ -1,9 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use serde::de::{self, MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer};
 
 #[derive(Deserialize, Debug, Default)]
@@ -44,8 +46,97 @@ pub struct Server {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     Systemd(String),
-    Docker(String),
+    Docker(DockerTarget),
     Process(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DockerTarget {
+    Name(String),
+    Labels(BTreeMap<String, String>),
+}
+
+pub const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
+pub const COMPOSE_SERVICE_LABEL: &str = "com.docker.compose.service";
+
+impl fmt::Display for Source {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Systemd(value) | Self::Process(value) => formatter.write_str(value),
+            Self::Docker(target) => target.fmt(formatter),
+        }
+    }
+}
+
+impl fmt::Display for DockerTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Name(name) => formatter.write_str(name),
+            Self::Labels(labels) => {
+                let pairs: Vec<String> =
+                    labels.iter().map(|(key, value)| format!("{key}={value}")).collect();
+                formatter.write_str(&pairs.join(","))
+            }
+        }
+    }
+}
+
+impl TryFrom<RawDocker> for DockerTarget {
+    type Error = String;
+
+    fn try_from(raw: RawDocker) -> Result<Self, Self::Error> {
+        let selector = match raw {
+            RawDocker::Name(name) => return Ok(Self::Name(name)),
+            RawDocker::Selector(selector) => selector,
+        };
+
+        let mut labels = selector.labels.unwrap_or_default();
+        if let Some((key, _)) = labels.iter().find(|(key, _)| !is_label_key(key)) {
+            return Err(format!(
+                "docker label {key:?} is not a valid key. A key cannot be empty or contain = or a comma"
+            ));
+        }
+
+        if let Some(compose) = selector.compose {
+            if labels.contains_key(COMPOSE_PROJECT_LABEL)
+                || labels.contains_key(COMPOSE_SERVICE_LABEL)
+            {
+                return Err(format!(
+                    "docker sets compose: {compose} and a compose label in labels. Use only compose"
+                ));
+            }
+
+            let (project, service) = parse_compose(&compose)?;
+            labels.insert(COMPOSE_PROJECT_LABEL.to_string(), project.to_string());
+            labels.insert(COMPOSE_SERVICE_LABEL.to_string(), service.to_string());
+        }
+
+        if labels.is_empty() {
+            return Err("docker needs a container name, compose or labels".to_string());
+        }
+
+        Ok(Self::Labels(labels))
+    }
+}
+
+fn is_label_key(key: &str) -> bool {
+    !key.trim().is_empty() && !key.contains('=') && !key.contains(',')
+}
+
+fn parse_compose(compose: &str) -> Result<(&str, &str), String> {
+    let invalid = || {
+        format!(
+            "compose: {compose} is not valid. Write it as project/service, for example shop/web"
+        )
+    };
+
+    let (project, service) = compose.split_once('/').ok_or_else(invalid)?;
+    let is_part = |part: &str| !part.is_empty() && !part.contains(['/', '=', ',']);
+    if !is_part(project) || !is_part(service) {
+        return Err(invalid());
+    }
+
+    Ok((project, service))
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -84,11 +175,51 @@ pub struct FileLog {
 struct RawProcessCheck {
     name: Option<String>,
     systemd: Option<String>,
-    docker: Option<String>,
+    docker: Option<RawDocker>,
     process: Option<String>,
     user: Option<String>,
     restart: Option<Restart>,
     logs: Option<RawLogs>,
+}
+
+enum RawDocker {
+    Name(String),
+    Selector(RawSelector),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSelector {
+    compose: Option<String>,
+    labels: Option<BTreeMap<String, String>>,
+}
+
+impl<'de> Deserialize<'de> for RawDocker {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct RawDockerVisitor;
+
+        impl<'de> Visitor<'de> for RawDockerVisitor {
+            type Value = RawDocker;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a container name, or a map with compose or labels")
+            }
+
+            fn visit_str<E: de::Error>(self, name: &str) -> Result<Self::Value, E> {
+                Ok(RawDocker::Name(name.to_string()))
+            }
+
+            fn visit_map<M: MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                RawSelector::deserialize(MapAccessDeserializer::new(map))
+                    .map(RawDocker::Selector)
+            }
+        }
+
+        deserializer.deserialize_any(RawDockerVisitor)
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
@@ -141,7 +272,7 @@ impl TryFrom<RawProcessCheck> for ProcessCheck {
     fn try_from(raw: RawProcessCheck) -> Result<Self, Self::Error> {
         let source = match (raw.systemd, raw.docker, raw.process) {
             (Some(unit), None, None) => Source::Systemd(unit),
-            (None, Some(container), None) => Source::Docker(container),
+            (None, Some(docker), None) => Source::Docker(DockerTarget::try_from(docker)?),
             (None, None, Some(pattern)) => Source::Process(pattern),
             (None, None, None) => {
                 return Err(
@@ -154,14 +285,17 @@ impl TryFrom<RawProcessCheck> for ProcessCheck {
                 );
             }
         };
-        let value = match &source {
-            Source::Systemd(value) | Source::Docker(value) | Source::Process(value) => {
-                value
-            }
-        };
+        if matches!(source, Source::Docker(DockerTarget::Labels(_))) && raw.name.is_none()
+        {
+            return Err(format!(
+                "docker {source} matches containers by label, so it needs a name"
+            ));
+        }
+
+        let name = raw.name.unwrap_or_else(|| source.to_string());
         if matches!(source, Source::Process(_)) && raw.restart.is_some() {
             return Err(format!(
-                "{value} has restart, but a process entry is watch-only. Use systemd or docker to restart it"
+                "{name} has restart, but a process entry is watch-only. Use systemd or docker to restart it"
             ));
         }
         let logs = match raw.logs {
@@ -171,16 +305,16 @@ impl TryFrom<RawProcessCheck> for ProcessCheck {
         };
         if matches!(source, Source::Process(_)) && logs.is_some() {
             return Err(format!(
-                "{value} has logs, but a process entry has no fixed output. Use systemd or docker to read its logs"
+                "{name} has logs, but a process entry has no fixed output. Use systemd or docker to read its logs"
             ));
         }
         if raw.restart.is_some_and(|restart| restart.attempts == 0) {
             return Err(format!(
-                "{value} has restart.attempts 0. Leave restart out instead"
+                "{name} has restart.attempts 0. Leave restart out instead"
             ));
         }
         Ok(Self {
-            name: raw.name.unwrap_or_else(|| value.clone()),
+            name,
             source,
             user: raw.user,
             restart: raw.restart,
@@ -225,7 +359,7 @@ fn default_log_budget() -> u64 {
 
 fn deserialize_size<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let text = String::deserialize(deserializer)?;
-    parse_size(&text).map_err(serde::de::Error::custom)
+    parse_size(&text).map_err(de::Error::custom)
 }
 
 fn parse_size(text: &str) -> Result<u64, String> {
@@ -263,7 +397,7 @@ fn deserialize_duration<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Duration, D::Error> {
     let text = String::deserialize(deserializer)?;
-    parse_duration(&text).map_err(serde::de::Error::custom)
+    parse_duration(&text).map_err(de::Error::custom)
 }
 
 fn parse_duration(text: &str) -> Result<Duration, String> {
@@ -451,7 +585,10 @@ host:
         );
         let restart = config.processes[0].restart.unwrap();
         assert_eq!((restart.attempts, restart.within), (3, Duration::from_secs(600)));
-        assert_eq!(config.processes[1].source, Source::Docker("redis-cache".to_string()));
+        assert_eq!(
+            config.processes[1].source,
+            Source::Docker(DockerTarget::Name("redis-cache".to_string()))
+        );
         assert_eq!(config.processes[2].name, "containerd-shim-runc-v2");
         assert_eq!(config.processes[2].user.as_deref(), Some("root"));
         assert_eq!(config.ports[0].name.as_deref(), Some("Redis"));
@@ -489,6 +626,86 @@ host:
         assert!(
             error("processes:\n  - systemd: a\n    unit: b\n").contains("unknown field")
         );
+    }
+
+    #[test]
+    fn parses_docker_selectors() {
+        let config = parse_config(
+            "
+processes:
+  - name: IMG CN Web
+    docker:
+      compose: img-cn/web
+    logs: true
+  - name: Shop
+    docker:
+      labels:
+        service: shop
+        role: web
+  - name: Blue
+    docker:
+      compose: img-cn/web
+      labels:
+        color: blue
+",
+        )
+        .unwrap();
+
+        let labels = |pairs: &[(&str, &str)]| {
+            Source::Docker(DockerTarget::Labels(
+                pairs
+                    .iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect(),
+            ))
+        };
+        assert_eq!(
+            config.processes[0].source,
+            labels(&[(COMPOSE_PROJECT_LABEL, "img-cn"), (COMPOSE_SERVICE_LABEL, "web")])
+        );
+        assert_eq!(
+            config.processes[1].source,
+            labels(&[("role", "web"), ("service", "shop")])
+        );
+        assert_eq!(
+            config.processes[2].source,
+            labels(&[
+                (COMPOSE_PROJECT_LABEL, "img-cn"),
+                (COMPOSE_SERVICE_LABEL, "web"),
+                ("color", "blue"),
+            ])
+        );
+        assert_eq!(config.processes[1].source.to_string(), "role=web,service=shop");
+    }
+
+    #[test]
+    fn rejects_unclear_docker_selectors() {
+        let error = |docker: &str| {
+            let text = format!("processes:\n  - name: x\n    docker:\n{docker}");
+            format!("{:#}", parse_config(&text).unwrap_err())
+        };
+
+        assert!(
+            format!(
+                "{:#}",
+                parse_config("processes:\n  - docker:\n      compose: a/b\n")
+                    .unwrap_err()
+            )
+            .contains("needs a name")
+        );
+        assert!(error("      compose: web\n").contains("project/service"));
+        assert!(error("      compose: a/b/c\n").contains("project/service"));
+        assert!(error("      compose: /web\n").contains("project/service"));
+        assert!(error("      labels: {}\n").contains("needs a container name"));
+        assert!(error("      image: nginx\n").contains("unknown field"));
+        assert!(error("      labels:\n        a=b: c\n").contains("not a valid key"));
+        assert!(
+            error(
+                "      compose: a/b\n      labels:\n        com.docker.compose.service: c\n"
+            )
+            .contains("Use only compose")
+        );
+        assert!(error("      - web\n").contains("a container name, or a map"));
     }
 
     #[test]

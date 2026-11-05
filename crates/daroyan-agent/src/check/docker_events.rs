@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +24,7 @@ pub struct DockerAction {
 #[derive(Clone, Default)]
 pub struct DockerEvents {
     actions: Arc<Mutex<HashMap<String, Vec<DockerAction>>>>,
+    changes: Arc<AtomicU64>,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +50,10 @@ impl DockerEvents {
         thread::spawn(move || watched.follow());
 
         events
+    }
+
+    pub fn changes(&self) -> u64 {
+        self.changes.load(Ordering::Acquire)
     }
 
     pub fn list_last_run(&self, container_id: &str) -> Vec<DockerAction> {
@@ -108,6 +114,10 @@ impl DockerEvents {
             .get("exitCode")
             .and_then(|code| code.parse().ok());
         let signal = event.actor.attributes.get("signal").cloned();
+        if matches!(action.as_str(), "start" | "die") {
+            self.changes.fetch_add(1, Ordering::AcqRel);
+        }
+
         let mut actions = lock(&self.actions);
 
         actions.retain(|_, list| {
@@ -227,6 +237,18 @@ mod tests {
 
         record(&events, "die", Some("1"));
         assert_eq!(events.list_last_run("c1")[0].action, "die");
+    }
+
+    #[test]
+    fn counts_starts_and_deaths_as_changes() {
+        let events = DockerEvents::default();
+        record(&events, "kill", None);
+        record(&events, "stop", None);
+        assert_eq!(events.changes(), 0);
+
+        record(&events, "die", Some("0"));
+        record(&events, "start", None);
+        assert_eq!(events.changes(), 2);
     }
 
     #[test]

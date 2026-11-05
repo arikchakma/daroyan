@@ -136,7 +136,8 @@ All limits live in memory in `daroyan-core/src/limits.rs`. That is safe because 
 | 10 failed sign-ins (admin, install or server token) in 60 s | client IP | `429` for every auth attempt until the window ends, even with a valid token |
 | `POST /v1/agent/enroll`, 10/min | client IP | `429` |
 | `GET /v1/agent/connect`, 1 every 10 s, burst 10 | server id | `429`, and the agent backs off |
-| Agent messages, 2/s, burst 120 | the socket | The API closes the socket. The burst lets an agent flush 10 minutes of queued reports |
+| Agent messages, 20/s, burst 200 | the socket | The API closes the socket. The burst lets an agent flush its queued reports after a reconnect |
+| Agent rows, a tenth of the write buffer (20,000 log rows and 20,000 report rows) every 5 s flush, and 1,000 events per report | server id | The API drops that server's batch and logs a warning, so one agent can't push out other servers' data |
 | OTLP log data, `OTLP_LOG_BUDGET_KB` (1 MB) a minute | ingest token | `429` with `Retry-After` until the minute resets, so the SDK sends the batch again. Settings → Telemetry counts the throttled records. A full write buffer answers `503` with `Retry-After: 5` |
 
 ### Client IP Behind Cloudflare and Caddy

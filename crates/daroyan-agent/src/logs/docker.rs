@@ -3,8 +3,9 @@ use std::process::Command;
 
 use daroyan_protocol::log::LogStream;
 
+use crate::config::DockerTarget;
 use crate::logs::parse::RawLine;
-use crate::service::{find_container_ids, is_permission_error};
+use crate::service::is_permission_error;
 
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
@@ -101,11 +102,11 @@ fn read_container(id: &str, since: i64) -> Vec<(i64, RawLine)> {
 }
 
 pub fn read_docker(
-    pattern: &str,
+    target: &DockerTarget,
     positions: &mut Option<HashMap<String, i64>>,
     now_nanos: i64,
 ) -> Vec<RawLine> {
-    let ids = find_container_ids(pattern);
+    let ids = target.list_ids();
     let Some(known) = positions else {
         *positions = Some(ids.into_iter().map(|id| (id, now_nanos)).collect());
         return Vec::new();

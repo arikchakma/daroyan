@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 use std::process::Command;
+use std::thread;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::DateTime;
 use daroyan_protocol::report::Container;
 
-use crate::config::{ProcessCheck, Source};
+use crate::config::{DockerTarget, ProcessCheck, Source};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Controller {
     Systemd(String),
-    Docker(String),
+    Docker(DockerTarget),
     None,
 }
 
@@ -20,16 +21,22 @@ impl Controller {
     }
 
     pub fn run(&self, verb: &str) -> Result<()> {
-        let output = match self {
-            Self::Systemd(unit) => run_with_sudo_fallback("systemctl", &[verb, unit]),
-            Self::Docker(container) => {
-                run_with_sudo_fallback("docker", &[verb, &resolve_container(container)])
+        match self {
+            Self::Systemd(unit) => {
+                run_with_sudo_fallback("systemctl", &[verb, unit]).map(drop)
+            }
+            Self::Docker(target) => {
+                let containers = target.pick_for(verb);
+                if containers.is_empty() {
+                    bail!("no container matches {target}");
+                }
+
+                run_on_each(verb, &containers)
             }
             Self::None => bail!(
                 "it is watch-only, so Daroyan cannot {verb} it. Watch it with systemd or docker to control it"
             ),
-        };
-        output.map(drop)
+        }
     }
 
     pub fn read_exit(&self) -> ExitInfo {
@@ -43,17 +50,22 @@ impl Controller {
                 .output()
                 .map(|output| parse_systemd_exit(&String::from_utf8_lossy(&output.stdout)))
                 .unwrap_or_default(),
-            Self::Docker(container) => run_with_sudo_fallback(
-                "docker",
-                &[
-                    "inspect",
-                    "--format",
-                    "{{.RestartCount}} {{json .State}}",
-                    &resolve_container(container),
-                ],
-            )
-            .map(|output| parse_docker_exit(&output))
-            .unwrap_or_default(),
+            Self::Docker(target) => target
+                .pick_newest()
+                .and_then(|container| {
+                    run_with_sudo_fallback(
+                        "docker",
+                        &[
+                            "inspect",
+                            "--format",
+                            "{{.RestartCount}} {{json .State}}",
+                            &container,
+                        ],
+                    )
+                    .ok()
+                })
+                .map(|output| parse_docker_exit(&output))
+                .unwrap_or_default(),
             Self::None => ExitInfo::default(),
         }
     }
@@ -132,19 +144,117 @@ fn read_signal_name(number: i32) -> Option<String> {
     Some(name.to_string())
 }
 
+fn run_on_each(verb: &str, containers: &[String]) -> Result<()> {
+    let results: Vec<Result<String>> = thread::scope(|scope| {
+        let runs: Vec<_> = containers
+            .iter()
+            .map(|container| {
+                scope.spawn(move || run_with_sudo_fallback("docker", &[verb, container]))
+            })
+            .collect();
+
+        runs.into_iter()
+            .map(|run| {
+                run.join().unwrap_or_else(|_| Err(anyhow!("docker {verb} panicked")))
+            })
+            .collect()
+    });
+
+    results.into_iter().find_map(Result::err).map_or(Ok(()), Err)
+}
+
 pub fn resolve_controller(check: &ProcessCheck) -> Controller {
     match &check.source {
         Source::Systemd(unit) => Controller::Systemd(unit.clone()),
-        Source::Docker(container) => Controller::Docker(container.clone()),
+        Source::Docker(target) => Controller::Docker(target.clone()),
         Source::Process(_) => Controller::None,
     }
 }
 
-fn resolve_container(container: &str) -> String {
-    if !container.contains('*') {
-        return container.to_string();
+impl DockerTarget {
+    pub fn list_ids(&self) -> Vec<String> {
+        self.list_containers("{{.ID}}", None)
     }
-    find_container_id(container).unwrap_or_else(|| container.to_string())
+
+    pub fn list_running_ids(&self) -> Vec<String> {
+        self.list_containers("{{.ID}}", Some("status=running"))
+    }
+
+    pub fn list_names(&self) -> Vec<String> {
+        self.list_containers("{{.Names}}", None)
+    }
+
+    fn exact_name(&self) -> Option<&str> {
+        match self {
+            Self::Name(name) if !name.contains('*') => Some(name),
+            _ => None,
+        }
+    }
+
+    fn pick_newest(&self) -> Option<String> {
+        if let Some(name) = self.exact_name() {
+            return Some(name.to_string());
+        }
+
+        let names = self.list_names();
+        if names.len() < 2 {
+            return names.into_iter().next();
+        }
+
+        let mut args = vec!["inspect", "--format", "{{.Name}} {{.State.StartedAt}}"];
+        args.extend(names.iter().map(String::as_str));
+        run_with_sudo_fallback("docker", &args)
+            .ok()
+            .and_then(|output| pick_last_started(&output))
+            .or_else(|| names.into_iter().next())
+    }
+
+    fn pick_for(&self, verb: &str) -> Vec<String> {
+        if let Some(name) = self.exact_name() {
+            return vec![name.to_string()];
+        }
+
+        if verb != "start" {
+            let running = self.list_containers("{{.Names}}", Some("status=running"));
+            if !running.is_empty() {
+                return running;
+            }
+        }
+
+        self.pick_newest().into_iter().collect()
+    }
+
+    fn list_containers(&self, format: &str, status: Option<&str>) -> Vec<String> {
+        let filters: Vec<String> = self
+            .build_filters()
+            .into_iter()
+            .chain(status.map(str::to_string))
+            .collect();
+        let mut args = vec!["ps", "--all", "--no-trunc", "--format", format];
+        for filter in &filters {
+            args.extend(["--filter", filter.as_str()]);
+        }
+
+        run_with_sudo_fallback("docker", &args)
+            .map(|output| {
+                output
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn build_filters(&self) -> Vec<String> {
+        match self {
+            Self::Name(name) => vec![build_name_filter(name)],
+            Self::Labels(labels) => labels
+                .iter()
+                .map(|(key, value)| format!("label={key}={value}"))
+                .collect(),
+        }
+    }
 }
 
 fn build_name_filter(container: &str) -> String {
@@ -187,24 +297,15 @@ fn parse_container(output: &str) -> Option<Container> {
     })
 }
 
-pub fn find_container_ids(container: &str) -> Vec<String> {
-    let filter = build_name_filter(container);
-    run_with_sudo_fallback(
-        "docker",
-        &["ps", "--all", "--no-trunc", "--filter", &filter, "--format", "{{.ID}}"],
-    )
-    .map(|output| {
-        output
-            .lines()
-            .filter(|id| !id.is_empty())
-            .map(str::to_string)
-            .collect()
-    })
-    .unwrap_or_default()
-}
-
-pub fn find_container_id(container: &str) -> Option<String> {
-    find_container_ids(container).into_iter().next()
+fn pick_last_started(output: &str) -> Option<String> {
+    output
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter_map(|(name, started)| {
+            Some((DateTime::parse_from_rfc3339(started).ok()?, name))
+        })
+        .max_by_key(|(started, _)| *started)
+        .map(|(_, name)| name.trim_start_matches('/').to_string())
 }
 
 pub fn control_agent(verb: &str) -> Result<()> {
@@ -261,6 +362,43 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn builds_docker_filters() {
+        let labels = DockerTarget::Labels(
+            [
+                ("com.docker.compose.project", "shop"),
+                ("com.docker.compose.service", "web"),
+            ]
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .into(),
+        );
+        assert_eq!(
+            labels.build_filters(),
+            [
+                "label=com.docker.compose.project=shop",
+                "label=com.docker.compose.service=web"
+            ]
+        );
+        assert_eq!(
+            DockerTarget::Name("api-*".to_string()).build_filters(),
+            ["name=^/?api-.*$"]
+        );
+    }
+
+    #[test]
+    fn picks_the_container_started_last() {
+        let output = "/green 2026-11-05T15:08:51.1Z\n/blue 2026-11-05T15:26:41.5Z\n/old 0001-01-01T00:00:00Z\n";
+        assert_eq!(pick_last_started(output).as_deref(), Some("blue"));
+        assert_eq!(pick_last_started("garbage"), None);
+    }
+
+    #[test]
+    fn controls_an_exact_container_by_its_name() {
+        let target = DockerTarget::Name("redis-cache".to_string());
+        assert_eq!(target.pick_for("stop"), ["redis-cache"]);
+        assert_eq!(target.pick_newest().as_deref(), Some("redis-cache"));
+    }
 
     fn make_check(source: Source) -> ProcessCheck {
         ProcessCheck {
@@ -349,12 +487,10 @@ mod tests {
 
     #[test]
     fn the_source_decides_the_controller() {
-        let docker = make_check(Source::Docker("redis-cache".to_string()));
+        let target = DockerTarget::Name("redis-cache".to_string());
+        let docker = make_check(Source::Docker(target.clone()));
         let process = make_check(Source::Process("redis-server".to_string()));
-        assert_eq!(
-            resolve_controller(&docker),
-            Controller::Docker("redis-cache".to_string())
-        );
+        assert_eq!(resolve_controller(&docker), Controller::Docker(target));
         assert_eq!(resolve_controller(&process), Controller::None);
         assert!(Controller::None.run("restart").is_err());
     }
