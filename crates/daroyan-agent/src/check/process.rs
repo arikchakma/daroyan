@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use daroyan_protocol::report::{
     Container, ContainerCount, Event, EventKind, ProcessState, ProcessStatus,
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use sysinfo::{Pid, Process, System, Uid, Users};
 
 use crate::check::docker_events::{DockerEvents, read_exit_code, was_oom, was_stopped};
@@ -15,7 +15,9 @@ use crate::collect::process_io::ProcessIo;
 use crate::collect::{now_millis, per_sec};
 use crate::command::{HeldProcesses, hold};
 use crate::config::{ProcessCheck, Restart, Source};
-use crate::service::{Controller, inspect_container, resolve_controller};
+use crate::service::{
+    Controller, inspect_container, resolve_controller, restart_containers,
+};
 
 const UNIT_TYPES: [&str; 11] = [
     "service",
@@ -411,6 +413,13 @@ impl ProcessWatch {
         if self.gave_up.contains(name) {
             return;
         }
+
+        let missing = only_missing.then(|| controller.find_missing());
+        if missing.as_ref().is_some_and(Vec::is_empty) {
+            debug!("{name} is short, but no stopped container runs its current image");
+            return;
+        }
+
         let attempts = self.restarts.entry(name.to_string()).or_default();
         if !take_attempt(attempts, Instant::now(), restart) {
             warn!("{name} is still down after {} restarts, giving up", restart.attempts);
@@ -423,10 +432,9 @@ impl ProcessWatch {
         }
         let attempt = attempts.len();
 
-        let result = if only_missing {
-            controller.restart_missing()
-        } else {
-            controller.run("restart")
+        let result = match &missing {
+            Some(containers) => restart_containers(containers),
+            None => controller.run("restart"),
         };
 
         match result {

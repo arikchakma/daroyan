@@ -39,17 +39,11 @@ impl Controller {
         }
     }
 
-    pub fn restart_missing(&self) -> Result<()> {
-        let Self::Docker { target, min_running } = self else {
-            return self.run("restart");
-        };
-
-        let containers = target.pick_missing(*min_running);
-        if containers.is_empty() {
-            bail!("no stopped container of {target} to start");
+    pub fn find_missing(&self) -> Vec<String> {
+        match self {
+            Self::Docker { target, min_running } => target.pick_missing(*min_running),
+            _ => Vec::new(),
         }
-
-        run_on_each("restart", &containers)
     }
 
     pub fn read_exit(&self) -> ExitInfo {
@@ -156,6 +150,10 @@ fn read_signal_name(number: i32) -> Option<String> {
     };
 
     Some(name.to_string())
+}
+
+pub fn restart_containers(containers: &[String]) -> Result<()> {
+    run_on_each("restart", containers)
 }
 
 fn run_on_each(verb: &str, containers: &[String]) -> Result<()> {
