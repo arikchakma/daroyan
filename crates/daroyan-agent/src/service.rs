@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::thread;
 
@@ -247,12 +247,21 @@ impl DockerTarget {
     }
 
     fn pick_missing(&self, min_running: usize) -> Vec<String> {
-        let running = self.list_containers("{{.Names}}", Some("status=running"));
+        let names = self.list_names();
+        if names.is_empty() {
+            return Vec::new();
+        }
 
-        self.pick_newest(min_running)
-            .into_iter()
-            .filter(|name| !running.contains(name))
-            .collect()
+        let mut args = vec![
+            "inspect",
+            "--format",
+            "{{.Name}} {{.Image}} {{.State.Running}} {{.State.StartedAt}}",
+        ];
+        args.extend(names.iter().map(String::as_str));
+
+        run_with_sudo_fallback("docker", &args)
+            .map(|output| pick_stopped_of_running_images(&output, min_running))
+            .unwrap_or_default()
     }
 
     fn list_containers(&self, format: &str, status: Option<&str>) -> Vec<String> {
@@ -326,6 +335,44 @@ fn parse_container(output: &str) -> Option<Container> {
         image_id: details["Image"].as_str().map(str::to_string),
         config_hash: label("com.docker.compose.config-hash"),
     })
+}
+
+struct ContainerRun<'a> {
+    name: &'a str,
+    image: &'a str,
+    is_running: bool,
+    started: DateTime<chrono::FixedOffset>,
+}
+
+impl<'a> ContainerRun<'a> {
+    fn parse(line: &'a str) -> Option<Self> {
+        let mut parts = line.split(' ');
+
+        Some(Self {
+            name: parts.next()?.trim_start_matches('/'),
+            image: parts.next()?,
+            is_running: parts.next()? == "true",
+            started: DateTime::parse_from_rfc3339(parts.next()?).ok()?,
+        })
+    }
+}
+
+fn pick_stopped_of_running_images(output: &str, min_running: usize) -> Vec<String> {
+    let containers: Vec<ContainerRun> =
+        output.lines().filter_map(ContainerRun::parse).collect();
+    let (running, mut stopped): (Vec<_>, Vec<_>) =
+        containers.into_iter().partition(|container| container.is_running);
+
+    let running_images: HashSet<&str> =
+        running.iter().map(|container| container.image).collect();
+    stopped.retain(|container| running_images.contains(container.image));
+    stopped.sort_by_key(|container| std::cmp::Reverse(container.started));
+
+    stopped
+        .into_iter()
+        .take(min_running.saturating_sub(running.len()))
+        .map(|container| container.name.to_string())
+        .collect()
 }
 
 fn pick_last_started(output: &str, count: usize) -> Vec<String> {
@@ -429,6 +476,22 @@ mod tests {
         assert_eq!(pick_last_started(output, 1), ["blue"]);
         assert_eq!(pick_last_started(output, 2), ["blue", "green"]);
         assert!(pick_last_started("garbage", 1).is_empty());
+    }
+
+    #[test]
+    fn restarts_only_stopped_containers_of_the_running_image() {
+        let output = "\
+/green-1 sha256:new true 2026-11-05T10:05:00Z
+/green-2 sha256:new false 2026-11-05T10:05:01Z
+/blue-1 sha256:old false 2026-11-05T09:00:00Z
+/blue-2 sha256:old false 2026-11-05T09:00:01Z
+";
+        assert_eq!(pick_stopped_of_running_images(output, 2), ["green-2"]);
+        assert_eq!(pick_stopped_of_running_images(output, 4), ["green-2"]);
+        assert!(pick_stopped_of_running_images(output, 1).is_empty());
+
+        let all_stopped = output.replace("true", "false");
+        assert!(pick_stopped_of_running_images(&all_stopped, 2).is_empty());
     }
 
     #[test]

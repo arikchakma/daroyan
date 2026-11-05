@@ -163,7 +163,7 @@ processes:
 - If 1 or 2 containers run, the entry is degraded. The dashboard shows "1 of 3" and the server shows a warning. Use the "Process degraded" alert rule to get a message.
 - If no container runs, the entry is stopped, as before.
 - If no container runs, start and restart act on the 3 containers that started last.
-- If the entry has `restart` and stays degraded for 30 seconds, the agent restarts only the stopped containers. It does not touch the running ones. Each try counts as one of the `attempts`.
+- If the entry has `restart` and stays degraded for 30 seconds, the agent restarts stopped containers that use the same image as the running ones, up to `min_running`. It does not touch the running ones, and it does not start an old blue-green color. Each try counts as one of the `attempts`.
 
 Without `min_running`, one running container is enough. For a blue-green deploy, set `min_running` to the number of containers in one color, not in both.
 
