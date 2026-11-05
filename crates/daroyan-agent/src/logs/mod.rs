@@ -130,7 +130,11 @@ fn continues_block(previous: &str, text: &str, format: LogFormat) -> bool {
         let is_done = last.ends_with(';')
             && !last.starts_with("SET timestamp=")
             && !last.starts_with("use ");
-        return !is_done && !text.starts_with("# Time: ");
+        let is_header = text.starts_with("# ") && !text.starts_with("# Time: ");
+        let has_query_time =
+            previous.lines().any(|line| line.starts_with("# Query_time: "));
+
+        return !is_done && !starts_with_timestamp(text) && (is_header || has_query_time);
     }
     if !reads_python || !previous.contains(TRACEBACK) {
         return false;
@@ -159,6 +163,12 @@ fn starts_slow_query(line: &str) -> bool {
     is_mysql_time || line.starts_with("# User@Host: ")
 }
 
+fn starts_with_timestamp(text: &str) -> bool {
+    let text = text.strip_prefix('[').unwrap_or(text);
+
+    text.starts_with(|character: char| character.is_ascii_digit())
+}
+
 fn is_exception_line(text: &str) -> bool {
     let name = text.split(':').next().unwrap_or_default();
     let is_name = !name.is_empty()
@@ -183,6 +193,7 @@ fn join_continuations(lines: Vec<RawLine>, format: LogFormat) -> Vec<RawLine> {
                 || continues_block(&previous.text, &line.text, format))
             && previous.text.len() + line.text.len() < MAX_JOINED_BYTES
         {
+            previous.severity = previous.severity.max(line.severity);
             previous.text.push('\n');
             previous.text.push_str(line.text.trim_end());
             continue;
@@ -355,6 +366,33 @@ mod tests {
         assert_eq!(joined.len(), 2);
         assert!(joined[0].text.ends_with("WHERE owner_id = 42;"));
         assert!(joined[1].text.starts_with("# Time: 2026-10-28T01:50:09"));
+    }
+
+    #[test]
+    fn keeps_records_after_a_lone_slow_query_header_apart() {
+        let lines = [
+            "2026-11-05 10:00:00 INFO login failed for alice",
+            "# User@Host: x [x] @ x []",
+            "2026-11-05 10:00:01 ERROR db down: connection refused",
+            "2026-11-05 10:00:02 ERROR payment worker crashed",
+        ];
+        let joined = join_continuations(
+            lines.iter().map(|text| raw(LogStream::File, text)).collect(),
+            LogFormat::Auto,
+        );
+        assert_eq!(joined.len(), 4);
+
+        let journal =
+            [("# User@Host: x [x] @ x []", 9), ("db down", 17), ("worker crashed", 17)]
+                .into_iter()
+                .map(|(text, severity)| RawLine {
+                    severity: Some(severity),
+                    ..raw(LogStream::Journal, text)
+                })
+                .collect();
+        let joined = join_continuations(journal, LogFormat::Auto);
+        assert_eq!(joined.len(), 3);
+        assert_eq!(joined[1].severity, Some(17));
     }
 
     #[test]
