@@ -119,9 +119,9 @@ GOOGLE_CLIENT_ID=your-client-id
 GOOGLE_CLIENT_SECRET=your-client-secret
 ALLOWED_EMAILS=you@example.com
 CLIENT_IP_HEADER=x-forwarded-for
-DATABASE_URL=sqlite:///var/lib/daroyan/daroyan.db?mode=rwc
-DUCKDB_PATH=/var/lib/daroyan/daroyan.duckdb
-DUCKDB_BACKUP_DIR=/var/lib/daroyan/backups
+DATABASE_URL=sqlite:///var/lib/daroyan-api/daroyan.db?mode=rwc
+DUCKDB_PATH=/var/lib/daroyan-api/daroyan.duckdb
+DUCKDB_BACKUP_DIR=/var/lib/daroyan-api/backups
 EOF
 
 curl -fsSL https://raw.githubusercontent.com/arikchakma/daroyan/main/crates/daroyan-api/install-server.sh | \
@@ -131,8 +131,11 @@ curl -fsSL https://raw.githubusercontent.com/arikchakma/daroyan/main/crates/daro
 When you pass a file it is used **verbatim** (not merged), so include the data
 paths above — otherwise the DB lands in a default subpath. Any key you leave out falls back to its
 built-in default from section 2. It installs to
-`/usr/local/bin/daroyan-api`, keeps data in `/var/lib/daroyan`, and config in
-`/etc/daroyan.env`. Pin a release with `DAROYAN_VERSION=v0.0.1` (default:
+`/usr/local/bin/daroyan-api`, runs it as the `daroyan-api` user, keeps data in
+`/var/lib/daroyan-api`, and config in `/etc/daroyan.env`. An older install kept
+its data in `/var/lib/daroyan`, which the agent also uses. A rerun moves the
+API's database files and backups to `/var/lib/daroyan-api` and updates the paths
+in `/etc/daroyan.env`. The agent's files stay where they are. Pin a release with `DAROYAN_VERSION=v0.0.1` (default:
 `latest`). Re-running upgrades the binary and **keeps** your existing
 `/etc/daroyan.env` (unless you pass `DAROYAN_ENV_FILE` again).
 

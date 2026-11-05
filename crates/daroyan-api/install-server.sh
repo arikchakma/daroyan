@@ -10,7 +10,9 @@ set -eu
 
 REPO="${DAROYAN_REPO:-arikchakma/daroyan}"
 VERSION="${DAROYAN_VERSION:-latest}"
-DATA_DIR=/var/lib/daroyan
+API_USER=daroyan-api
+DATA_DIR=/var/lib/daroyan-api
+OLD_DATA_DIR=/var/lib/daroyan
 ENV_FILE=/etc/daroyan.env
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -48,11 +50,11 @@ fetch "$BASE/daroyan-api-x86_64-linux-gnu" "$TMP"
 chmod 755 "$TMP"
 mv -f "$TMP" /usr/local/bin/daroyan-api
 
-id daroyan >/dev/null 2>&1 || \
-  useradd --system --no-create-home --shell /usr/sbin/nologin daroyan
+id "$API_USER" >/dev/null 2>&1 || \
+  useradd --system --no-create-home --shell /usr/sbin/nologin "$API_USER"
 
 mkdir -p "$DATA_DIR/backups"
-chown -R daroyan "$DATA_DIR"
+chmod 700 "$DATA_DIR"
 
 # Config precedence: an explicit env file wins; otherwise keep an existing
 # /etc/daroyan.env (so re-running to upgrade is safe); otherwise generate one
@@ -78,6 +80,25 @@ EOF
   chmod 600 "$ENV_FILE"
 fi
 
+if grep -qs "^\(DATABASE_URL\|DUCKDB_PATH\|DUCKDB_BACKUP_DIR\)=.*$OLD_DATA_DIR\(/\|\$\)" "$ENV_FILE"; then
+  systemctl stop daroyan-api >/dev/null 2>&1 || true
+  for name in daroyan.db daroyan.db-wal daroyan.db-shm daroyan.duckdb daroyan.duckdb.wal; do
+    if [ -e "$OLD_DATA_DIR/$name" ] && [ ! -e "$DATA_DIR/$name" ]; then
+      mv "$OLD_DATA_DIR/$name" "$DATA_DIR/$name"
+    fi
+  done
+  if [ -d "$OLD_DATA_DIR/backups" ]; then
+    find "$OLD_DATA_DIR/backups" -mindepth 1 -maxdepth 1 -exec mv -n {} "$DATA_DIR/backups/" \;
+    rmdir "$OLD_DATA_DIR/backups" 2>/dev/null || true
+  fi
+  sed -i \
+    -e "/^\(DATABASE_URL\|DUCKDB_PATH\|DUCKDB_BACKUP_DIR\)=/s#$OLD_DATA_DIR/#$DATA_DIR/#g" \
+    -e "/^\(DATABASE_URL\|DUCKDB_PATH\|DUCKDB_BACKUP_DIR\)=/s#$OLD_DATA_DIR\$#$DATA_DIR#" \
+    "$ENV_FILE"
+  echo "Moved the API data from $OLD_DATA_DIR to $DATA_DIR and updated $ENV_FILE."
+fi
+chown -R "$API_USER" "$DATA_DIR"
+
 cat > /etc/systemd/system/daroyan-api.service <<EOF
 [Unit]
 Description=Daroyan API + dashboard
@@ -85,7 +106,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=daroyan
+User=$API_USER
+NoNewPrivileges=yes
 EnvironmentFile=$ENV_FILE
 ExecStart=/usr/local/bin/daroyan-api
 Restart=on-failure
