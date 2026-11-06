@@ -22,8 +22,10 @@ pub fn collect_disks(
             let usage = disk.usage();
             let (inode_total, inode_used) =
                 statvfs(disk.mount_point()).map_or((0, 0), |stat| {
-                    let total = u64::from(stat.files());
-                    (total, total.saturating_sub(u64::from(stat.files_free())))
+                    #[cfg_attr(target_os = "linux", expect(clippy::useless_conversion))]
+                    let (total, free) =
+                        (u64::from(stat.files()), u64::from(stat.files_free()));
+                    (total, total.saturating_sub(free))
                 });
             DiskState {
                 mount: disk.mount_point().display().to_string(),
