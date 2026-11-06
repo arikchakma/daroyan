@@ -22,6 +22,10 @@ use docker_read_protocol::{
 
 const MAX_STREAMS: usize = MAX_CONTAINERS + 16;
 const THREAD_STACK: usize = 256 * 1024;
+#[cfg(all(target_os = "linux", target_arch = "aarch64", target_env = "musl"))]
+const SYS_KEXEC_FILE_LOAD: i64 = 294;
+#[cfg(all(target_os = "linux", not(all(target_arch = "aarch64", target_env = "musl"))))]
+const SYS_KEXEC_FILE_LOAD: i64 = nix::libc::SYS_kexec_file_load;
 
 fn main() -> ExitCode {
     match run() {
@@ -300,7 +304,7 @@ fn lock_down() -> Result<(), String> {
         libc::SYS_init_module,
         libc::SYS_finit_module,
         libc::SYS_delete_module,
-        libc::SYS_kexec_file_load,
+        SYS_KEXEC_FILE_LOAD,
         libc::SYS_fsopen,
         libc::SYS_fsconfig,
         libc::SYS_fsmount,
