@@ -23,11 +23,19 @@ curl -fsSL https://daroyan.com/install.sh | sudo DAROYAN_TOKEN=dy_agent_... sh
 | --- | --- | --- |
 | `DAROYAN_TOKEN` | required | The install token |
 | `DAROYAN_API_URL` | `https://daroyan.com` | The API |
-| `DAROYAN_BINARY` | download | A local binary to install instead of the download |
+| `DAROYAN_BINARY` | download | A local binary to install instead of the download. `daroyan-docker-read` must be in the same folder |
 | `DAROYAN_COMMANDS` | `0` | `1` lets the agent start, stop and restart units and containers, for `restart` and `agent.commands` |
 | `DAROYAN_PROCESS_IO` | `0` | `1` installs the `daroyan-io` helper, which reads other users' `/proc/<pid>/io` for per-process disk I/O |
 
-The script creates the `daroyan` user, writes `/etc/daroyan/agent.yml` once (a rerun keeps it), and swaps the binary in with a rename, so a rerun upgrades a running agent safely. It installs a systemd unit, or an OpenRC service on Alpine. With Docker installed, it allows the read-only `docker ps/inspect/logs/events` through sudo.
+The script creates the `daroyan` user, writes `/etc/daroyan/agent.yml` once (a rerun keeps it), and swaps the binary in with a rename, so a rerun upgrades a running agent safely. It installs a systemd unit, or an OpenRC service on Alpine. With Docker installed, `daroyan grants` lets the `daroyan` user run one program through sudo: `/usr/local/bin/daroyan-docker-read`. The user gets no direct access to `docker`.
+
+`daroyan-docker-read` is a small separate program that runs as root. It uses only the Rust standard library, and reads only what the agent needs from Docker:
+
+- It reads the container list, the container state, the logs and the container events. It does not read environment variables or command lines, because these often contain passwords and keys.
+- It accepts only the containers of the `docker` entries in `agent.yml`. `daroyan grants` writes these entries to `/etc/daroyan/docker-read.allow` on every start, so the helper does not read `agent.yml`. The `daroyan` user cannot read the logs or details of other containers.
+- It rejects any argument that it does not expect, and runs `docker` with a fixed path and an empty environment.
+- It refuses to run if a user other than root owns `docker-read.allow` or its folder, or if other users can write to them.
+- sudo does not write a log line for each of its calls.
 
 The agent never holds capabilities, and under systemd runs with `NoNewPrivileges` when it needs no sudo. The two flags add more:
 
@@ -95,7 +103,7 @@ Each process entry has exactly one source. The source decides how the agent find
 | `host.networks` | `[]` | Report only these interfaces. Empty skips `lo*`, `docker*`, `veth*`, `br-*`, `virbr*`, `cni*`, `flannel*`, `cali*` |
 | `agent.commands` | `false` | `true` lets admins start, stop and restart `systemd` and `docker` entries from the dashboard. Auto-restart (`restart`) works either way. Both need `DAROYAN_COMMANDS=1` at install |
 | `agent.log_level`, `agent.log_path` | `info`, `/var/log/daroyan` | Rotated daily or at 20 MB, 7 files kept, `daroyan.log` points to the current file |
-| `agent.log_budget` | `1MB` | The most log data sent per minute, as `512KB` or `2MB`. Lines over it are dropped and counted |
+| `agent.log_budget` | `1MB` | The most log data sent per minute, as `512KB` or `2MB`. Each log source gets an equal share. Lines over a share are dropped and counted |
 | `agent.state_path` | `/var/lib/daroyan` | Holds `server.json`, the server id and token, mode 600 |
 
 ### Docker containers
@@ -169,19 +177,21 @@ Without `min_running`, one running container is enough. For a blue-green deploy,
 
 ## Logs
 
-Mark a `docker` or `systemd` process with `logs: true`, or list a file under `files`. Every 2 seconds the agent reads new lines, finds each line's level, and sends them over its connection.
+Mark a `docker` or `systemd` process with `logs: true`, or list a file under `files`. The agent reads new lines, finds the level of each line, and sends the lines over its connection. It follows Docker logs and the journal as they are written. It reads files every 2 seconds.
 
-- Docker: `docker logs --timestamps` for each matching container, so the agent reads both colors of a blue-green deploy. A container that appears later is read from its first line.
-- systemd: `journalctl --unit --output json`, from a saved cursor. The level comes from the journal priority.
+- Docker: one `docker logs --follow --timestamps` process for each running container that matches, so the agent reads both colors of a blue-green deploy. A follower starts when a container starts and stops when the container stops or is removed. If a follower stops for a different reason, the agent starts it again from the last line it read. The wait between tries starts at 1 second and doubles up to 30 seconds. To start again, the agent reads the last 10,000 lines with `--tail` and skips the lines it already sent, so Docker does not read the whole log file. If more than 10,000 lines were written in between, the agent reads once from the saved time with `--since`. Every minute the agent asks Docker for the newest line of each container. If a follower sent nothing in that minute but Docker has a line the follower did not send, the agent starts the follower again. A container that appears later is read from its first line. A line that Docker splits into 16 KB parts is joined again. Lines longer than 64 KB are cut.
+- systemd: one `journalctl --unit --follow --all --output json` process for each unit, from the saved cursor. When the agent starts, it first reads to the end of the journal without `--follow`, because `--follow` shows only the current boot. This way it also sends the lines that a unit wrote before a reboot. A new unit starts at the time the agent first sees it. If the process stops, the agent starts it again after the last line it read, with the same wait as Docker. If `journalctl` cannot use the saved cursor, the agent logs a warning and starts the unit again from the current time. The level comes from the journal priority.
 - Files: read from a saved offset. A new inode or a shorter file means rotation, and reading starts again at 0.
 - Level: a JSON line uses its `level`, `severity`, `lvl` or `levelname` field, and its other fields become attributes. Otherwise a level word near the start of the line. Otherwise stderr is a warning and anything else is info.
-- Multi-line entries are joined into one line: indented lines, Java `Caused by:` and `... N more`, PHP and Laravel stack frames (`#0 …`, `[stacktrace]`), Python tracebacks with their final exception line, and MySQL slow query blocks up to the query's `;`.
+- Multi-line entries are joined into one line. The agent sends a held entry after 1 second without a new line from the same container or unit. Joined entries: indented lines, Java `Caused by:` and `... N more`, PHP and Laravel stack frames (`#0 …`, `[stacktrace]`), Python tracebacks with their final exception line, and MySQL slow query blocks up to the query's `;`.
 - The API reads the rest: nginx, Apache, Caddy, HAProxy, Envoy and Traefik requests; Laravel, PHP, PHP-FPM, Rails, Django, Flask, uvicorn, Spring Boot, Logback and log4j app logs; MySQL, PostgreSQL, MongoDB, Redis, Kafka, RabbitMQ and Elasticsearch; sshd, sudo, cron, UFW, fail2ban and kernel OOM kills; and OpenTelemetry, Elastic ECS, structlog and Docker JSON.
 - Format: by default (`auto`) every reader is tried on each line. Set `format` to read a source with only one family: `plain`, `json`, `logfmt`, `nginx`, `apache`, `caddy`, `haproxy`, `envoy`, `traefik`, `laravel`, `php`, `php-fpm`, `rails`, `python`, `java`, `mysql`, `postgresql`, `mongodb`, `redis`, `kafka`, `rabbitmq`, `elasticsearch` or `system`. `plain` keeps lines as they are. Lines get a `log.format` attribute, and a line the format cannot read is kept with `log.parse_failed: true`. An unknown name logs a warning and falls back to `auto`.
-- A new source starts at its newest line. Read positions live in `log_positions.json` in `agent.state_path`, so a restart neither loses nor repeats lines.
+- A new source starts at its newest line. Read positions live in `log_positions.json` in `agent.state_path`. The agent saves them every 5 seconds and when it stops, so a restart does not lose or repeat lines. If the agent is killed, it can send the lines of the last 5 seconds again.
+- Budget: each source (one `processes` or `files` entry) gets an equal share of `agent.log_budget` every minute. A noisy container cannot use up the share of another service, for example the journal of `sshd`. The agent counts the lines over a share and sends that count.
+- Memory: the agent holds at most 8 MB of lines that it read but did not process. If the connection is slow, the followers wait and do not read more. Docker and the journal keep the lines until the agent reads them.
 - While the API cannot be reached, the agent keeps up to 10 MB of lines and drops the oldest past that.
 
-`install.sh` adds the `daroyan` user to `systemd-journal` and `adm`, and allows `docker logs` through sudo. For a file neither group can read, give the user read access with an ACL, and a default ACL on the folder so rotated files keep it:
+`install.sh` adds the `daroyan` user to `systemd-journal` and `adm`. The agent reads Docker logs through `daroyan docker-read`. For a file neither group can read, give the user read access with an ACL, and a default ACL on the folder so rotated files keep it:
 
 ```sh
 sudo setfacl -m u:daroyan:rx /var/www/app/storage/logs

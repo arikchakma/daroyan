@@ -4,6 +4,8 @@ use daroyan_protocol::log::{
 };
 use serde_json::{Map, Value};
 
+use crate::logs::follow::Position;
+
 const SEVERITY_FATAL: u8 = 21;
 const LEVEL_KEYS: [&str; 5] = ["level", "severity", "lvl", "levelname", "log.level"];
 const MESSAGE_KEYS: [&str; 3] = ["msg", "message", "MESSAGE"];
@@ -15,6 +17,7 @@ pub struct RawLine {
     pub stream: LogStream,
     pub text: String,
     pub severity: Option<u8>,
+    pub position: Option<Position>,
 }
 
 pub fn strip_ansi(text: &str) -> String {
@@ -136,6 +139,7 @@ mod tests {
                 stream,
                 text: text.to_string(),
                 severity: None,
+                position: None,
             },
         )
     }

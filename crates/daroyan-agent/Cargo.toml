@@ -10,6 +10,10 @@ license.workspace = true
 name = "daroyan"
 path = "src/main.rs"
 
+[[bin]]
+name = "daroyan-docker-read"
+path = "src/docker_read_helper.rs"
+
 [dependencies]
 daroyan-protocol.workspace = true
 anyhow.workspace = true

@@ -60,7 +60,12 @@ pub struct ProcessWatch {
 }
 
 impl ProcessWatch {
-    pub fn new(checks: Vec<ProcessCheck>, commands: bool, held: HeldProcesses) -> Self {
+    pub fn new(
+        checks: Vec<ProcessCheck>,
+        commands: bool,
+        held: HeldProcesses,
+        docker: Option<DockerEvents>,
+    ) -> Self {
         if checks.iter().any(|check| matches!(check.source, Source::Systemd(_)))
             && !Path::new("/run/systemd/system").exists()
         {
@@ -87,11 +92,6 @@ impl ProcessWatch {
             .iter()
             .map(|check| (check.name.clone(), resolve_controller(check)))
             .collect();
-        let docker = checks
-            .iter()
-            .any(|check| matches!(check.source, Source::Docker(_)))
-            .then(DockerEvents::start);
-
         Self {
             checks,
             controllers,
@@ -621,7 +621,8 @@ mod tests {
             logs: None,
             min_running: None,
         };
-        let mut watch = ProcessWatch::new(vec![check], false, HeldProcesses::default());
+        let mut watch =
+            ProcessWatch::new(vec![check], false, HeldProcesses::default(), None);
         let spawn =
             || std::process::Command::new("sleep").arg("3007.25").spawn().unwrap();
         let check_now = |watch: &mut ProcessWatch| {

@@ -62,6 +62,7 @@ pub fn read_file(
             stream: LogStream::File,
             text: line.to_string(),
             severity: None,
+            position: None,
         })
         .collect()
 }

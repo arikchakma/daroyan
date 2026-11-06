@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader, Read};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -9,8 +9,11 @@ use std::time::{Duration, Instant};
 use log::warn;
 use serde::Deserialize;
 
+use crate::docker_read::{self, DockerRead, EVENT_ACTIONS};
+use crate::service::is_permission_error;
+
 const KEEP_FOR: Duration = Duration::from_secs(600);
-const ACTIONS: [&str; 5] = ["start", "die", "kill", "stop", "oom"];
+const ERROR_BYTES: u64 = 64 * 1024;
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,37 +68,37 @@ impl DockerEvents {
     }
 
     fn follow(&self) {
-        let mut use_sudo = false;
-
         loop {
-            let (program, prefix): (&str, &[&str]) =
-                if use_sudo { ("sudo", &["-n", "docker"]) } else { ("docker", &[]) };
-            let filters = ACTIONS
-                .iter()
-                .flat_map(|action| ["--filter".to_string(), format!("event={action}")]);
-            let child = Command::new(program)
-                .args(prefix)
-                .args(["events", "--filter", "type=container"])
-                .args(filters)
-                .args(["--format", "{{json .}}"])
+            let use_sudo = docker_read::uses_sudo();
+            let child = docker_read::command(&DockerRead::Events, use_sudo)
+                .stdin(Stdio::null())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::piped())
                 .spawn();
 
+            let mut error = String::new();
             match child {
                 Ok(mut child) => {
+                    self.changes.fetch_add(1, Ordering::AcqRel);
                     if let Some(stdout) = child.stdout.take() {
                         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                             self.record(&line, Instant::now());
                         }
                     }
+                    if let Some(stderr) = child.stderr.take() {
+                        let _ = stderr.take(ERROR_BYTES).read_to_string(&mut error);
+                    }
 
                     let _ = child.wait();
                 }
-                Err(error) => warn!("follow docker events: {error}"),
+                Err(spawn_error) => warn!("follow docker events: {spawn_error}"),
             }
 
-            use_sudo = !use_sudo;
+            if !use_sudo && is_permission_error(&error) {
+                docker_read::require_sudo();
+                continue;
+            }
+
             thread::sleep(RETRY_AFTER);
         }
     }
@@ -104,7 +107,7 @@ impl DockerEvents {
         let Ok(event) = serde_json::from_str::<RawEvent>(line) else { return };
 
         let action = event.action.split(':').next().unwrap_or_default().to_string();
-        if !ACTIONS.contains(&action.as_str()) {
+        if !EVENT_ACTIONS.contains(&action.as_str()) {
             return;
         }
 
@@ -113,7 +116,12 @@ impl DockerEvents {
             .attributes
             .get("exitCode")
             .and_then(|code| code.parse().ok());
-        let signal = event.actor.attributes.get("signal").cloned();
+        let signal = event
+            .actor
+            .attributes
+            .get("signal")
+            .filter(|signal| !signal.is_empty())
+            .cloned();
         if matches!(action.as_str(), "start" | "die") {
             self.changes.fetch_add(1, Ordering::AcqRel);
         }

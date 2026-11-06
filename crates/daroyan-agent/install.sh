@@ -58,22 +58,33 @@ case "$(uname -m)" in
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-# Write the new binary next to the old one, then rename it into place, so a
-# running agent never reads a half-written file.
-TMP_BINARY=/usr/local/bin/.daroyan.new
-if [ -n "$BINARY" ]; then
-  cp "$BINARY" "$TMP_BINARY"
-else
-  URL="https://github.com/arikchakma/daroyan/releases/download/v__DAROYAN_VERSION__/daroyan-$ARCH-linux-musl"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --proto-redir '=https' "$URL" -o "$TMP_BINARY"
+# Write each new binary next to the old one, then rename it into place, so a
+# running agent never reads a half-written file. daroyan-docker-read is the
+# small root helper that sudo runs for the agent's read-only Docker access.
+install_binary() {
+  name="$1"
+  local_binary="$2"
+  staged="/usr/local/bin/.$name.new"
+  if [ -n "$local_binary" ]; then
+    cp "$local_binary" "$staged"
   else
-    wget -qO "$TMP_BINARY" "$URL"
+    url="https://github.com/arikchakma/daroyan/releases/download/v__DAROYAN_VERSION__/$name-$ARCH-linux-musl"
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL --proto-redir '=https' "$url" -o "$staged"
+    else
+      wget -qO "$staged" "$url"
+    fi
   fi
-fi
-chmod 755 "$TMP_BINARY"
-"$TMP_BINARY" --version >/dev/null
-mv -f "$TMP_BINARY" /usr/local/bin/daroyan
+  chown root:root "$staged"
+  chmod 755 "$staged"
+  if [ "$name" = daroyan ]; then
+    "$staged" --version >/dev/null
+  fi
+  mv -f "$staged" "/usr/local/bin/$name"
+}
+
+install_binary daroyan "$BINARY"
+install_binary daroyan-docker-read "${BINARY:+$(dirname "$BINARY")/daroyan-docker-read}"
 
 add_system_user() {
   if id "$1" >/dev/null 2>&1; then

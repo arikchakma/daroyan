@@ -4,6 +4,9 @@ mod collect;
 mod command;
 mod config;
 mod connection;
+mod docker_read;
+#[allow(dead_code)]
+mod docker_read_protocol;
 mod enroll;
 mod grants;
 #[cfg(target_os = "linux")]
