@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -39,10 +39,12 @@ const MAX_REPORT_EVENTS: usize = 1_000;
 const KEPT_BACKUPS: usize = 8;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const BACKUP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const SLOW_READ: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
 pub struct Analytics {
     conn: Arc<Mutex<Connection>>,
+    reader: Arc<Mutex<Connection>>,
     pending: Arc<Mutex<Pending>>,
     last_backup: Arc<Mutex<Option<Backup>>>,
 }
@@ -75,8 +77,10 @@ impl Analytics {
     pub fn open(path: &Path) -> duckdb::Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(MEMORY_SETTINGS)?;
+        let reader = conn.try_clone()?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            reader: Arc::new(Mutex::new(reader)),
             pending: Arc::default(),
             last_backup: Arc::default(),
         })
@@ -94,8 +98,23 @@ impl Analytics {
         T: Send + 'static,
         F: FnOnce(&Connection) -> duckdb::Result<T> + Send + 'static,
     {
-        let reader = lock(&self.conn).try_clone()?;
-        Ok(spawn_blocking(move || f(&reader)).await??)
+        let reader = Arc::clone(&self.reader);
+        let started = Instant::now();
+        Ok(spawn_blocking(move || {
+            let conn = lock(&reader).try_clone()?;
+            let waited = started.elapsed();
+            let result = f(&conn);
+            let ran = started.elapsed() - waited;
+            if waited + ran >= SLOW_READ {
+                tracing::warn!(
+                    waited_ms = waited.as_millis() as u64,
+                    ran_ms = ran.as_millis() as u64,
+                    "slow analytics read"
+                );
+            }
+            result
+        })
+        .await??)
     }
 
     pub async fn write<T, F>(&self, f: F) -> Result<T>
@@ -409,6 +428,46 @@ mod tests {
         assert_eq!(pending.logs.len(), MAX_SERVER_ROWS + 1);
         drop(pending);
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn slow_writes_do_not_block_reads() {
+        let dir =
+            std::env::temp_dir().join(format!("daroyan-writers-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let analytics = Analytics::open(&dir.join("live.duckdb")).unwrap();
+        analytics
+            .run(|conn| conn.execute_batch("CREATE TABLE samples (value INTEGER);"))
+            .unwrap();
+        let writer = analytics.clone();
+        let slow = tokio::spawn(async move {
+            writer
+                .write(|conn| {
+                    std::thread::sleep(Duration::from_millis(800));
+                    conn.execute_batch("INSERT INTO samples VALUES (1);")
+                })
+                .await
+                .unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let started = Instant::now();
+        analytics
+            .read(|conn| {
+                conn.query_row("SELECT count(*) FROM samples", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+            })
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "{:?}",
+            started.elapsed()
+        );
+
+        slow.await.unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
