@@ -110,12 +110,15 @@ type UseLogsTableOptions = {
 export function useLogsTable(options: UseLogsTableOptions) {
   const { lines, isWrapped, columnVisibility, onOpen } = options;
 
+  const today = new Date().toDateString();
+  const hasOlderLines = lines.some((line) => new Date(line.at).toDateString() !== today);
+
   const columns = useMemo(
     () =>
       helper.columns([
         helper.accessor('at', {
           header: 'Time',
-          meta: { width: 132 },
+          meta: { width: hasOlderLines ? 180 : 132 },
           cell: ({ row }) => (
             <>
               <span
@@ -126,7 +129,9 @@ export function useLogsTable(options: UseLogsTableOptions) {
                   row.original.level === 'warn' && 'bg-toast-warning-icon'
                 )}
               />
-              <span className="font-mono text-text-secondary tabular-nums">{formatLogClock(row.original.at)}</span>
+              <span className="font-mono whitespace-nowrap text-text-secondary tabular-nums">
+                {formatLogClock(row.original.at)}
+              </span>
             </>
           ),
         }),
@@ -192,7 +197,7 @@ export function useLogsTable(options: UseLogsTableOptions) {
           ),
         }),
       ]),
-    [isWrapped, onOpen]
+    [isWrapped, hasOlderLines, onOpen]
   );
 
   return useDataTable({ data: lines, columns, state: { columnVisibility } });
