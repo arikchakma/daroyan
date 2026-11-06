@@ -38,6 +38,7 @@ impl Database {
             last_seen_at: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
+            starred_at: Set(None),
         }
         .insert(&self.conn)
         .await
@@ -103,6 +104,20 @@ impl Database {
             id: Set(id.to_string()),
             name: Set(name.to_string()),
             updated_at: Set(Utc::now()),
+            ..Default::default()
+        }
+        .update(&self.conn)
+        .await
+    }
+
+    pub async fn star_server(
+        &self,
+        id: &ServerId,
+        starred: bool,
+    ) -> Result<Model, DbErr> {
+        ActiveModel {
+            id: Set(id.to_string()),
+            starred_at: Set(starred.then(Utc::now)),
             ..Default::default()
         }
         .update(&self.conn)

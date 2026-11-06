@@ -2112,6 +2112,42 @@
         }
       }
     },
+    "/v1/servers/{server_id}/starred": {
+      "put": {
+        "operationId": "star_server",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StarServerBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/status-pages": {
       "get": {
         "operationId": "list_status_pages",
@@ -6633,6 +6669,13 @@
           "name": {
             "type": "string"
           },
+          "starred_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "status": {
             "$ref": "#/components/schemas/ServerStatus"
           }
@@ -6750,6 +6793,13 @@
               "null"
             ]
           },
+          "starred_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "status": {
             "$ref": "#/components/schemas/ServerStatus"
           },
@@ -6821,6 +6871,17 @@
           },
           "team_name": {
             "type": "string"
+          }
+        }
+      },
+      "StarServerBody": {
+        "type": "object",
+        "required": [
+          "starred"
+        ],
+        "properties": {
+          "starred": {
+            "type": "boolean"
           }
         }
       },

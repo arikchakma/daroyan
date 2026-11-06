@@ -25,6 +25,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_servers))
         .routes(routes!(get_server, rename_server, delete_server))
+        .routes(routes!(star_server))
         .routes(routes!(get_server_metrics))
         .routes(routes!(list_server_events))
 }
@@ -97,6 +98,30 @@ async fn rename_server(
     }
     find_server(&state, &server_id).await?;
     let server = state.database.rename_server(&server_id, name).await?;
+    let is_connected = state.agents.is_connected(&server.id);
+    Ok(Json(ServerDetailView::new(server, is_connected)))
+}
+
+#[derive(Deserialize, ToSchema)]
+struct StarServerBody {
+    starred: bool,
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/servers/{server_id}/starred",
+    params(("server_id" = String, Path)),
+    request_body = StarServerBody,
+    responses((status = 200, body = ServerDetailView))
+)]
+async fn star_server(
+    State(state): State<AppState>,
+    _user: CurrentUser,
+    Path(server_id): Path<ServerId>,
+    Json(body): Json<StarServerBody>,
+) -> Result<Json<ServerDetailView>> {
+    find_server(&state, &server_id).await?;
+    let server = state.database.star_server(&server_id, body.starred).await?;
     let is_connected = state.agents.is_connected(&server.id);
     Ok(Json(ServerDetailView::new(server, is_connected)))
 }

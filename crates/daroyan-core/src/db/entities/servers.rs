@@ -18,6 +18,7 @@ pub struct Model {
     pub last_seen_at: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
+    pub starred_at: Option<DateTimeUtc>,
     #[sea_orm(has_many)]
     pub commands: HasMany<super::commands::Entity>,
 }
