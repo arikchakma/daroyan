@@ -296,7 +296,7 @@ pub struct SearchTerm {
 }
 
 #[derive(Default)]
-pub struct LogQuery {
+pub struct LogSearch {
     pub servers: LogFilter,
     pub services: LogFilter,
     pub methods: LogFilter,
@@ -305,6 +305,11 @@ pub struct LogQuery {
     pub terms: Vec<SearchTerm>,
     pub since: Option<i64>,
     pub until: i64,
+}
+
+#[derive(Default)]
+pub struct LogQuery {
+    pub search: LogSearch,
     pub offset: u32,
     pub limit: u32,
 }
@@ -368,6 +373,26 @@ fn push_term(sql: &mut String, values: &mut Vec<SqlValue>, term: SearchTerm) {
     }
 }
 
+fn push_search(sql: &mut String, values: &mut Vec<SqlValue>, search: LogSearch) {
+    sql.push_str(" WHERE logged_at <= ?");
+    values.push(SqlValue::BigInt(search.until));
+    if let Some(since) = search.since {
+        sql.push_str(" AND logged_at >= ?");
+        values.push(SqlValue::BigInt(since));
+    }
+    push_filter(sql, values, "server_id", search.servers);
+    push_filter(sql, values, "service", search.services);
+    push_filter(sql, values, METHOD_COLUMN, search.methods);
+    push_filter(sql, values, STATUS_CLASS_COLUMN, search.status_classes);
+    if let Some(min_severity) = search.min_severity {
+        sql.push_str(" AND severity >= ?");
+        values.push(SqlValue::UTinyInt(min_severity));
+    }
+    for term in search.terms {
+        push_term(sql, values, term);
+    }
+}
+
 #[derive(Serialize, ToSchema, Debug)]
 #[schema(as = LogLine)]
 pub struct LogItem {
@@ -392,24 +417,10 @@ pub async fn list_logs(analytics: &Analytics, query: LogQuery) -> Result<Vec<Log
         .read(move |conn| {
             let mut sql = String::from(
                 "SELECT logged_at, server_id, service, stream, severity, message, CAST(attributes AS VARCHAR), trace_id, span_id, raw, CAST(resource AS VARCHAR) \
-                 FROM log_lines WHERE logged_at <= ?",
+                 FROM log_lines",
             );
-            let mut values: Vec<SqlValue> = vec![SqlValue::BigInt(query.until)];
-            if let Some(since) = query.since {
-                sql.push_str(" AND logged_at >= ?");
-                values.push(SqlValue::BigInt(since));
-            }
-            push_filter(&mut sql, &mut values, "server_id", query.servers);
-            push_filter(&mut sql, &mut values, "service", query.services);
-            push_filter(&mut sql, &mut values, METHOD_COLUMN, query.methods);
-            push_filter(&mut sql, &mut values, STATUS_CLASS_COLUMN, query.status_classes);
-            if let Some(min_severity) = query.min_severity {
-                sql.push_str(" AND severity >= ?");
-                values.push(SqlValue::UTinyInt(min_severity));
-            }
-            for term in query.terms {
-                push_term(&mut sql, &mut values, term);
-            }
+            let mut values = Vec::new();
+            push_search(&mut sql, &mut values, query.search);
             sql.push_str(" ORDER BY logged_at DESC LIMIT ? OFFSET ?");
             values.push(SqlValue::UInt(query.limit));
             values.push(SqlValue::UInt(query.offset));
@@ -440,6 +451,55 @@ fn read_item(row: &duckdb::Row<'_>) -> duckdb::Result<LogItem> {
             .get::<_, Option<String>>(10)?
             .and_then(|text| serde_json::from_str(&text).ok()),
     })
+}
+
+#[derive(Serialize, ToSchema, Debug, Default, Clone, PartialEq, Eq)]
+#[schema(as = LogBucket)]
+pub struct LogBucket {
+    pub at: i64,
+    pub info: u64,
+    pub warn: u64,
+    pub error: u64,
+}
+
+pub async fn count_log_buckets(
+    analytics: &Analytics,
+    search: LogSearch,
+    bucket_ms: i64,
+) -> Result<Vec<LogBucket>> {
+    analytics
+        .read(move |conn| {
+            let mut sql = String::from(
+                "SELECT logged_at // ? * ? AS bucket, \
+                 count(*) FILTER (WHERE severity < ?), \
+                 count(*) FILTER (WHERE severity >= ? AND severity < ?), \
+                 count(*) FILTER (WHERE severity >= ?) \
+                 FROM log_lines",
+            );
+            let mut values = vec![
+                SqlValue::BigInt(bucket_ms),
+                SqlValue::BigInt(bucket_ms),
+                SqlValue::UTinyInt(SEVERITY_WARN),
+                SqlValue::UTinyInt(SEVERITY_WARN),
+                SqlValue::UTinyInt(SEVERITY_ERROR),
+                SqlValue::UTinyInt(SEVERITY_ERROR),
+            ];
+            push_search(&mut sql, &mut values, search);
+            sql.push_str(" GROUP BY bucket ORDER BY bucket");
+
+            let mut statement = conn.prepare(&sql)?;
+            statement
+                .query_map(params_from_iter(values), |row| {
+                    Ok(LogBucket {
+                        at: row.get(0)?,
+                        info: row.get(1)?,
+                        warn: row.get(2)?,
+                        error: row.get(3)?,
+                    })
+                })?
+                .collect()
+        })
+        .await
 }
 
 pub async fn list_log_context(
@@ -675,7 +735,10 @@ mod tests {
         LogBatch, LogFormat, LogLine, LogStream, SEVERITY_ERROR,
     };
 
-    use super::{LogFilter, LogQuery, SearchTerm, list_logs, read_level, to_log_rows};
+    use super::{
+        LogBucket, LogFilter, LogQuery, LogSearch, SearchTerm, count_log_buckets,
+        list_logs, read_level, to_log_rows,
+    };
     use crate::analytics::Analytics;
 
     fn line(at: u64, service: &str, severity: u8, message: &str) -> LogLine {
@@ -750,6 +813,10 @@ mod tests {
         assert_eq!(rows[1].at, 50);
     }
 
+    fn search(until: i64) -> LogSearch {
+        LogSearch { until, ..Default::default() }
+    }
+
     #[tokio::test]
     async fn filters_and_pages_newest_first() {
         let dir =
@@ -769,29 +836,23 @@ mod tests {
         analytics.buffer_logs("srv_1", batch);
         analytics.flush().await.unwrap();
 
-        let all =
-            list_logs(&analytics, LogQuery { until: 10, limit: 2, ..Default::default() })
-                .await
-                .unwrap();
-        assert_eq!(all.iter().map(|item| item.at).collect::<Vec<_>>(), [4, 3]);
-        let next = list_logs(
+        let all = list_logs(
             &analytics,
-            LogQuery {
-                until: 10,
-                limit: 2,
-                offset: 2,
-                ..Default::default()
-            },
+            LogQuery { search: search(10), limit: 2, ..Default::default() },
         )
         .await
         .unwrap();
+        assert_eq!(all.iter().map(|item| item.at).collect::<Vec<_>>(), [4, 3]);
+        let next =
+            list_logs(&analytics, LogQuery { search: search(10), limit: 2, offset: 2 })
+                .await
+                .unwrap();
         assert_eq!(next.iter().map(|item| item.at).collect::<Vec<_>>(), [2, 1]);
 
         let recent = list_logs(
             &analytics,
             LogQuery {
-                since: Some(3),
-                until: 10,
+                search: LogSearch { since: Some(3), until: 10, ..Default::default() },
                 limit: 50,
                 ..Default::default()
             },
@@ -803,52 +864,71 @@ mod tests {
         let errors = list_logs(
             &analytics,
             LogQuery {
-                until: 10,
+                search: LogSearch {
+                    until: 10,
+                    min_severity: Some(13),
+                    ..Default::default()
+                },
                 limit: 50,
-                min_severity: Some(13),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
         assert_eq!(errors.len(), 2);
-        let search = list_logs(
+        let found = list_logs(
             &analytics,
             LogQuery {
-                until: 10,
+                search: LogSearch {
+                    until: 10,
+                    terms: vec![SearchTerm {
+                        key: None,
+                        value: "sendemail".into(),
+                        negate: false,
+                    }],
+                    services: LogFilter { values: vec!["api".into()], negate: false },
+                    ..Default::default()
+                },
                 limit: 50,
-                terms: vec![SearchTerm {
-                    key: None,
-                    value: "sendemail".into(),
-                    negate: false,
-                }],
-                services: LogFilter { values: vec!["api".into()], negate: false },
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(search.len(), 1);
-        assert_eq!(search[0].level, "error");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].level, "error");
         let excluded = list_logs(
             &analytics,
             LogQuery {
-                until: 10,
+                search: LogSearch {
+                    until: 10,
+                    terms: vec![
+                        SearchTerm { key: None, value: "/health".into(), negate: true },
+                        SearchTerm {
+                            key: Some("service".into()),
+                            value: "work*".into(),
+                            negate: true,
+                        },
+                    ],
+                    ..Default::default()
+                },
                 limit: 50,
-                terms: vec![
-                    SearchTerm { key: None, value: "/health".into(), negate: true },
-                    SearchTerm {
-                        key: Some("service".into()),
-                        value: "work*".into(),
-                        negate: true,
-                    },
-                ],
                 ..Default::default()
             },
         )
         .await
         .unwrap();
         assert_eq!(excluded.iter().map(|item| item.at).collect::<Vec<_>>(), [4, 2]);
+
+        let buckets = count_log_buckets(&analytics, search(10), 2).await.unwrap();
+        assert_eq!(
+            buckets,
+            [
+                LogBucket { at: 0, info: 1, warn: 0, error: 0 },
+                LogBucket { at: 2, info: 0, warn: 1, error: 1 },
+                LogBucket { at: 4, info: 1, warn: 0, error: 0 },
+            ]
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
