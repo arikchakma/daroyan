@@ -22,6 +22,8 @@ export type LogsParams = {
   limit: number;
 };
 
+export type LogVolumeParams = Omit<LogsParams, 'offset' | 'limit'>;
+
 export const logQueries = {
   all: () => ['logs'] as const,
   list: (params: LogsParams, isLive: boolean) =>
@@ -30,6 +32,13 @@ export const logQueries = {
       queryFn: () => request(apiClient.GET('/v1/logs', { params: { query: params } })),
       placeholderData: keepPreviousData,
       refetchInterval: isLive ? 2_000 : false,
+    }),
+  volume: (params: LogVolumeParams, isLive: boolean) =>
+    queryOptions({
+      queryKey: [...logQueries.all(), 'volume', params, isLive],
+      queryFn: () => request(apiClient.GET('/v1/logs/volume', { params: { query: params } })),
+      placeholderData: keepPreviousData,
+      refetchInterval: isLive ? 10_000 : false,
     }),
   sources: () =>
     queryOptions({

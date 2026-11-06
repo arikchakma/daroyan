@@ -6,6 +6,7 @@ import { useSearchParams } from 'react-router';
 import { AlertBanners } from '~/components/alerts/alert-banners';
 import { Icon } from '~/components/icons/icon';
 import { LogSheet } from '~/components/logs/log-sheet';
+import { LogVolume } from '~/components/logs/log-volume';
 import { ViewMenu, VIEWS } from '~/components/logs/view-menu';
 import type { LevelView } from '~/components/logs/view-menu';
 import { ColumnMenu } from '~/components/ui/column-menu';
@@ -30,7 +31,7 @@ import { cn } from '~/utils/classname';
 import { readListParam } from '~/utils/filter';
 import { joinNames } from '~/utils/format';
 import type { SearchFilterField } from '~/utils/filter';
-import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
+import { getZoomLabel, OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
 const PAGE_SIZE = 50;
 const EXPORT_LIMIT = 5_000;
@@ -90,6 +91,9 @@ export default function LogsPage() {
   const q = searchParams.get('q') ?? '';
   const page = Math.max(Number(searchParams.get('page')) || 1, 1);
   const range = RANGES.find((item) => item.value === searchParams.get('range')) ?? RANGES.find((item) => item.value === DEFAULT_RANGE)!;
+  const zoomSince = Number(searchParams.get('from'));
+  const zoomUntil = Number(searchParams.get('to'));
+  const zoom = zoomSince > 0 && zoomUntil > zoomSince ? { since: zoomSince, until: zoomUntil } : undefined;
 
   const [search, setSearch] = useState(q);
   const [isLive, setIsLive] = useState(false);
@@ -127,23 +131,22 @@ export default function LogsPage() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  const isFollowing = isLive && page === 1;
+  const isFollowing = isLive && page === 1 && !zoom;
+  const filters = {
+    ...filterParams,
+    level: view === 'all' ? undefined : view,
+    q: q || undefined,
+  };
+  const timeRange = {
+    since: zoom?.since ?? until - range.ms,
+    until: zoom?.until ?? (isFollowing ? undefined : until),
+  };
   const { data: servers } = useQuery(serverQueries.list());
   const { data: sources } = useQuery(logQueries.sources());
   const { data, isLoading } = useQuery(
-    logQueries.list(
-      {
-        ...filterParams,
-        level: view === 'all' ? undefined : view,
-        q: q || undefined,
-        since: until - range.ms,
-        until: isFollowing ? undefined : until,
-        offset: (page - 1) * PAGE_SIZE,
-        limit: PAGE_SIZE,
-      },
-      isFollowing
-    )
+    logQueries.list({ ...filters, ...timeRange, offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE }, isFollowing)
   );
+  const { data: volume } = useQuery(logQueries.volume({ ...filters, ...timeRange }, isFollowing));
 
   const serverNames = new Map([
     [OTLP_SERVER_ID, OTLP_SERVER_NAME],
@@ -160,20 +163,16 @@ export default function LogsPage() {
   const openIndex = openLine ? lines.findIndex((line) => line.id === openLine.id) : -1;
   const table = useLogsTable({ lines, isWrapped, columnVisibility, onOpen });
 
-  const filters = {
-    ...filterParams,
-    level: view === 'all' ? undefined : view,
-    q: q || undefined,
-  };
   const exportLogs = async () => {
     setIsExporting(true);
     try {
-      const exportUntil = Date.now();
+      const exportUntil = zoom?.until ?? Date.now();
+      const exportSince = zoom?.since ?? exportUntil - range.ms;
       const rows = [];
       for (let offset = 0; offset < EXPORT_LIMIT; offset += 200) {
         const page = await request(
           apiClient.GET('/v1/logs', {
-            params: { query: { ...filters, since: exportUntil - range.ms, until: exportUntil, offset, limit: 200 } },
+            params: { query: { ...filters, since: exportSince, until: exportUntil, offset, limit: 200 } },
           })
         );
         rows.push(...page.lines);
@@ -240,7 +239,7 @@ export default function LogsPage() {
     { key: 'status', label: 'Status', verb: 'is', multiple: true, negatable: true, options: toOptions(STATUSES) },
   ];
   const isViewChanged =
-    view !== 'all' || !!q || Object.keys(filterParams).length > 0 || range.value !== DEFAULT_RANGE;
+    view !== 'all' || !!q || Object.keys(filterParams).length > 0 || range.value !== DEFAULT_RANGE || !!zoom;
   const hasNoSources = sources?.length === 0;
 
   useCommandActions('Actions', [
@@ -249,7 +248,7 @@ export default function LogsPage() {
       icon: isLive ? 'pause' : 'play',
       onSelect: () => {
         setIsLive(!isLive);
-        setParams({ page: null });
+        setParams({ page: null, from: null, to: null });
       },
     },
     !hasNoSources && {
@@ -268,15 +267,17 @@ export default function LogsPage() {
             <Menu.Root>
               <Menu.Trigger render={<Button variant="secondary" className="w-fit" />}>
                 <Icon name="calendar" />
-                {range.label}
+                {zoom ? getZoomLabel(zoom.since, zoom.until) : range.label}
                 <Icon name="chevron-down" />
               </Menu.Trigger>
               <Menu.Portal>
                 <Menu.Positioner align="end">
                   <Menu.Popup className="min-w-40">
                     <Menu.RadioGroup
-                      value={range.value}
-                      onValueChange={(value: LogRange) => setParams({ range: value === DEFAULT_RANGE ? null : value })}
+                      value={zoom ? null : range.value}
+                      onValueChange={(value: LogRange) =>
+                        setParams({ range: value === DEFAULT_RANGE ? null : value, from: null, to: null })
+                      }
                     >
                       {RANGES.map((item) => (
                         <Menu.RadioItem key={item.value} value={item.value}>
@@ -299,7 +300,7 @@ export default function LogsPage() {
               aria-pressed={isLive}
               onClick={() => {
                 setIsLive(!isLive);
-                setParams({ page: null });
+                setParams({ page: null, from: null, to: null });
               }}
             >
               <span className={cn('size-1.5 rounded-full', isLive ? 'bg-tone-success-fg' : 'bg-text-tertiary')} />
@@ -360,6 +361,14 @@ export default function LogsPage() {
               <Icon name="align-left" />
             </button>
           </div>
+          <LogVolume
+            volume={volume}
+            isNow={!zoom}
+            onZoom={(since, zoomedUntil) => {
+              setIsLive(false);
+              setParams({ from: String(since), to: String(zoomedUntil) });
+            }}
+          />
           <DataTable table={table} label="Logs" size="sm" isLoading={isLoading} />
           {data && lines.length === 0 && (
             <p className="py-10 text-center text-body text-text-secondary">
@@ -369,6 +378,8 @@ export default function LogsPage() {
                   <code className="font-mono text-caption">logs: true</code> to a process in the agent config, or list a
                   file under <code className="font-mono text-caption">files</code>.
                 </>
+              ) : zoom ? (
+                'No log lines in this range match these filters.'
               ) : range.value === '7d' ? (
                 'No log lines match these filters.'
               ) : (
