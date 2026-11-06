@@ -160,6 +160,21 @@ export default function LogsPage() {
     ...(!hasRequests && { status: false, method: false, path: false, duration: false }),
   };
   const onOpen = useCallback((line: LogRow) => setOpenLine(line), []);
+  const onZoom = useCallback(
+    (since: number, zoomedUntil: number) => {
+      setIsLive(false);
+      setSearchParams(
+        (params) => {
+          params.set('from', String(since));
+          params.set('to', String(zoomedUntil));
+          params.delete('page');
+          return params;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
   const openIndex = openLine ? lines.findIndex((line) => line.id === openLine.id) : -1;
   const table = useLogsTable({ lines, isWrapped, columnVisibility, onOpen });
 
@@ -361,14 +376,7 @@ export default function LogsPage() {
               <Icon name="align-left" />
             </button>
           </div>
-          <LogVolume
-            volume={volume}
-            isNow={!zoom}
-            onZoom={(since, zoomedUntil) => {
-              setIsLive(false);
-              setParams({ from: String(since), to: String(zoomedUntil) });
-            }}
-          />
+          <LogVolume volume={volume} onZoom={onZoom} />
           <DataTable table={table} label="Logs" size="sm" isLoading={isLoading} />
           {data && lines.length === 0 && (
             <p className="py-10 text-center text-body text-text-secondary">
