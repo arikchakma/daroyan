@@ -9,6 +9,7 @@ import { tooltip } from '@tanstack/charts/tooltip';
 import { portal } from '@tanstack/charts/tooltip/portal';
 import { useMemo } from 'react';
 
+import { LogVolumeSkeleton } from '~/components/logs/log-volume-skeleton';
 import { Skeleton } from '~/components/ui/skeleton';
 import { cn } from '~/utils/classname';
 import { formatCount, pluralize } from '~/utils/format';
@@ -121,31 +122,35 @@ export function LogVolume(props: LogVolumeProps) {
           <LegendItem label="Info" className="bg-text-tertiary/50" />
         </div>
       </div>
-      <Chart
-        definition={definition}
-        height={CHART_HEIGHT}
-        initialWidth={960}
-        ariaLabel="Log lines over time by level"
-        className={cn('ts-chart-host text-axis [&_svg]:outline-none', !volume && 'animate-pulse')}
-        renderTooltipBody={({ points }) => {
-          const at = points[0]?.datum.at;
-          const bucket = at === undefined ? undefined : bucketsByTime.get(at);
-          if (!bucket || !volume) {
-            return null;
-          }
+      {volume ? (
+        <Chart
+          definition={definition}
+          height={CHART_HEIGHT}
+          initialWidth={960}
+          ariaLabel="Log lines over time by level"
+          className="ts-chart-host text-axis [&_svg]:outline-none"
+          renderTooltipBody={({ points }) => {
+            const at = points[0]?.datum.at;
+            const bucket = at === undefined ? undefined : bucketsByTime.get(at);
+            if (!bucket) {
+              return null;
+            }
 
-          return (
-            <div className="flex min-w-36 flex-col gap-1 rounded-lg border border-border-default bg-surface-default p-2.5 shadow-popover">
-              <span className="text-caption font-medium text-text-primary">
-                {getBucketRange(bucket.at, volume.bucket_ms)}
-              </span>
-              <TooltipRow label="Lines" value={bucket.info + bucket.warn + bucket.error} />
-              <TooltipRow label="Errors" value={bucket.error} className="bg-brand" />
-              <TooltipRow label="Warnings" value={bucket.warn} className="bg-toast-warning-icon" />
-            </div>
-          );
-        }}
-      />
+            return (
+              <div className="flex min-w-36 flex-col gap-1 rounded-lg border border-border-default bg-surface-default p-2.5 shadow-popover">
+                <span className="text-caption font-medium text-text-primary">
+                  {getBucketRange(bucket.at, volume.bucket_ms)}
+                </span>
+                <TooltipRow label="Lines" value={bucket.info + bucket.warn + bucket.error} />
+                <TooltipRow label="Errors" value={bucket.error} className="bg-brand" />
+                <TooltipRow label="Warnings" value={bucket.warn} className="bg-toast-warning-icon" />
+              </div>
+            );
+          }}
+        />
+      ) : (
+        <LogVolumeSkeleton />
+      )}
     </section>
   );
 }
