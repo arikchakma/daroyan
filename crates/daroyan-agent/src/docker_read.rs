@@ -16,11 +16,10 @@ pub use crate::docker_read_protocol::{
     ALLOW_FILE, DockerRead, EVENT_ACTIONS, ListTarget, LogsRead, render_targets,
 };
 use crate::docker_read_protocol::{
-    FrameKind, HELPER_NAME, Request, TARGETS_ENV, read_frame,
+    FrameKind, HELPER_NAME, Request, STREAM_WINDOW, TARGETS_ENV, read_frame,
 };
 use crate::service::is_permission_error;
 
-const CHUNKS_PER_STREAM: usize = 4;
 const MAX_ERROR_BYTES: usize = 64 * 1024;
 const STOPPED: &[u8] = b"the docker read helper stopped\n";
 
@@ -62,14 +61,26 @@ pub fn run(read: &DockerRead) -> Result<String> {
 
     loop {
         let mut stream = open(read, sudo);
-        let mut output = Vec::new();
-        if let Some(mut stdout) = stream.take_stdout() {
-            let _ = stdout.read_to_end(&mut output);
-        }
-        let mut error = Vec::new();
-        if let Some(stderr) = stream.take_stderr() {
-            let _ = stderr.take(MAX_ERROR_BYTES as u64).read_to_end(&mut error);
-        }
+        let stdout = stream.take_stdout();
+        let stderr = stream.take_stderr();
+        let (output, error) = thread::scope(|scope| {
+            let errors = scope.spawn(|| {
+                let mut error = Vec::new();
+                if let Some(mut stderr) = stderr {
+                    let _ = stderr
+                        .by_ref()
+                        .take(MAX_ERROR_BYTES as u64)
+                        .read_to_end(&mut error);
+                    let _ = io::copy(&mut stderr, &mut io::sink());
+                }
+                error
+            });
+            let mut output = Vec::new();
+            if let Some(mut stdout) = stdout {
+                let _ = stdout.read_to_end(&mut output);
+            }
+            (output, errors.join().unwrap_or_default())
+        });
 
         if stream.handle().wait() == 0 {
             return Ok(String::from_utf8_lossy(&output).into_owned());
@@ -109,17 +120,18 @@ pub fn open(read: &DockerRead, sudo: bool) -> DockerStream {
 }
 
 fn new_stream(id: u32, connection: Option<Arc<Connection>>) -> (DockerStream, Route) {
-    let (stdout_tx, stdout_rx) = sync_channel(CHUNKS_PER_STREAM);
-    let (stderr_tx, stderr_rx) = sync_channel(CHUNKS_PER_STREAM);
+    let (stdout_tx, stdout_rx) = sync_channel(STREAM_WINDOW);
+    let (stderr_tx, stderr_rx) = sync_channel(STREAM_WINDOW);
     let exit = Arc::new(Exit::default());
     let route = Route {
         stdout: stdout_tx,
         stderr: stderr_tx,
         exit: Arc::clone(&exit),
     };
+    let acker = connection.clone().map(|connection| Acker { id, connection });
     let stream = DockerStream {
-        stdout: Some(ChunkReader::new(stdout_rx)),
-        stderr: Some(ChunkReader::new(stderr_rx)),
+        stdout: Some(ChunkReader::new(stdout_rx, acker.clone())),
+        stderr: Some(ChunkReader::new(stderr_rx, acker)),
         handle: StreamHandle { id, exit, connection },
     };
 
@@ -175,15 +187,30 @@ impl StreamHandle {
     }
 }
 
+#[derive(Clone)]
+struct Acker {
+    id: u32,
+    connection: Arc<Connection>,
+}
+
+impl Acker {
+    fn ack(&self) {
+        if let Ok(line) = (Request::Ack { stream: self.id }).render() {
+            self.connection.send(&line);
+        }
+    }
+}
+
 pub struct ChunkReader {
     chunks: Receiver<Vec<u8>>,
     chunk: Vec<u8>,
     at: usize,
+    acker: Option<Acker>,
 }
 
 impl ChunkReader {
-    fn new(chunks: Receiver<Vec<u8>>) -> Self {
-        Self { chunks, chunk: Vec::new(), at: 0 }
+    fn new(chunks: Receiver<Vec<u8>>, acker: Option<Acker>) -> Self {
+        Self { chunks, chunk: Vec::new(), at: 0, acker }
     }
 }
 
@@ -192,6 +219,9 @@ impl Read for ChunkReader {
         while self.at >= self.chunk.len() {
             match self.chunks.recv() {
                 Ok(chunk) => {
+                    if let Some(acker) = &self.acker {
+                        acker.ack();
+                    }
                     self.chunk = chunk;
                     self.at = 0;
                 }
@@ -295,7 +325,9 @@ impl Connection {
             }
         };
 
-        let _ = sender.send(data);
+        if sender.try_send(data).is_err() {
+            warn!("{HELPER_NAME} sent more than the stream window for read {id}");
+        }
     }
 
     fn finish(&self, id: u32, code: i32) {

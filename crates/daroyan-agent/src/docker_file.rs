@@ -82,42 +82,42 @@ pub fn follow(
         .collect();
     readers.push(BufReader::with_capacity(READ_BUFFER, current));
 
-    let since = logs.since.as_deref().and_then(parse_since);
-    let mut skip = match logs.tail {
-        Some(tail) => count_lines(&mut readers)?.saturating_sub(u64::from(tail)),
-        None => 0,
-    };
+    if let Some(tail) = logs.tail {
+        let (first, offset) = find_tail(&mut readers, u64::from(tail), is_cancelled)?;
+        readers.drain(..first);
+        for (index, reader) in readers.iter_mut().enumerate() {
+            let start = if index == 0 { offset } else { 0 };
+            reader.seek(SeekFrom::Start(start)).map_err(read_error)?;
+        }
+    }
 
-    let mut line = Vec::new();
-    let mut is_too_long = false;
+    let mut lines = Lines {
+        line: Vec::new(),
+        is_too_long: false,
+        since: logs.since.as_deref().and_then(parse_since),
+        is_cancelled,
+        sink,
+    };
     let mut current = readers.pop().ok_or("no log file")?;
     for mut reader in readers {
-        while next_line(&mut reader, &mut line, &mut is_too_long).map_err(read_error)? {
-            emit(&line, &mut skip, since, sink)?;
-            line.clear();
+        if !lines.drain(&mut reader)? {
+            return Ok(true);
         }
-        line.clear();
+        lines.line.clear();
     }
 
     let mut identity = identify(current.get_ref()).map_err(read_error)?;
     let mut checked = Instant::now();
     loop {
-        while next_line(&mut current, &mut line, &mut is_too_long).map_err(read_error)? {
-            emit(&line, &mut skip, since, sink)?;
-            line.clear();
-        }
-        if !logs.follow || is_cancelled() {
+        if !lines.drain(&mut current)? || !logs.follow {
             return Ok(true);
         }
 
         if let Ok(metadata) = fs::symlink_metadata(&files.current)
             && (metadata.dev(), metadata.ino()) != identity
         {
-            while next_line(&mut current, &mut line, &mut is_too_long)
-                .map_err(read_error)?
-            {
-                emit(&line, &mut skip, since, sink)?;
-                line.clear();
+            if !lines.drain(&mut current)? {
+                return Ok(true);
             }
             let Ok(next) = open(&files.current) else {
                 thread::sleep(POLL_EVERY);
@@ -125,30 +125,49 @@ pub fn follow(
             };
             identity = identify(&next).map_err(read_error)?;
             current = BufReader::with_capacity(READ_BUFFER, next);
-            line.clear();
+            lines.line.clear();
             continue;
         }
         if current.get_ref().metadata().map_err(read_error)?.len()
             < current.stream_position().map_err(read_error)?
         {
             current.seek(SeekFrom::Start(0)).map_err(read_error)?;
-            line.clear();
+            lines.line.clear();
         }
 
         if checked.elapsed() >= CHECK_EVERY {
             checked = Instant::now();
             if !is_running() {
-                while next_line(&mut current, &mut line, &mut is_too_long)
-                    .map_err(read_error)?
-                {
-                    emit(&line, &mut skip, since, sink)?;
-                    line.clear();
-                }
+                lines.drain(&mut current)?;
                 return Ok(true);
             }
         }
 
         thread::sleep(POLL_EVERY);
+    }
+}
+
+struct Lines<'a, S> {
+    line: Vec<u8>,
+    is_too_long: bool,
+    since: Option<i128>,
+    is_cancelled: &'a dyn Fn() -> bool,
+    sink: &'a mut S,
+}
+
+impl<S: Sink> Lines<'_, S> {
+    fn drain(&mut self, reader: &mut impl BufRead) -> Result<bool, String> {
+        while next_line(reader, &mut self.line, &mut self.is_too_long)
+            .map_err(read_error)?
+        {
+            if (self.is_cancelled)() {
+                return Ok(false);
+            }
+            emit(&self.line, self.since, self.sink)?;
+            self.line.clear();
+        }
+
+        Ok(!(self.is_cancelled)())
     }
 }
 
@@ -169,22 +188,46 @@ fn identify(file: &File) -> io::Result<(u64, u64)> {
     Ok((metadata.dev(), metadata.ino()))
 }
 
-fn count_lines(readers: &mut [BufReader<File>]) -> Result<u64, String> {
-    let mut lines = 0;
+fn find_tail(
+    readers: &mut [BufReader<File>],
+    tail: u64,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<(usize, u64), String> {
+    let mut left = tail;
     let mut buffer = vec![0; READ_BUFFER];
-    for reader in readers {
-        let start = reader.stream_position().map_err(read_error)?;
-        loop {
-            let read = reader.get_mut().read(&mut buffer).map_err(read_error)?;
-            if read == 0 {
-                break;
+
+    for index in (0..readers.len()).rev() {
+        let file = readers[index].get_mut();
+        let mut end = file.metadata().map_err(read_error)?.len();
+        let mut newlines = 0;
+        while end > 0 {
+            if is_cancelled() {
+                return Err("the read was closed".to_string());
             }
-            lines += buffer[..read].iter().filter(|byte| **byte == b'\n').count() as u64;
+
+            let size =
+                usize::try_from(end).map_or(buffer.len(), |end| end.min(buffer.len()));
+            end -= size as u64;
+            file.seek(SeekFrom::Start(end)).map_err(read_error)?;
+            file.read_exact(&mut buffer[..size]).map_err(read_error)?;
+            for (at, byte) in buffer[..size].iter().enumerate().rev() {
+                if *byte != b'\n' {
+                    continue;
+                }
+                newlines += 1;
+                if newlines > left {
+                    return Ok((index, end + at as u64 + 1));
+                }
+            }
         }
-        reader.seek(SeekFrom::Start(start)).map_err(read_error)?;
+
+        left -= newlines;
+        if left == 0 {
+            return Ok((index, 0));
+        }
     }
 
-    Ok(lines)
+    Ok((0, 0))
 }
 
 fn next_line(
@@ -219,17 +262,7 @@ fn next_line(
     }
 }
 
-fn emit(
-    line: &[u8],
-    skip: &mut u64,
-    since: Option<i128>,
-    sink: &mut impl Sink,
-) -> Result<(), String> {
-    if *skip > 0 {
-        *skip -= 1;
-        return Ok(());
-    }
-
+fn emit(line: &[u8], since: Option<i128>, sink: &mut impl Sink) -> Result<(), String> {
     let Ok(record) = serde_json::from_slice::<Record>(line) else { return Ok(()) };
     if let Some(since) = since {
         let at = DateTime::parse_from_rfc3339(record.time)
@@ -357,6 +390,17 @@ mod tests {
 
         let tail = read(&files, Some(2), None);
         assert_eq!(tail.out, "2026-11-06T14:00:04.5Z four\n");
+        assert!(tail.err.is_empty());
+
+        let spanning = read(&files, Some(4), None);
+        assert_eq!(
+            spanning.out,
+            "2026-11-06T14:00:03.5Z three\n2026-11-06T14:00:04.5Z four\n"
+        );
+        assert_eq!(spanning.err, "2026-11-06T14:00:02.5Z two\n");
+
+        let everything = read(&files, Some(100), None);
+        assert_eq!(everything.out, all.out);
 
         let since = read(&files, None, Some("1793973603.5"));
         assert_eq!(
@@ -437,6 +481,31 @@ mod tests {
             collected.out,
             "2026-11-06T14:00:01.5Z first\n2026-11-06T14:00:02.5Z second\n2026-11-06T14:00:03.5Z third\n"
         );
+    }
+
+    #[test]
+    fn finds_the_tail_without_reading_the_whole_file() {
+        let folder = folder("big");
+        let current = folder.join(format!("{ID}-json.log"));
+        let mut text = String::new();
+        for at in 0..40_000 {
+            text.push_str(&record(at % 60, "filler\n", "stdout"));
+        }
+        text.push_str(&record(59, "last\n", "stdout"));
+        fs::write(&current, text).unwrap();
+        let files = find(&details(&current)).unwrap();
+
+        let newest = read(&files, Some(1), None);
+        assert_eq!(newest.out, "2026-11-06T14:00:59.5Z last\n");
+
+        let logs = LogsRead {
+            container: ID.to_string(),
+            tail: Some(1),
+            ..LogsRead::default()
+        };
+        let cancelled =
+            follow(&files, &logs, &|| true, &mut || true, &mut Collected::default());
+        assert!(cancelled.is_err());
     }
 
     #[test]

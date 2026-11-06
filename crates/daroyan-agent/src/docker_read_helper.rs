@@ -16,7 +16,8 @@ use std::thread;
 use docker_api::{Cancel, Sink};
 use docker_read_protocol::{
     ALLOW_FILE, DockerRead, FrameKind, ListTarget, MAX_CONTAINERS, MAX_FRAME_BYTES,
-    MAX_REQUEST_BYTES, Request, TARGETS_ENV, parse_targets, write_exit, write_frame,
+    MAX_REQUEST_BYTES, Request, STREAM_WINDOW, TARGETS_ENV, parse_targets, write_exit,
+    write_frame,
 };
 
 const MAX_STREAMS: usize = MAX_CONTAINERS + 16;
@@ -101,11 +102,15 @@ type Output = Arc<Mutex<Stdout>>;
 struct FrameSink {
     stream: u32,
     output: Output,
+    cancel: Arc<Cancel>,
 }
 
 impl FrameSink {
     fn send(&self, kind: FrameKind, data: &[u8]) -> io::Result<()> {
         for chunk in data.chunks(MAX_FRAME_BYTES) {
+            if !self.cancel.take_credit() {
+                return Err(io::Error::other("the read was closed"));
+            }
             write_frame(&mut *lock(&self.output), self.stream, kind, chunk)?;
         }
 
@@ -147,8 +152,13 @@ fn serve() -> ! {
             Ok(Request::Open { stream, args }) => {
                 open_stream(stream, args, &open, &output);
             }
+            Ok(Request::Ack { stream }) => {
+                if let Some(cancel) = lock(&open).get(&stream) {
+                    cancel.give_credit();
+                }
+            }
             Ok(Request::Close { stream }) => {
-                if let Some(cancel) = lock(&open).remove(&stream) {
+                if let Some(cancel) = lock(&open).get(&stream) {
                     cancel.cancel();
                 }
             }
@@ -163,7 +173,7 @@ fn open_stream(
     open: &Arc<Mutex<HashMap<u32, Arc<Cancel>>>>,
     output: &Output,
 ) {
-    let cancel = Arc::new(Cancel::default());
+    let cancel = Arc::new(Cancel::with_credits(STREAM_WINDOW));
     let is_full = {
         let mut open = lock(open);
         let is_full = open.len() >= MAX_STREAMS || open.contains_key(&stream);
@@ -172,7 +182,11 @@ fn open_stream(
         }
         is_full
     };
-    let mut sink = FrameSink { stream, output: Arc::clone(output) };
+    let mut sink = FrameSink {
+        stream,
+        output: Arc::clone(output),
+        cancel: Arc::clone(&cancel),
+    };
     if is_full {
         let _ = sink.err(b"daroyan-docker-read: too many open reads\n");
         finish(output, stream, 1);
@@ -223,7 +237,7 @@ fn lock_down() -> Result<(), String> {
     use nix::sys::prctl;
     use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
 
-    const DENIED_SYSCALLS: [i64; 22] = [
+    const DENIED_SYSCALLS: [i64; 32] = [
         libc::SYS_execve,
         libc::SYS_execveat,
         libc::SYS_ptrace,
@@ -246,6 +260,16 @@ fn lock_down() -> Result<(), String> {
         libc::SYS_init_module,
         libc::SYS_finit_module,
         libc::SYS_delete_module,
+        libc::SYS_kexec_file_load,
+        libc::SYS_fsopen,
+        libc::SYS_fsconfig,
+        libc::SYS_fsmount,
+        libc::SYS_fspick,
+        libc::SYS_move_mount,
+        libc::SYS_open_tree,
+        libc::SYS_keyctl,
+        libc::SYS_add_key,
+        libc::SYS_request_key,
     ];
 
     prctl::set_dumpable(false)

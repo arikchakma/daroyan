@@ -78,8 +78,9 @@ impl DockerEvents {
             }
 
             let mut error = String::new();
-            if let Some(stderr) = stream.take_stderr() {
-                let _ = stderr.take(ERROR_BYTES).read_to_string(&mut error);
+            if let Some(mut stderr) = stream.take_stderr() {
+                let _ = stderr.by_ref().take(ERROR_BYTES).read_to_string(&mut error);
+                let _ = std::io::copy(&mut stderr, &mut std::io::sink());
             }
             let _ = stream.handle().wait();
 

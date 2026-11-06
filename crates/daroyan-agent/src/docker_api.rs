@@ -3,7 +3,7 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 use serde_json::{Value, json};
 
@@ -34,14 +34,42 @@ pub trait Sink {
 pub struct Cancel {
     cancelled: AtomicBool,
     socket: Mutex<Option<UnixStream>>,
+    credits: Mutex<usize>,
+    more: Condvar,
 }
 
 impl Cancel {
+    pub fn with_credits(credits: usize) -> Self {
+        Self { credits: Mutex::new(credits), ..Self::default() }
+    }
+
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
         if let Some(socket) = lock(&self.socket).take() {
             let _ = socket.shutdown(Shutdown::Both);
         }
+        let _credits = lock(&self.credits);
+        self.more.notify_all();
+    }
+
+    pub fn take_credit(&self) -> bool {
+        let mut credits = lock(&self.credits);
+        loop {
+            if self.is_cancelled() {
+                return false;
+            }
+            if *credits > 0 {
+                *credits -= 1;
+                return true;
+            }
+
+            credits = self.more.wait(credits).unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    pub fn give_credit(&self) {
+        *lock(&self.credits) += 1;
+        self.more.notify_all();
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -577,7 +605,13 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{Sink, copy_multiplexed, encode, facts, filters, read_chunk_size};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    use super::{
+        Cancel, Sink, copy_multiplexed, encode, facts, filters, read_chunk_size,
+    };
     use crate::docker_read_protocol::ListTarget;
 
     #[derive(Default)]
@@ -673,6 +707,26 @@ mod tests {
         assert_eq!(facts["project"], "shop");
         assert_eq!(facts["service"], "");
         assert_eq!(facts["restart_count"], 2);
+    }
+
+    #[test]
+    fn waits_for_credit_and_wakes_on_ack_or_close() {
+        let cancel = Arc::new(Cancel::with_credits(1));
+        assert!(cancel.take_credit());
+
+        let waiting = Arc::clone(&cancel);
+        let sender = thread::spawn(move || waiting.take_credit());
+        thread::sleep(Duration::from_millis(50));
+        assert!(!sender.is_finished());
+        cancel.give_credit();
+        assert!(sender.join().unwrap());
+
+        let waiting = Arc::clone(&cancel);
+        let sender = thread::spawn(move || waiting.take_credit());
+        thread::sleep(Duration::from_millis(50));
+        cancel.cancel();
+        assert!(!sender.join().unwrap());
+        assert!(!cancel.take_credit());
     }
 
     #[test]

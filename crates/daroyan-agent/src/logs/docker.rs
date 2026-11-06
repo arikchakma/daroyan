@@ -189,18 +189,25 @@ fn read_newest(container: &str, sudo: bool) -> Option<i64> {
     };
     let mut stream = docker_read::open(&DockerRead::Logs(newest), sudo);
     let handle = stream.handle();
-    if handle.wait_for(CHECK_TIMEOUT).is_none() {
-        warn!("docker logs --tail 1 for {} timed out", short_id(container));
-        handle.close();
+    let pipes = [stream.take_stdout(), stream.take_stderr()];
+    let (output, is_done) = thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            let mut output = String::new();
+            for mut pipe in pipes.into_iter().flatten() {
+                let _ = pipe.by_ref().take(CHECK_BYTES).read_to_string(&mut output);
+                let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+            }
+            output
+        });
+        let is_done = handle.wait_for(CHECK_TIMEOUT).is_some();
+        if !is_done {
+            warn!("docker logs --tail 1 for {} timed out", short_id(container));
+            handle.close();
+        }
+        (reader.join().unwrap_or_default(), is_done)
+    });
+    if !is_done {
         return None;
-    }
-
-    let mut output = String::new();
-    if let Some(stdout) = stream.take_stdout() {
-        let _ = stdout.take(CHECK_BYTES).read_to_string(&mut output);
-    }
-    if let Some(stderr) = stream.take_stderr() {
-        let _ = stderr.take(CHECK_BYTES).read_to_string(&mut output);
     }
 
     output

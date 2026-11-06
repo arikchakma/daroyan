@@ -6,7 +6,8 @@ pub const HELPER_NAME: &str = "daroyan-docker-read";
 pub const TARGETS_ENV: &str = "DAROYAN_DOCKER_TARGETS";
 
 pub const MAX_FRAME_BYTES: usize = 16 * 1024;
-pub const MAX_REQUEST_BYTES: usize = 4 * 1024;
+pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
+pub const STREAM_WINDOW: usize = 4;
 pub const MAX_CONTAINERS: usize = 256;
 const MAX_TAIL: u32 = 100_000;
 const MAX_REF_BYTES: usize = 128;
@@ -300,6 +301,7 @@ pub fn read_frame(input: &mut impl Read) -> io::Result<Option<Frame>> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Request {
     Open { stream: u32, args: Vec<String> },
+    Ack { stream: u32 },
     Close { stream: u32 },
 }
 
@@ -310,6 +312,7 @@ impl Request {
                 .into_iter()
                 .chain(args.iter().cloned())
                 .collect(),
+            Self::Ack { stream } => vec!["ack".to_string(), stream.to_string()],
             Self::Close { stream } => vec!["close".to_string(), stream.to_string()],
         };
         if fields.iter().any(|field| field.contains(['\t', '\n', '\r'])) {
@@ -336,6 +339,7 @@ impl Request {
             "open" => {
                 Ok(Self::Open { stream, args: fields.map(str::to_string).collect() })
             }
+            "ack" if fields.next().is_none() => Ok(Self::Ack { stream }),
             "close" if fields.next().is_none() => Ok(Self::Close { stream }),
             other => Err(format!("unknown request {other}")),
         }
@@ -437,6 +441,15 @@ mod tests {
         assert_eq!(Request::parse(&open.render().unwrap()).unwrap(), open);
         let close = Request::Close { stream: 3 };
         assert_eq!(Request::parse(&close.render().unwrap()).unwrap(), close);
+        let ack = Request::Ack { stream: 3 };
+        assert_eq!(Request::parse(&ack.render().unwrap()).unwrap(), ack);
+
+        let many = (0..256).map(|_| "a".repeat(128)).collect::<Vec<_>>();
+        let inspect = Request::Open {
+            stream: 4,
+            args: ["inspect".to_string()].into_iter().chain(many).collect(),
+        };
+        assert!(inspect.render().is_ok());
 
         let bad = Request::Open { stream: 1, args: strings(&["logs", "a\nb"]) };
         assert!(bad.render().is_err());
