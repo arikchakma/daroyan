@@ -7,9 +7,11 @@ import { AlertBanners } from '~/components/alerts/alert-banners';
 import { Icon } from '~/components/icons/icon';
 import { LogSheet } from '~/components/logs/log-sheet';
 import { LogVolume } from '~/components/logs/log-volume';
+import { SaveViewDialog } from '~/components/logs/save-view-dialog';
 import { ViewMenu, VIEWS } from '~/components/logs/view-menu';
 import type { LevelView } from '~/components/logs/view-menu';
 import { ColumnMenu } from '~/components/ui/column-menu';
+import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { DataTable } from '~/components/ui/data-table';
 import { EmptyState } from '~/components/ui/empty-state';
 import { Menu } from '~/components/ui/menu';
@@ -30,6 +32,8 @@ import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { readListParam } from '~/utils/filter';
 import { joinNames } from '~/utils/format';
+import { getViewChips, getViewParams, isSameView } from '~/utils/log-views';
+import type { SavedLogView } from '~/utils/log-views';
 import type { SearchFilterField } from '~/utils/filter';
 import { getZoomLabel, OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
@@ -37,6 +41,7 @@ const PAGE_SIZE = 50;
 const EXPORT_LIMIT = 5_000;
 const COLUMNS_KEY = 'daroyan.logs.columns';
 const WRAP_KEY = 'daroyan.logs.wrap';
+const SAVED_VIEWS_KEY = 'daroyan.logs.views';
 
 const FILTER_KEYS = [
   { key: 'server', param: 'server_id' },
@@ -101,6 +106,9 @@ export default function LogsPage() {
   const [openLine, setOpenLine] = useState<LogRow>();
   const [isWrapped, setIsWrapped] = useStoredState(WRAP_KEY, false);
   const [hiddenColumns, setHiddenColumns] = useStoredState<ColumnVisibilityState>(COLUMNS_KEY, {});
+  const [savedViews, setSavedViews] = useStoredState<SavedLogView[]>(SAVED_VIEWS_KEY, []);
+  const [isSavingView, setIsSavingView] = useState(false);
+  const [removingView, setRemovingView] = useState<SavedLogView>();
   const [isExporting, setIsExporting] = useState(false);
 
   const setParams = (changes: Record<string, string | null>) => {
@@ -129,7 +137,7 @@ export default function LogsPage() {
     }
     const timer = setTimeout(() => setParams({ q: search.trim() || null }), 300);
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [search, q]);
 
   const isFollowing = isLive && page === 1 && !zoom;
   const filters = {
@@ -256,6 +264,37 @@ export default function LogsPage() {
   const isViewChanged =
     view !== 'all' || !!q || Object.keys(filterParams).length > 0 || range.value !== DEFAULT_RANGE || !!zoom;
   const hasNoSources = sources?.length === 0;
+  const viewParams = getViewParams(searchParams);
+  const activeView = savedViews.find((saved) => isSameView(saved.params, viewParams));
+  const canSaveView = Object.keys(viewParams).length > 0 && !activeView;
+  const viewChips = getViewChips({
+    levelLabel: view === 'all' ? undefined : VIEWS.find((item) => item.value === view)?.label,
+    filters: fields.map((field) => ({
+      label: field.label,
+      negate: filterValues[field.key]!.negate,
+      values: filterValues[field.key]!.values.map(
+        (value) => field.options.find((option) => option.value === value)?.label ?? value
+      ),
+    })),
+    q,
+    rangeLabel: range.value === DEFAULT_RANGE ? undefined : range.label,
+  });
+
+  const applyView = (saved: SavedLogView) => {
+    setSearch(saved.params.q ?? '');
+    setSearchParams(new URLSearchParams(saved.params), { replace: true });
+    setUntil(Date.now());
+  };
+  const saveView = (name: string) => {
+    setSavedViews([...savedViews, { id: String(Date.now()), name, params: viewParams }]);
+    setIsSavingView(false);
+    toast.success(`Saved ${name}`);
+  };
+  const removeView = (removed: SavedLogView) => {
+    setSavedViews(savedViews.filter((saved) => saved.id !== removed.id));
+    setRemovingView(undefined);
+    toast.success(`Removed ${removed.name}`);
+  };
 
   useCommandActions('Actions', [
     !hasNoSources && {
@@ -336,7 +375,16 @@ export default function LogsPage() {
         <div className="flex flex-1 flex-col gap-2 px-3 pt-1 pb-3">
           {isTelemetryView && <AlertBanners serverId={OTLP_SERVER_ID} />}
           <div className="flex h-9 w-full items-center gap-0.5 rounded-lg bg-surface-default p-1 shadow-filter-bar ring-1 ring-border-elevated ring-inset">
-            <ViewMenu view={view} onChange={(next) => setParams({ level: next === 'all' ? null : next })} />
+            <ViewMenu
+              view={view}
+              savedViews={savedViews}
+              activeView={activeView}
+              canSaveView={canSaveView}
+              onChange={(next) => setParams({ level: next === 'all' ? null : next })}
+              onApplyView={applyView}
+              onRemoveView={setRemovingView}
+              onSaveView={() => setIsSavingView(true)}
+            />
             <SearchFilter
               label="Search, or -path:/v1/health"
               fields={fields}
@@ -351,6 +399,16 @@ export default function LogsPage() {
               query={search}
               onQueryChange={setSearch}
             />
+            {canSaveView && (
+              <button
+                type="button"
+                onClick={() => setIsSavingView(true)}
+                className="flex h-7 shrink-0 items-center gap-1 rounded-sm pr-2 pl-1.5 text-body font-medium text-text-secondary outline-none hover:bg-surface-fill hover:text-text-primary focus-visible:ring-2 focus-visible:ring-text-link/40"
+              >
+                <Icon name="plus" />
+                Save View
+              </button>
+            )}
             {isViewChanged && (
               <ResetViewButton
                 onReset={() => {
@@ -427,6 +485,17 @@ export default function LogsPage() {
           />
         </div>
       )}
+
+      <SaveViewDialog open={isSavingView} onOpenChange={setIsSavingView} chips={viewChips} onSave={saveView} />
+      <ConfirmDialog
+        open={!!removingView}
+        onOpenChange={(open) => !open && setRemovingView(undefined)}
+        title={`Remove ${removingView?.name ?? 'View'}?`}
+        description="Only the saved view goes. No logs are deleted."
+        confirmLabel="Remove View"
+        isPending={false}
+        onConfirm={() => removingView && removeView(removingView)}
+      />
 
       <LogSheet
         line={openLine}
