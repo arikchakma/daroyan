@@ -1701,6 +1701,134 @@
         }
       }
     },
+    "/v1/logs/volume": {
+      "get": {
+        "operationId": "get_log_volume",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "query",
+            "description": "Server IDs, comma separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "server_op",
+            "in": "query",
+            "description": "`not` excludes the servers",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "description": "Sources, comma separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "service_op",
+            "in": "query",
+            "description": "`not` excludes the sources",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "query",
+            "description": "HTTP methods, comma separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method_op",
+            "in": "query",
+            "description": "`not` excludes the methods",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "HTTP status classes like 4xx, comma separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status_op",
+            "in": "query",
+            "description": "`not` excludes the status classes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "description": "The lowest level counted: debug, info, warn or error",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "The same search as /v1/logs",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Start of the range in ms. Defaults to 24 hours before until",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "End of the range in ms. Defaults to now",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogVolume"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/mcp-tokens": {
       "get": {
         "operationId": "list_mcp_tokens",
@@ -5456,6 +5584,36 @@
           }
         }
       },
+      "LogBucket": {
+        "type": "object",
+        "required": [
+          "at",
+          "info",
+          "warn",
+          "error"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "info": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "warn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "LogGroup": {
         "type": "string",
         "enum": [
@@ -5566,6 +5724,35 @@
           },
           "service": {
             "type": "string"
+          }
+        }
+      },
+      "LogVolume": {
+        "type": "object",
+        "required": [
+          "bucket_ms",
+          "since",
+          "until",
+          "buckets"
+        ],
+        "properties": {
+          "bucket_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogBucket"
+            }
+          },
+          "since": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "until": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

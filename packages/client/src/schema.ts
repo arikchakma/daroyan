@@ -757,6 +757,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/logs/volume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_log_volume"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp-tokens": {
         parameters: {
             query?: never;
@@ -1918,6 +1934,16 @@ export interface components {
             state: components["schemas"]["State"];
             top?: components["schemas"]["TopProcess"][];
         };
+        LogBucket: {
+            /** Format: int64 */
+            at: number;
+            /** Format: int64 */
+            error: number;
+            /** Format: int64 */
+            info: number;
+            /** Format: int64 */
+            warn: number;
+        };
         /** @enum {string} */
         LogGroup: "server" | "source";
         LogLine: {
@@ -1945,6 +1971,15 @@ export interface components {
         LogSource: {
             server_id: string;
             service: string;
+        };
+        LogVolume: {
+            /** Format: int64 */
+            bucket_ms: number;
+            buckets: components["schemas"]["LogBucket"][];
+            /** Format: int64 */
+            since: number;
+            /** Format: int64 */
+            until: number;
         };
         McpToken: {
             /** Format: date-time */
@@ -4027,6 +4062,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogSource"][];
+                };
+            };
+        };
+    };
+    get_log_volume: {
+        parameters: {
+            query?: {
+                /** @description Server IDs, comma separated */
+                server_id?: string;
+                /** @description `not` excludes the servers */
+                server_op?: string;
+                /** @description Sources, comma separated */
+                service?: string;
+                /** @description `not` excludes the sources */
+                service_op?: string;
+                /** @description HTTP methods, comma separated */
+                method?: string;
+                /** @description `not` excludes the methods */
+                method_op?: string;
+                /** @description HTTP status classes like 4xx, comma separated */
+                status?: string;
+                /** @description `not` excludes the status classes */
+                status_op?: string;
+                /** @description The lowest level counted: debug, info, warn or error */
+                level?: string;
+                /** @description The same search as /v1/logs */
+                q?: string;
+                /** @description Start of the range in ms. Defaults to 24 hours before until */
+                since?: number;
+                /** @description End of the range in ms. Defaults to now */
+                until?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogVolume"];
                 };
             };
         };

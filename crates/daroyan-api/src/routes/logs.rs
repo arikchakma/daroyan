@@ -2,8 +2,8 @@ use axum::Json;
 use axum::extract::{Query, State};
 use chrono::Utc;
 use daroyan_core::analytics::log_lines::{
-    LogFilter, LogItem, LogQuery, LogSource, SearchTerm, list_log_context,
-    list_log_sources, list_logs,
+    LogBucket, LogFilter, LogItem, LogQuery, LogSearch, LogSource, SearchTerm,
+    count_log_buckets, list_log_context, list_log_sources, list_logs,
 };
 use daroyan_core::error::{Error, ErrorName, Result};
 use daroyan_protocol::log::{
@@ -20,10 +20,31 @@ use crate::extract::CurrentUser;
 const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 200;
 const CONTEXT_LINES: u32 = 20;
+const DEFAULT_VOLUME_MS: i64 = 24 * 3_600_000;
+const MAX_BUCKETS: i64 = 120;
+const BUCKET_STEPS_MS: [i64; 16] = [
+    1_000,
+    5_000,
+    10_000,
+    30_000,
+    60_000,
+    5 * 60_000,
+    10 * 60_000,
+    15 * 60_000,
+    30 * 60_000,
+    3_600_000,
+    2 * 3_600_000,
+    3 * 3_600_000,
+    6 * 3_600_000,
+    12 * 3_600_000,
+    24 * 3_600_000,
+    7 * 24 * 3_600_000,
+];
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_logs))
+        .routes(routes!(get_log_volume))
         .routes(routes!(get_log_sources))
         .routes(routes!(get_log_context))
 }
@@ -52,6 +73,15 @@ struct LogPageView {
     lines: Vec<LogItem>,
     has_more: bool,
     until: i64,
+}
+
+#[derive(Serialize, ToSchema)]
+#[schema(as = LogVolume)]
+struct LogVolumeView {
+    bucket_ms: i64,
+    since: i64,
+    until: i64,
+    buckets: Vec<LogBucket>,
 }
 
 fn read_min_severity(level: &str) -> Result<u8> {
@@ -171,31 +201,97 @@ async fn get_logs(
     Query(query): Query<LogsQuery>,
 ) -> Result<Json<LogPageView>> {
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let until = query.until.unwrap_or_else(|| Utc::now().timestamp_millis());
-    let min_severity = query.level.as_deref().map(read_min_severity).transpose()?;
+    let offset = query.offset.unwrap_or(0);
+    let search = read_search(query)?;
+    let until = search.until;
+    let mut lines =
+        list_logs(&state.analytics, LogQuery { search, offset, limit: limit + 1 })
+            .await?;
+    let has_more = lines.len() > limit as usize;
+    lines.truncate(limit as usize);
+    Ok(Json(LogPageView { lines, has_more, until }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/logs/volume",
+    params(
+        ("server_id" = Option<String>, Query, description = "Server IDs, comma separated"),
+        ("server_op" = Option<String>, Query, description = "`not` excludes the servers"),
+        ("service" = Option<String>, Query, description = "Sources, comma separated"),
+        ("service_op" = Option<String>, Query, description = "`not` excludes the sources"),
+        ("method" = Option<String>, Query, description = "HTTP methods, comma separated"),
+        ("method_op" = Option<String>, Query, description = "`not` excludes the methods"),
+        ("status" = Option<String>, Query, description = "HTTP status classes like 4xx, comma separated"),
+        ("status_op" = Option<String>, Query, description = "`not` excludes the status classes"),
+        ("level" = Option<String>, Query, description = "The lowest level counted: debug, info, warn or error"),
+        ("q" = Option<String>, Query, description = "The same search as /v1/logs"),
+        ("since" = Option<i64>, Query, description = "Start of the range in ms. Defaults to 24 hours before until"),
+        ("until" = Option<i64>, Query, description = "End of the range in ms. Defaults to now")
+    ),
+    responses((status = 200, body = LogVolumeView))
+)]
+async fn get_log_volume(
+    State(state): State<AppState>,
+    _user: CurrentUser,
+    Query(query): Query<LogsQuery>,
+) -> Result<Json<LogVolumeView>> {
+    let mut search = read_search(query)?;
+    let until = search.until;
+    let since = search.since.unwrap_or(until - DEFAULT_VOLUME_MS).min(until);
+    let bucket_ms = pick_bucket_ms(until - since);
+    let start = since.div_euclid(bucket_ms) * bucket_ms;
+    search.since = Some(since);
+
+    let counted = count_log_buckets(&state.analytics, search, bucket_ms).await?;
+    Ok(Json(LogVolumeView {
+        bucket_ms,
+        since,
+        until,
+        buckets: fill_buckets(counted, start, until, bucket_ms),
+    }))
+}
+
+fn read_search(query: LogsQuery) -> Result<LogSearch> {
     let mut status_classes = read_filter(query.status, query.status_op);
     for value in &mut status_classes.values {
         *value = value.trim_end_matches(['x', 'X']).to_string();
     }
-    let mut lines = list_logs(
-        &state.analytics,
-        LogQuery {
-            servers: read_filter(query.server_id, query.server_op),
-            services: read_filter(query.service, query.service_op),
-            methods: read_filter(query.method, query.method_op),
-            status_classes,
-            min_severity,
-            terms: split_search(query.q.as_deref().unwrap_or_default()),
-            since: query.since,
-            until,
-            offset: query.offset.unwrap_or(0),
-            limit: limit + 1,
-        },
-    )
-    .await?;
-    let has_more = lines.len() > limit as usize;
-    lines.truncate(limit as usize);
-    Ok(Json(LogPageView { lines, has_more, until }))
+
+    Ok(LogSearch {
+        servers: read_filter(query.server_id, query.server_op),
+        services: read_filter(query.service, query.service_op),
+        methods: read_filter(query.method, query.method_op),
+        status_classes,
+        min_severity: query.level.as_deref().map(read_min_severity).transpose()?,
+        terms: split_search(query.q.as_deref().unwrap_or_default()),
+        since: query.since,
+        until: query.until.unwrap_or_else(|| Utc::now().timestamp_millis()),
+    })
+}
+
+fn pick_bucket_ms(span_ms: i64) -> i64 {
+    BUCKET_STEPS_MS
+        .into_iter()
+        .find(|step| span_ms / step < MAX_BUCKETS)
+        .unwrap_or(BUCKET_STEPS_MS[BUCKET_STEPS_MS.len() - 1])
+}
+
+fn fill_buckets(
+    counted: Vec<LogBucket>,
+    start: i64,
+    until: i64,
+    bucket_ms: i64,
+) -> Vec<LogBucket> {
+    let mut counted = counted.into_iter().peekable();
+    (start..=until)
+        .step_by(bucket_ms as usize)
+        .map(|at| {
+            counted
+                .next_if(|bucket| bucket.at == at)
+                .unwrap_or(LogBucket { at, ..LogBucket::default() })
+        })
+        .collect()
 }
 
 #[utoipa::path(get, path = "/v1/logs/sources", responses((status = 200, body = Vec<LogSource>)))]
@@ -238,7 +334,9 @@ async fn get_log_context(
 
 #[cfg(test)]
 mod tests {
-    use super::split_search;
+    use daroyan_core::analytics::log_lines::LogBucket;
+
+    use super::{fill_buckets, pick_bucket_ms, split_search};
 
     fn read(q: &str) -> Vec<(Option<String>, String, bool)> {
         split_search(q)
@@ -267,6 +365,31 @@ mod tests {
             [
                 (None, "@broken".to_string(), false),
                 (Some("msg".to_string()), "two words".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn picks_about_a_hundred_buckets() {
+        let minute = 60_000;
+        let hour = 60 * minute;
+        assert_eq!(pick_bucket_ms(15 * minute), 10_000);
+        assert_eq!(pick_bucket_ms(hour), 60_000);
+        assert_eq!(pick_bucket_ms(24 * hour), 15 * minute);
+        assert_eq!(pick_bucket_ms(7 * 24 * hour), 2 * hour);
+        assert_eq!(pick_bucket_ms(0), 1_000);
+    }
+
+    #[test]
+    fn fills_empty_buckets_with_zeros() {
+        let error = LogBucket { at: 20, error: 3, ..LogBucket::default() };
+        let buckets = fill_buckets(vec![error.clone()], 10, 35, 10);
+        assert_eq!(
+            buckets,
+            [
+                LogBucket { at: 10, ..LogBucket::default() },
+                error,
+                LogBucket { at: 30, ..LogBucket::default() },
             ]
         );
     }
