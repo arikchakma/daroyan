@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -13,6 +13,7 @@ use log::warn;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 
+use crate::docker_read::{self, DockerRead, DockerStream, StreamHandle};
 use crate::logs::parse::RawLine;
 use crate::service::is_permission_error;
 
@@ -26,6 +27,8 @@ const LAST_RETRY: Duration = Duration::from_secs(30);
 const STEADY_AFTER: Duration = Duration::from_secs(60);
 const READ_BUFFER: usize = 64 * 1024;
 const THREAD_STACK: usize = 256 * 1024;
+
+static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Position {
@@ -58,7 +61,7 @@ pub struct FollowedLine {
 pub trait Feed: Send + Sync + 'static {
     fn name(&self) -> String;
 
-    fn command(&self, from: Option<&Position>, sudo: bool) -> Command;
+    fn launch(&self, from: Option<&Position>, sudo: bool) -> Launch;
 
     fn read(&self, line: &[u8], stream: LogStream) -> Option<RawLine>;
 
@@ -85,10 +88,107 @@ pub trait Feed: Send + Sync + 'static {
     }
 }
 
+pub enum Launch {
+    Command(Command),
+    Docker { read: DockerRead, sudo: bool },
+}
+
+#[derive(Clone)]
+enum Stopper {
+    Group(i32),
+    Stream(StreamHandle),
+}
+
+impl Stopper {
+    fn terminate(&self) {
+        match self {
+            Self::Group(pid) => signal_group(*pid, Signal::SIGTERM),
+            Self::Stream(stream) => stream.close(),
+        }
+    }
+
+    fn kill(&self) {
+        match self {
+            Self::Group(pid) => signal_group(*pid, Signal::SIGKILL),
+            Self::Stream(stream) => stream.close(),
+        }
+    }
+}
+
+enum Process {
+    Child(Child),
+    Stream(DockerStream),
+}
+
+struct Running {
+    run: u64,
+    stopper: Stopper,
+    process: Process,
+}
+
+impl Running {
+    fn start(launch: Launch) -> std::io::Result<Self> {
+        let run = NEXT_RUN.fetch_add(1, Ordering::AcqRel);
+        match launch {
+            Launch::Command(mut command) => {
+                command
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .process_group(0);
+                let child = command.spawn()?;
+                let stopper = Stopper::Group(child.id().cast_signed());
+                Ok(Self { run, stopper, process: Process::Child(child) })
+            }
+            Launch::Docker { read, sudo } => {
+                let stream = docker_read::open(&read, sudo);
+                let stopper = Stopper::Stream(stream.handle());
+                Ok(Self { run, stopper, process: Process::Stream(stream) })
+            }
+        }
+    }
+
+    fn take_pipes(
+        &mut self,
+    ) -> (Option<Box<dyn Read + Send>>, Option<Box<dyn Read + Send>>) {
+        match &mut self.process {
+            Process::Child(child) => (
+                child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+                child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+            ),
+            Process::Stream(stream) => (
+                stream
+                    .take_stdout()
+                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+                stream
+                    .take_stderr()
+                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+            ),
+        }
+    }
+
+    fn finish(self) -> (bool, Option<String>) {
+        match self.process {
+            Process::Child(mut child) => {
+                wait_for_exit(child.id().cast_signed());
+                let status = child.wait().ok();
+                (
+                    status.is_some_and(|status| status.success()),
+                    status.map(|status| status.to_string()),
+                )
+            }
+            Process::Stream(stream) => {
+                let code = stream.handle().wait();
+                (code == 0, Some(format!("exit status: {code}")))
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct Group {
     stopped: bool,
-    pids: HashSet<i32>,
+    running: HashMap<u64, Stopper>,
 }
 
 #[derive(Clone, Default)]
@@ -100,14 +200,14 @@ impl LogFollowers {
     pub fn stop(&self) {
         let mut group = lock(&self.group);
         group.stopped = true;
-        for pid in &group.pids {
-            signal_group(*pid, Signal::SIGTERM);
+        for stopper in group.running.values() {
+            stopper.terminate();
         }
     }
 
     pub fn kill_left(&self) {
-        for pid in &lock(&self.group).pids {
-            signal_group(*pid, Signal::SIGKILL);
+        for stopper in lock(&self.group).running.values() {
+            stopper.kill();
         }
     }
 
@@ -116,20 +216,20 @@ impl LogFollowers {
     }
 
     pub fn has_children(&self) -> bool {
-        !lock(&self.group).pids.is_empty()
+        !lock(&self.group).running.is_empty()
     }
 
-    fn register(&self, pid: i32) {
+    fn register(&self, run: u64, stopper: Stopper) {
         let mut group = lock(&self.group);
         if group.stopped {
-            signal_group(pid, Signal::SIGTERM);
+            stopper.terminate();
         }
 
-        group.pids.insert(pid);
+        group.running.insert(run, stopper);
     }
 
-    fn release(&self, pid: i32) {
-        lock(&self.group).pids.remove(&pid);
+    fn release(&self, run: u64) {
+        lock(&self.group).running.remove(&run);
     }
 }
 
@@ -241,7 +341,7 @@ impl Sink {
 #[derive(Default)]
 struct Slot {
     stopped: bool,
-    pid: Option<i32>,
+    running: Option<Stopper>,
 }
 
 impl Slot {
@@ -251,8 +351,8 @@ impl Slot {
     }
 
     fn interrupt(&self) {
-        if let Some(pid) = self.pid {
-            signal_group(pid, Signal::SIGTERM);
+        if let Some(stopper) = &self.running {
+            stopper.terminate();
         }
     }
 }
@@ -355,7 +455,7 @@ struct FollowTask<F> {
 struct RunEnd {
     used_sudo: bool,
     is_clean: bool,
-    status: Option<ExitStatus>,
+    status: Option<String>,
     has_gap: AtomicBool,
     has_overlap: AtomicBool,
     has_started: AtomicBool,
@@ -416,10 +516,7 @@ impl<F: Feed> FollowTask<F> {
             }
             if !end.is_clean {
                 let error = error.unwrap_or_else(|| {
-                    end.status.map_or_else(
-                        || "not started".to_string(),
-                        |status| status.to_string(),
-                    )
+                    end.status.unwrap_or_else(|| "not started".to_string())
                 });
                 warn!(
                     "{} failed ({error}), following again in {}s",
@@ -451,13 +548,11 @@ impl<F: Feed> FollowTask<F> {
             used_sudo: self.feed.can_use_sudo() && self.sudo.load(Ordering::Acquire),
             ..RunEnd::default()
         };
-        let Some(mut child) = self.spawn(from, end.used_sudo) else {
+        let Some(mut running) = self.spawn(from, end.used_sudo) else {
             return end;
         };
-        let pid = child.id().cast_signed();
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
+        let (stdout, stderr) = running.take_pipes();
         thread::scope(|scope| {
             if let Some(stderr) = stderr {
                 let reader = thread::Builder::new()
@@ -475,39 +570,31 @@ impl<F: Feed> FollowTask<F> {
             }
         });
 
-        wait_for_exit(pid);
-        lock(&self.slot).pid = None;
-        self.group.release(pid);
-        let status = child.wait().ok();
-        let is_clean = status.is_some_and(|status| status.success());
+        let run = running.run;
+        let (is_clean, status) = running.finish();
+        lock(&self.slot).running = None;
+        self.group.release(run);
 
         RunEnd { is_clean, status, ..end }
     }
 
-    fn spawn(&self, from: Option<&Position>, sudo: bool) -> Option<Child> {
-        let mut command = self.feed.command(from, sudo);
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
+    fn spawn(&self, from: Option<&Position>, sudo: bool) -> Option<Running> {
+        let launch = self.feed.launch(from, sudo);
 
         let mut slot = lock(&self.slot);
         if slot.stopped {
             return None;
         }
 
-        let child = command
-            .spawn()
+        let running = Running::start(launch)
             .inspect_err(|error| warn!("could not run {}: {error}", self.name))
             .ok()?;
-        let pid = child.id().cast_signed();
-        slot.pid = Some(pid);
+        slot.running = Some(running.stopper.clone());
         drop(slot);
 
-        self.group.register(pid);
+        self.group.register(running.run, running.stopper.clone());
 
-        Some(child)
+        Some(running)
     }
 
     fn read_stream(
@@ -654,7 +741,7 @@ mod tests {
     use daroyan_protocol::log::LogStream;
 
     use super::{
-        Feed, FollowTask, LineQueue, LogFollowers, Position, RunEnd, Slot,
+        Feed, FollowTask, Launch, LineQueue, LogFollowers, Position, RunEnd, Slot,
         read_line_capped,
     };
     use crate::logs::parse::RawLine;
@@ -666,12 +753,8 @@ mod tests {
             "numbered".to_string()
         }
 
-        fn command(
-            &self,
-            _from: Option<&Position>,
-            _sudo: bool,
-        ) -> std::process::Command {
-            std::process::Command::new("true")
+        fn launch(&self, _from: Option<&Position>, _sudo: bool) -> Launch {
+            Launch::Command(std::process::Command::new("true"))
         }
 
         fn read(&self, line: &[u8], stream: LogStream) -> Option<RawLine> {

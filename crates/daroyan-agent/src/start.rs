@@ -20,7 +20,9 @@ use crate::collect::{Collector, now_millis};
 use crate::command::HeldProcesses;
 use crate::config::{Config, Source, load_config};
 use crate::connection::run_connection;
+use crate::docker_read;
 use crate::enroll::load_or_enroll;
+use crate::grants::list_read_targets;
 use crate::logger::start_logger;
 use crate::logs::{LogFollowers, collect_logs};
 
@@ -46,6 +48,7 @@ async fn run(config: Config) -> Result<()> {
     let server = load_or_enroll(&config, &host).await?;
     info!("reporting as {} ({}) to {}", host.name, server.server_id, config.api.url);
 
+    docker_read::set_targets(&list_read_targets(&config));
     let config = Arc::new(config);
     let held = HeldProcesses::default();
     let events = config
