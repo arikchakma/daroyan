@@ -951,6 +951,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/servers/{server_id}/starred": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["star_server"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/status-pages": {
         parameters: {
             query?: never;
@@ -2239,6 +2255,8 @@ export interface components {
             /** Format: date-time */
             last_seen_at?: string | null;
             name: string;
+            /** Format: date-time */
+            starred_at?: string | null;
             status: components["schemas"]["ServerStatus"];
         };
         ServerItem: {
@@ -2268,6 +2286,8 @@ export interface components {
             platform?: string | null;
             platform_version?: string | null;
             private_ip?: string | null;
+            /** Format: date-time */
+            starred_at?: string | null;
             status: components["schemas"]["ServerStatus"];
             /** Format: int64 */
             uptime?: number | null;
@@ -2286,6 +2306,9 @@ export interface components {
         SlackInstall: {
             channels: components["schemas"]["SlackChannel"][];
             team_name: string;
+        };
+        StarServerBody: {
+            starred: boolean;
         };
         StartedSignIn: {
             authorization_url: string;
@@ -4363,6 +4386,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServerMetrics"];
+                };
+            };
+        };
+    };
+    star_server: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StarServerBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServerDetail"];
                 };
             };
         };

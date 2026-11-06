@@ -6,6 +6,7 @@ import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { ServerStatusBadge } from '~/components/servers/server-status-badge';
+import { StarButton } from '~/components/servers/star-button';
 import { UsageBar } from '~/components/servers/usage-bar';
 import { Dash } from '~/components/ui/dash';
 import { Menu } from '~/components/ui/menu';
@@ -13,12 +14,14 @@ import { SortableHeader } from '~/components/ui/sortable-header';
 import { useDataTable } from '~/hooks/use-data-table';
 import { resolveUpdater } from '~/lib/table';
 import type { DataTableFeatures } from '~/lib/table';
-import { formatRelative, formatUptimeDays } from '~/utils/format';
-import { getServerSubtitle, isServerLive } from '~/utils/servers';
+import { formatRelative } from '~/utils/format';
+import { isServerLive } from '~/utils/servers';
 
 type ServerItem = Schemas['ServerItem'];
 
 const helper = createColumnHelper<DataTableFeatures, ServerItem>();
+
+const STARRED_SORT = { id: 'starred', desc: true };
 
 type UseServersTableOptions = {
   servers: ServerItem[];
@@ -32,24 +35,30 @@ export function useServersTable(options: UseServersTableOptions) {
   const columns = useMemo(
     () =>
       helper.columns([
+        helper.accessor((server) => (server.starred_at ? 1 : 0), {
+          id: 'starred',
+          sortFn: 'basic',
+          meta: { width: 36, skeleton: 'none' },
+          header: () => (
+            <span className="flex w-6 justify-center text-border-strong">
+              <Icon name="star-fill" className="size-3.5" />
+              <span className="sr-only">Starred</span>
+            </span>
+          ),
+          cell: ({ row }) => <StarButton server={row.original} />,
+        }),
         helper.accessor('name', {
           id: 'name',
           header: ({ column }) => <SortableHeader column={column} label="Server" />,
           sortFn: 'text',
           sortDescFirst: false,
-          meta: { skeleton: 'lines' },
           cell: ({ row }) => (
-            <span className="flex min-w-0 flex-col gap-0.5">
-              <Link
-                to={`/servers/${row.original.id}`}
-                className="truncate font-medium outline-none after:absolute after:inset-0 focus-visible:underline"
-              >
-                {row.original.name}
-              </Link>
-              <span className="truncate text-small text-text-tertiary">
-                {getServerSubtitle(row.original) || 'Waiting for the first report'}
-              </span>
-            </span>
+            <Link
+              to={`/servers/${row.original.id}`}
+              className="block truncate font-medium outline-none after:absolute after:inset-0 focus-visible:underline"
+            >
+              {row.original.name}
+            </Link>
           ),
         }),
         helper.accessor('status', {
@@ -63,7 +72,7 @@ export function useServersTable(options: UseServersTableOptions) {
           header: ({ column }) => <SortableHeader column={column} label="CPU" />,
           sortFn: 'basic',
           sortDescFirst: true,
-          meta: { width: 120, hideBelow: 'lg' },
+          meta: { width: 150, hideBelow: 'lg' },
           cell: ({ row }) => <UsageBar percent={isServerLive(row.original) ? row.original.cpu : null} />,
         }),
         helper.accessor((server) => (isServerLive(server) ? (server.mem_percent ?? 0) : -1), {
@@ -71,7 +80,7 @@ export function useServersTable(options: UseServersTableOptions) {
           header: ({ column }) => <SortableHeader column={column} label="Memory" />,
           sortFn: 'basic',
           sortDescFirst: true,
-          meta: { width: 120, hideBelow: 'lg' },
+          meta: { width: 150, hideBelow: 'lg' },
           cell: ({ row }) => <UsageBar percent={isServerLive(row.original) ? row.original.mem_percent : null} />,
         }),
         helper.accessor((server) => (isServerLive(server) ? (server.disk_percent ?? 0) : -1), {
@@ -79,19 +88,8 @@ export function useServersTable(options: UseServersTableOptions) {
           header: ({ column }) => <SortableHeader column={column} label="Disk" />,
           sortFn: 'basic',
           sortDescFirst: true,
-          meta: { width: 120, hideBelow: 'lg' },
+          meta: { width: 150, hideBelow: 'lg' },
           cell: ({ row }) => <UsageBar percent={isServerLive(row.original) ? row.original.disk_percent : null} />,
-        }),
-        helper.accessor('uptime', {
-          header: 'Uptime',
-          enableSorting: false,
-          meta: { width: 90, align: 'right', hideBelow: 'md' },
-          cell: ({ row }) =>
-            isServerLive(row.original) && row.original.uptime !== null && row.original.uptime !== undefined ? (
-              formatUptimeDays(row.original.uptime)
-            ) : (
-              <Dash />
-            ),
         }),
         helper.accessor((server) => (server.last_seen_at ? Date.parse(server.last_seen_at) : 0), {
           id: 'lastSeen',
@@ -138,7 +136,10 @@ export function useServersTable(options: UseServersTableOptions) {
   return useDataTable({
     columns,
     data: servers,
-    state: { sorting },
-    onSortingChange: (updater) => onSortingChange(resolveUpdater(updater, sorting)),
+    state: { sorting: [STARRED_SORT, ...sorting] },
+    onSortingChange: (updater) =>
+      onSortingChange(
+        resolveUpdater(updater, [STARRED_SORT, ...sorting]).filter((sort) => sort.id !== STARRED_SORT.id)
+      ),
   });
 }

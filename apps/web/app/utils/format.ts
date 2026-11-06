@@ -42,10 +42,6 @@ export function formatUsedOf(used: number, total: number) {
   return `${roundForDisplay(used / divisor)} of ${roundForDisplay(total / divisor)} ${unit}`;
 }
 
-export function formatCoresOf(percent: number, cores: number) {
-  return `${roundForDisplay((percent / 100) * cores)} of ${cores} vCPU`;
-}
-
 export function formatPercent(value: number, digits = 0) {
   return `${value.toFixed(digits)}%`;
 }
@@ -56,14 +52,6 @@ export function getPercent(used: number, total: number) {
 
 export function formatCount(value: number) {
   return Math.round(value).toLocaleString('en-US');
-}
-
-export function formatUptimeDays(seconds: number) {
-  const days = Math.floor(seconds / 86_400);
-  if (days >= 1) {
-    return formatUnit(days, 'day');
-  }
-  return formatDuration(seconds);
 }
 
 export function formatDuration(seconds: number) {

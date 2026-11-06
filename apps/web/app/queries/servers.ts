@@ -66,6 +66,18 @@ export function renameServerOptions() {
   });
 }
 
+export function starServerOptions() {
+  return mutationOptions({
+    mutationFn: (variables: { serverId: string; starred: boolean }) =>
+      request(
+        apiClient.PUT('/v1/servers/{server_id}/starred', {
+          params: { path: { server_id: variables.serverId } },
+          body: { starred: variables.starred },
+        })
+      ),
+  });
+}
+
 export function deleteServerOptions() {
   return mutationOptions({
     mutationFn: (variables: { serverId: string }) =>

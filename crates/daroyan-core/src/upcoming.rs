@@ -385,6 +385,7 @@ mod tests {
             last_seen_at: None,
             created_at: at(1, 0),
             updated_at: at(1, 0),
+            starred_at: None,
         }
     }
 

@@ -13,6 +13,8 @@ pub struct ServerItemView {
     pub name: String,
     pub labels: Vec<String>,
     pub status: ServerStatus,
+    #[serde(with = "daroyan_core::time::option")]
+    pub starred_at: Option<DateTime<Utc>>,
     pub private_ip: Option<String>,
     pub platform: Option<String>,
     pub platform_version: Option<String>,
@@ -38,6 +40,8 @@ pub struct ServerDetailView {
     pub name: String,
     pub labels: Vec<String>,
     pub status: ServerStatus,
+    #[serde(with = "daroyan_core::time::option")]
+    pub starred_at: Option<DateTime<Utc>>,
     pub host: Option<Host>,
     pub last_report: Option<LastReport>,
     #[serde(with = "daroyan_core::time::option")]
@@ -95,6 +99,7 @@ impl ServerItemView {
             id: server.id,
             name: server.name,
             labels,
+            starred_at: server.starred_at,
             last_seen_at: server.last_seen_at,
             created_at: server.created_at,
         }
@@ -110,6 +115,7 @@ impl ServerDetailView {
             id: server.id,
             name: server.name,
             labels,
+            starred_at: server.starred_at,
             host,
             last_report: report,
             last_seen_at: server.last_seen_at,

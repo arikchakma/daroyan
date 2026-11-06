@@ -23,6 +23,7 @@
   --color-surface-canvas: #f3f3f3;
   --color-surface-subtle: #f7f7f7;
   --color-surface-row: #f7f7f7;
+  --color-surface-row-hover: #f7f7f7;
   --color-surface-fill: #f1f1f1;
   --color-surface-fill-strong: #ebebeb;
   --color-surface-pill: #ebebeb;
@@ -227,6 +228,7 @@ html {
   --color-surface-panel: #0f0f0f;
   --color-surface-pill: #232323;
   --color-surface-row: #171717;
+  --color-surface-row-hover: #1d1d1d;
   --color-surface-subtle: #171717;
   --color-border-default: #232323;
   --color-border-row: #1c1c1c;
@@ -296,6 +298,7 @@ html {
   --color-surface-panel: #f6f6f6;
   --color-surface-pill: #ebebeb;
   --color-surface-row: #f7f7f7;
+  --color-surface-row-hover: #f7f7f7;
   --color-surface-subtle: #f7f7f7;
   --color-border-default: #e3e3e3;
   --color-border-row: #f2f2f2;
