@@ -44,10 +44,10 @@ export function StarButton(props: StarButtonProps) {
       onClick={() => star.mutate({ serverId: server.id, starred: !isStarred })}
       className={cn(
         'relative z-1 inline-flex size-6 items-center justify-center rounded-full outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40',
-        isStarred ? 'text-toast-warning-icon' : 'text-border-strong hover:text-text-tertiary'
+        isStarred ? 'text-star' : 'text-star-empty hover:text-text-tertiary'
       )}
     >
-      <Icon name={isStarred ? 'star-fill' : 'star'} className="size-3.5" />
+      <Icon name={isStarred ? 'star-fill' : 'star'} className="size-3.5 [--icon-glyph:currentColor]" />
     </button>
   );
 }

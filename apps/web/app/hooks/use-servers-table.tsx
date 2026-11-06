@@ -40,8 +40,8 @@ export function useServersTable(options: UseServersTableOptions) {
           sortFn: 'basic',
           meta: { width: 36, skeleton: 'none' },
           header: () => (
-            <span className="flex w-6 justify-center text-border-strong">
-              <Icon name="star-fill" className="size-3.5" />
+            <span className="flex w-6 justify-center text-star-muted">
+              <Icon name="star-fill" className="size-3.5 [--icon-glyph:currentColor]" />
               <span className="sr-only">Starred</span>
             </span>
           ),
