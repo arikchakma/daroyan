@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -70,33 +69,26 @@ impl DockerEvents {
     fn follow(&self) {
         loop {
             let use_sudo = docker_read::uses_sudo();
-            let child = docker_read::command(&DockerRead::Events, use_sudo)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn();
+            let mut stream = docker_read::open(&DockerRead::Events, use_sudo);
+            self.changes.fetch_add(1, Ordering::AcqRel);
+            if let Some(stdout) = stream.take_stdout() {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    self.record(&line, Instant::now());
+                }
+            }
 
             let mut error = String::new();
-            match child {
-                Ok(mut child) => {
-                    self.changes.fetch_add(1, Ordering::AcqRel);
-                    if let Some(stdout) = child.stdout.take() {
-                        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                            self.record(&line, Instant::now());
-                        }
-                    }
-                    if let Some(stderr) = child.stderr.take() {
-                        let _ = stderr.take(ERROR_BYTES).read_to_string(&mut error);
-                    }
-
-                    let _ = child.wait();
-                }
-                Err(spawn_error) => warn!("follow docker events: {spawn_error}"),
+            if let Some(stderr) = stream.take_stderr() {
+                let _ = stderr.take(ERROR_BYTES).read_to_string(&mut error);
             }
+            let _ = stream.handle().wait();
 
             if !use_sudo && is_permission_error(&error) {
                 docker_read::require_sudo();
                 continue;
+            }
+            if !error.trim().is_empty() {
+                warn!("follow docker events: {}", error.trim());
             }
 
             thread::sleep(RETRY_AFTER);

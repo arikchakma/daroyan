@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -10,14 +8,11 @@ use std::time::{Duration, Instant};
 
 use daroyan_protocol::log::LogStream;
 use log::{info, warn};
-use nix::sys::signal::Signal;
 
 use crate::check::docker_events::DockerEvents;
 use crate::config::DockerTarget;
 use crate::docker_read::{self, DockerRead, LogsRead};
-use crate::logs::follow::{
-    Feed, Follower, LogFollowers, Position, Sink, Watch, signal_group,
-};
+use crate::logs::follow::{Feed, Follower, Launch, LogFollowers, Position, Sink, Watch};
 use crate::logs::parse::RawLine;
 use crate::service::is_container_running;
 
@@ -140,8 +135,8 @@ impl Feed for ContainerFeed {
         format!("docker logs {}", short_id(&self.container))
     }
 
-    fn command(&self, from: Option<&Position>, sudo: bool) -> Command {
-        docker_read::command(&DockerRead::Logs(self.request(from)), sudo)
+    fn launch(&self, from: Option<&Position>, sudo: bool) -> Launch {
+        Launch::Docker { read: DockerRead::Logs(self.request(from)), sudo }
     }
 
     fn read(&self, line: &[u8], stream: LogStream) -> Option<RawLine> {
@@ -192,35 +187,19 @@ fn read_newest(container: &str, sudo: bool) -> Option<i64> {
         tail: Some(1),
         ..LogsRead::default()
     };
-    let mut command = docker_read::command(&DockerRead::Logs(newest), sudo);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-
-    let mut child = command.spawn().ok()?;
-    let deadline = Instant::now() + CHECK_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(20));
-            }
-            _ => {
-                warn!("docker logs --tail 1 for {} timed out", short_id(container));
-                signal_group(child.id().cast_signed(), Signal::SIGTERM);
-                let _ = child.wait();
-                return None;
-            }
-        }
+    let mut stream = docker_read::open(&DockerRead::Logs(newest), sudo);
+    let handle = stream.handle();
+    if handle.wait_for(CHECK_TIMEOUT).is_none() {
+        warn!("docker logs --tail 1 for {} timed out", short_id(container));
+        handle.close();
+        return None;
     }
 
     let mut output = String::new();
-    if let Some(stdout) = child.stdout.take() {
+    if let Some(stdout) = stream.take_stdout() {
         let _ = stdout.take(CHECK_BYTES).read_to_string(&mut output);
     }
-    if let Some(stderr) = child.stderr.take() {
+    if let Some(stderr) = stream.take_stderr() {
         let _ = stderr.take(CHECK_BYTES).read_to_string(&mut output);
     }
 

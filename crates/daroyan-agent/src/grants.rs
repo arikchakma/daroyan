@@ -181,7 +181,7 @@ polkit.addRule(function (action, subject) {{
     ))
 }
 
-fn list_read_targets(config: &Config) -> Vec<ListTarget> {
+pub fn list_read_targets(config: &Config) -> Vec<ListTarget> {
     config
         .processes
         .iter()

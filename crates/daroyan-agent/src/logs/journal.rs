@@ -10,7 +10,7 @@ use daroyan_protocol::log::{
 use log::{info, warn};
 use serde_json::Value;
 
-use crate::logs::follow::{Feed, Follower, LogFollowers, Position, Sink};
+use crate::logs::follow::{Feed, Follower, Launch, LogFollowers, Position, Sink};
 use crate::logs::parse::RawLine;
 
 const SINCE_PREFIX: &str = "since:";
@@ -100,10 +100,10 @@ impl Feed for UnitFeed {
         format!("journalctl {}", self.unit)
     }
 
-    fn command(&self, from: Option<&Position>, _sudo: bool) -> Command {
+    fn launch(&self, from: Option<&Position>, _sudo: bool) -> Launch {
         let mut command = Command::new("journalctl");
         command.args(self.args(from));
-        command
+        Launch::Command(command)
     }
 
     fn read(&self, line: &[u8], _stream: LogStream) -> Option<RawLine> {
