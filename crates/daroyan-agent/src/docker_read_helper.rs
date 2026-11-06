@@ -6,7 +6,7 @@ mod docker_read_protocol;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Stdout, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::{self, ExitCode};
@@ -95,17 +95,49 @@ impl Sink for StdSink {
     fn err(&mut self, data: &[u8]) -> io::Result<()> {
         io::stderr().write_all(data)
     }
+
+    fn flush(&mut self) -> io::Result<()> {
+        io::stdout().flush()
+    }
 }
 
-type Output = Arc<Mutex<Stdout>>;
+type Output = Arc<Mutex<Box<dyn Write + Send>>>;
 
 struct FrameSink {
     stream: u32,
     output: Output,
     cancel: Arc<Cancel>,
+    pending: Vec<u8>,
+    pending_kind: FrameKind,
 }
 
 impl FrameSink {
+    fn new(stream: u32, output: &Output, cancel: &Arc<Cancel>) -> Self {
+        Self {
+            stream,
+            output: Arc::clone(output),
+            cancel: Arc::clone(cancel),
+            pending: Vec::with_capacity(MAX_FRAME_BYTES),
+            pending_kind: FrameKind::Stdout,
+        }
+    }
+
+    fn push(&mut self, kind: FrameKind, data: &[u8]) -> io::Result<()> {
+        if !self.pending.is_empty()
+            && (self.pending_kind != kind
+                || self.pending.len() + data.len() > MAX_FRAME_BYTES)
+        {
+            self.flush()?;
+        }
+        if data.len() >= MAX_FRAME_BYTES {
+            return self.send(kind, data);
+        }
+
+        self.pending_kind = kind;
+        self.pending.extend_from_slice(data);
+        Ok(())
+    }
+
     fn send(&self, kind: FrameKind, data: &[u8]) -> io::Result<()> {
         for chunk in data.chunks(MAX_FRAME_BYTES) {
             if !self.cancel.take_credit() {
@@ -120,16 +152,26 @@ impl FrameSink {
 
 impl Sink for FrameSink {
     fn out(&mut self, data: &[u8]) -> io::Result<()> {
-        self.send(FrameKind::Stdout, data)
+        self.push(FrameKind::Stdout, data)
     }
 
     fn err(&mut self, data: &[u8]) -> io::Result<()> {
-        self.send(FrameKind::Stderr, data)
+        self.push(FrameKind::Stderr, data)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+
+        let sent = self.send(self.pending_kind, &self.pending);
+        self.pending.clear();
+        sent
     }
 }
 
 fn serve() -> ! {
-    let output: Output = Arc::new(Mutex::new(io::stdout()));
+    let output: Output = Arc::new(Mutex::new(Box::new(io::stdout())));
     let open: Arc<Mutex<HashMap<u32, Arc<Cancel>>>> = Arc::default();
     let mut input = BufReader::new(io::stdin().lock());
     let mut line = Vec::new();
@@ -182,13 +224,10 @@ fn open_stream(
         }
         is_full
     };
-    let mut sink = FrameSink {
-        stream,
-        output: Arc::clone(output),
-        cancel: Arc::clone(&cancel),
-    };
+    let mut sink = FrameSink::new(stream, output, &cancel);
     if is_full {
         let _ = sink.err(b"daroyan-docker-read: too many open reads\n");
+        let _ = sink.flush();
         finish(output, stream, 1);
         return;
     }
@@ -208,6 +247,7 @@ fn open_stream(
                 Err(error) => {
                     let _ =
                         sink.err(format!("daroyan-docker-read: {error}\n").as_bytes());
+                    let _ = sink.flush();
                     1
                 }
             };
@@ -296,4 +336,69 @@ fn lock_down() -> Result<(), String> {
 #[cfg(not(target_os = "linux"))]
 fn lock_down() -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
+    use super::{FrameSink, Output};
+    use crate::docker_api::{Cancel, Sink};
+    use crate::docker_read_protocol::{FrameKind, MAX_FRAME_BYTES, read_frame};
+
+    #[derive(Clone, Default)]
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn frames(shared: &Shared) -> Vec<(FrameKind, Vec<u8>)> {
+        let bytes = shared.0.lock().unwrap().clone();
+        let mut input = bytes.as_slice();
+        let mut frames = Vec::new();
+        while let Some(frame) = read_frame(&mut input).unwrap() {
+            frames.push((frame.kind, frame.data));
+        }
+        frames
+    }
+
+    #[test]
+    fn batches_lines_until_a_flush_and_keeps_order() {
+        let shared = Shared::default();
+        let output: Output = Arc::new(Mutex::new(Box::new(shared.clone())));
+        let cancel = Arc::new(Cancel::with_credits(100));
+        let mut sink = FrameSink::new(7, &output, &cancel);
+
+        sink.out(b"one\n").unwrap();
+        sink.out(b"two\n").unwrap();
+        assert!(frames(&shared).is_empty());
+
+        sink.err(b"oops\n").unwrap();
+        sink.out(b"three\n").unwrap();
+        sink.flush().unwrap();
+        assert_eq!(
+            frames(&shared),
+            vec![
+                (FrameKind::Stdout, b"one\ntwo\n".to_vec()),
+                (FrameKind::Stderr, b"oops\n".to_vec()),
+                (FrameKind::Stdout, b"three\n".to_vec()),
+            ]
+        );
+
+        let big = vec![b'x'; MAX_FRAME_BYTES + 10];
+        sink.out(&big).unwrap();
+        sink.flush().unwrap();
+        let sizes: Vec<usize> =
+            frames(&shared)[3..].iter().map(|(_, data)| data.len()).collect();
+        assert_eq!(sizes, vec![MAX_FRAME_BYTES, 10]);
+    }
 }

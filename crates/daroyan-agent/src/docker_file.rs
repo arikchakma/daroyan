@@ -166,6 +166,9 @@ impl<S: Sink> Lines<'_, S> {
             emit(&self.line, self.since, self.sink)?;
             self.line.clear();
         }
+        self.sink
+            .flush()
+            .map_err(|error| format!("write the answer: {error}"))?;
 
         Ok(!(self.is_cancelled)())
     }
@@ -324,6 +327,10 @@ mod tests {
 
         fn err(&mut self, data: &[u8]) -> std::io::Result<()> {
             self.err.push_str(&String::from_utf8_lossy(data));
+            Ok(())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }

@@ -28,6 +28,8 @@ pub trait Sink {
     fn out(&mut self, data: &[u8]) -> io::Result<()>;
 
     fn err(&mut self, data: &[u8]) -> io::Result<()>;
+
+    fn flush(&mut self) -> io::Result<()>;
 }
 
 #[derive(Default)]
@@ -112,13 +114,18 @@ pub fn run(
             DockerRead::Events => follow_events(cancel, sink),
         });
 
-    match result {
+    let code = match result {
         Ok(()) => 0,
         Err(error) => {
             let _ = sink.err(format!("{error}\n").as_bytes());
             1
         }
+    };
+    if sink.flush().is_err() {
+        return 1;
     }
+
+    code
 }
 
 fn check_configured(
@@ -257,6 +264,9 @@ fn follow_events(cancel: &Cancel, sink: &mut impl Sink) -> Result<(), String> {
 
     loop {
         line.clear();
+        if body.buffer().is_empty() {
+            sink.flush().map_err(write_error)?;
+        }
         let read = (&mut body)
             .take(MAX_EVENT_BYTES as u64 + 1)
             .read_until(b'\n', &mut line)
@@ -332,9 +342,12 @@ fn is_running(cancel: &Cancel, container: &str) -> bool {
         .is_ok_and(|details| details["State"]["Running"].as_bool().unwrap_or(false))
 }
 
-fn copy_raw(body: &mut impl Read, sink: &mut impl Sink) -> Result<(), String> {
+fn copy_raw(body: &mut BufReader<impl Read>, sink: &mut impl Sink) -> Result<(), String> {
     let mut buffer = vec![0; MAX_FRAME_BYTES];
     loop {
+        if body.buffer().is_empty() {
+            sink.flush().map_err(write_error)?;
+        }
         let read = body.read(&mut buffer).map_err(read_error)?;
         if read == 0 {
             return Ok(());
@@ -344,11 +357,17 @@ fn copy_raw(body: &mut impl Read, sink: &mut impl Sink) -> Result<(), String> {
     }
 }
 
-fn copy_multiplexed(body: &mut impl Read, sink: &mut impl Sink) -> Result<(), String> {
+fn copy_multiplexed(
+    body: &mut BufReader<impl Read>,
+    sink: &mut impl Sink,
+) -> Result<(), String> {
     let mut header = [0; 8];
     let mut buffer = vec![0; MAX_FRAME_BYTES];
 
     loop {
+        if body.buffer().is_empty() {
+            sink.flush().map_err(write_error)?;
+        }
         if !read_header(body, &mut header)? {
             return Ok(());
         }
@@ -630,6 +649,10 @@ mod tests {
             self.err.extend_from_slice(data);
             Ok(())
         }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     fn frame(stream: u8, data: &[u8]) -> Vec<u8> {
@@ -648,7 +671,7 @@ mod tests {
         body.extend(frame(1, &big));
 
         let mut sink = Collected::default();
-        copy_multiplexed(&mut body.as_slice(), &mut sink).unwrap();
+        copy_multiplexed(&mut BufReader::new(body.as_slice()), &mut sink).unwrap();
 
         assert!(sink.out.starts_with(b"2026-11-06T13:00:00.1Z out\n"));
         assert_eq!(sink.out.len(), 27 + big.len());
@@ -657,7 +680,11 @@ mod tests {
         let mut cut = frame(1, b"whole");
         cut.truncate(10);
         assert!(
-            copy_multiplexed(&mut cut.as_slice(), &mut Collected::default()).is_err()
+            copy_multiplexed(
+                &mut BufReader::new(cut.as_slice()),
+                &mut Collected::default()
+            )
+            .is_err()
         );
     }
 
