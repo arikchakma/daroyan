@@ -54,7 +54,50 @@ pub(super) fn read_nginx_access(text: &str, parsed: &mut ParsedLine) -> Option<S
     parsed
         .attributes
         .insert("client.ip".into(), Value::from(client.trim()));
+
+    let tail = &rest[request_end + 1..];
+    let timings = [
+        ("duration_ms", ["rt", "request_time"]),
+        ("upstream.duration_ms", ["urt", "upstream_response_time"]),
+    ];
+    for (target, keys) in timings {
+        if let Some(seconds) = keys.iter().find_map(|key| read_nginx_seconds(tail, key)) {
+            parsed.attributes.insert(
+                target.into(),
+                Value::from((seconds * 1_000_000.0).round() / 1000.0),
+            );
+        }
+    }
+
     Some(request_message(method, path, status))
+}
+
+fn read_nginx_seconds(text: &str, key: &str) -> Option<f64> {
+    let needle = format!("{key}=");
+    let start = text.rmatch_indices(&needle).find_map(|(index, _)| {
+        let is_token_start =
+            text[..index].chars().next_back().is_none_or(char::is_whitespace);
+        is_token_start.then_some(index + needle.len())
+    })?;
+
+    let value = &text[start..];
+    let value = match value.strip_prefix('"') {
+        Some(quoted) => &quoted[..quoted.find('"')?],
+        None => value.split_whitespace().next().unwrap_or_default(),
+    };
+
+    let mut total = None;
+    for part in value.split([',', ':']).map(str::trim) {
+        if part == "-" {
+            continue;
+        }
+        let seconds = part
+            .parse::<f64>()
+            .ok()
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)?;
+        total = Some(total.unwrap_or(0.0) + seconds);
+    }
+    total
 }
 
 pub(super) fn read_request(text: &str, parsed: &mut ParsedLine) -> Option<String> {
@@ -287,6 +330,33 @@ mod tests {
         let django = parse(r#"[28/Oct/2026 01:50:02] "GET /api/users HTTP/1.1" 500 145"#);
         assert_eq!(django.message, "GET /api/users 500");
         assert_eq!(django.severity, Some(17));
+    }
+
+    #[test]
+    fn reads_nginx_timings() {
+        let line = parse(
+            r#"93.184.216.34 - - [16/Oct/2026:01:41:57 +0000] "GET /api/orders HTTP/1.1" 200 512 "-" "curl/8.0" rt=0.010 uct="0.001" uht="0.009" urt="0.008""#,
+        );
+        assert_eq!(line.message, "GET /api/orders 200");
+        assert_eq!(line.attributes["duration_ms"], 10.0);
+        assert_eq!(line.attributes["upstream.duration_ms"], 8.0);
+
+        let retried = parse(
+            r#"10.0.0.1 - - [16/Oct/2026:01:41:57 +0000] "POST /checkout HTTP/1.1" 502 0 "-" "Mozilla/5.0 (rt=9)" request_time=1.250 upstream_response_time="0.400, 0.750 : 0.050""#,
+        );
+        assert_eq!(retried.attributes["duration_ms"], 1250.0);
+        assert_eq!(retried.attributes["upstream.duration_ms"], 1200.0);
+
+        let cached = parse(
+            r#"10.0.0.1 - - [16/Oct/2026:01:41:57 +0000] "GET /logo.png HTTP/1.1" 200 1024 "-" "curl/8.0" rt=0.000 urt=-"#,
+        );
+        assert_eq!(cached.attributes["duration_ms"], 0.0);
+        assert!(!cached.attributes.contains_key("upstream.duration_ms"));
+
+        let combined = parse(
+            r#"10.0.0.1 - - [16/Oct/2026:01:41:57 +0000] "GET / HTTP/1.1" 200 0 "-" "curl/8.0""#,
+        );
+        assert!(!combined.attributes.contains_key("duration_ms"));
     }
 
     #[test]
