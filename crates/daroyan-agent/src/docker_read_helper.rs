@@ -1,4 +1,5 @@
 mod docker_api;
+mod docker_file;
 #[allow(dead_code)]
 mod docker_read_protocol;
 

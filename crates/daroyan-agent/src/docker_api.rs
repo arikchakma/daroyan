@@ -7,6 +7,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde_json::{Value, json};
 
+use crate::docker_file;
 use crate::docker_read_protocol::{
     DockerRead, EVENT_ACTIONS, ListTarget, LogsRead, MAX_FRAME_BYTES,
 };
@@ -41,6 +42,10 @@ impl Cancel {
         if let Some(socket) = lock(&self.socket).take() {
             let _ = socket.shutdown(Shutdown::Both);
         }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
     }
 
     fn connect(&self) -> Result<UnixStream, String> {
@@ -260,6 +265,19 @@ fn follow_logs(
     let details = get_json(cancel, &format!("/containers/{}/json", logs.container))?;
     let has_tty = details["Config"]["Tty"].as_bool().unwrap_or(false);
 
+    if let Some(files) = docker_file::find(&details) {
+        let mut is_running = || is_running(cancel, &logs.container);
+        if docker_file::follow(
+            &files,
+            logs,
+            &|| cancel.is_cancelled(),
+            &mut is_running,
+            sink,
+        )? {
+            return Ok(());
+        }
+    }
+
     let mut path =
         format!("/containers/{}/logs?stdout=1&stderr=1&timestamps=1", logs.container);
     if logs.follow {
@@ -279,6 +297,11 @@ fn follow_logs(
     }
 
     copy_multiplexed(&mut body, sink)
+}
+
+fn is_running(cancel: &Cancel, container: &str) -> bool {
+    get_json(cancel, &format!("/containers/{container}/json"))
+        .is_ok_and(|details| details["State"]["Running"].as_bool().unwrap_or(false))
 }
 
 fn copy_raw(body: &mut impl Read, sink: &mut impl Sink) -> Result<(), String> {
