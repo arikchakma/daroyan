@@ -122,7 +122,7 @@ export function DataTable<TData extends object>(props: DataTableProps<TData>) {
                   className={cn(
                     'group relative [&>td]:border-t [&>td]:border-transparent [&>td]:bg-clip-padding',
                     !isSelected &&
-                      'hover:[&>td]:border-transparent hover:[&>td]:bg-surface-subtle hover:[&>td]:shadow-row-gap [tr:hover+&>td]:border-transparent [tr:hover+&>td]:shadow-row-gap',
+                      'hover:[&>td]:border-transparent hover:[&>td]:bg-surface-row-hover hover:[&>td]:shadow-row-gap [tr:hover+&>td]:border-transparent [tr:hover+&>td]:shadow-row-gap',
                     !isSelected &&
                       rowIndex > 0 &&
                       !isRowSelected(rowIndex - 1) &&
