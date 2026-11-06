@@ -12,6 +12,7 @@ use log::{info, warn};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::watch;
 use tokio::time::{Instant, sleep, sleep_until, timeout};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -136,6 +137,7 @@ pub async fn run_connection(
     held: &HeldProcesses,
     mut reports: Receiver<Report>,
     mut logs: Receiver<LogBatch>,
+    stopping: watch::Receiver<bool>,
 ) -> Result<()> {
     let url = build_connect_url(&config.api.url)?;
     let mut outbox = Outbox::default();
@@ -146,8 +148,16 @@ pub async fn run_connection(
             Ok(ws) => {
                 info!("connected to {url}");
                 backoff = Duration::from_secs(1);
-                match run_session(ws, config, held, &mut reports, &mut logs, &mut outbox)
-                    .await
+                match run_session(
+                    ws,
+                    config,
+                    held,
+                    &mut reports,
+                    &mut logs,
+                    &stopping,
+                    &mut outbox,
+                )
+                .await
                 {
                     Ok(()) => return Ok(()),
                     Err(error) => warn!("lost the connection: {error:#}"),
@@ -165,7 +175,10 @@ pub async fn run_connection(
                     Some(report) => outbox.push(report),
                     None => return Ok(()),
                 },
-                Some(batch) = logs.recv() => outbox.push_logs(batch),
+                batch = logs.recv() => match batch {
+                    Some(batch) => outbox.push_logs(batch),
+                    None => return end_of_logs(&stopping),
+                },
             }
         }
         backoff = (backoff * 2).min(RECONNECT_MAX);
@@ -192,6 +205,7 @@ pub async fn run_session<S>(
     held: &HeldProcesses,
     reports: &mut Receiver<Report>,
     logs: &mut Receiver<LogBatch>,
+    stopping: &watch::Receiver<bool>,
     outbox: &mut Outbox,
 ) -> Result<()>
 where
@@ -208,7 +222,14 @@ where
                 Some(report) => outbox.push(report),
                 None => return Ok(()),
             },
-            Some(batch) = logs.recv() => outbox.push_logs(batch),
+            batch = logs.recv() => match batch {
+                Some(batch) => outbox.push_logs(batch),
+                None => {
+                    outbox.flush(&mut sink, &mut host_sent).await?;
+                    let _ = sink.close().await;
+                    return end_of_logs(stopping);
+                }
+            },
             () = sleep_until(last_seen + IDLE_TIMEOUT) => {
                 bail!("no message from the API in {} seconds", IDLE_TIMEOUT.as_secs());
             }
@@ -229,6 +250,14 @@ where
             }
         }
     }
+}
+
+fn end_of_logs(stopping: &watch::Receiver<bool>) -> Result<()> {
+    if *stopping.borrow() {
+        return Ok(());
+    }
+
+    bail!("log collection stopped")
 }
 
 async fn send_message<S>(
@@ -393,12 +422,13 @@ mod tests {
         outbox.queue.front_mut().unwrap().host = None;
         let (_reports_tx, mut reports) = mpsc::channel(1);
         let (_logs_tx, mut logs) = mpsc::channel(1);
+        let (_stopping_tx, stopping) = watch::channel(false);
         let ws = connect(&url, "dy_server_x").await.unwrap();
 
         let seen = tokio::select! {
             biased;
             seen = api => seen.unwrap(),
-            result = run_session(ws, &config, &held, &mut reports, &mut logs, &mut outbox) => {
+            result = run_session(ws, &config, &held, &mut reports, &mut logs, &stopping, &mut outbox) => {
                 panic!("the session ended: {result:?}")
             }
         };

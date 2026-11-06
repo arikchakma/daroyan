@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 use crate::args::GrantsArgs;
 use crate::check::process::to_unit_name;
 use crate::config::{Config, DockerTarget, ProcessCheck, Source, load_config};
+use crate::docker_read::{ALLOW_FILE, ListTarget, helper_path, render_targets};
 
 const POLKIT_RULE: &str = "/etc/polkit-1/rules.d/50-daroyan.rules";
 const SUDOERS: &str = "/etc/sudoers.d/daroyan";
@@ -47,9 +48,26 @@ pub fn write_grants(args: &GrantsArgs) -> Result<()> {
     let polkit = uses_polkit.then(|| render_polkit(&grants)).flatten();
     replace_file(Path::new(POLKIT_RULE), polkit.as_deref(), 0o644, None)?;
 
-    let sudoers =
-        render_sudoers(&grants, find_program("docker").as_deref(), systemctl.as_deref());
-    replace_file(Path::new(SUDOERS), sudoers.as_deref(), 0o440, Some(check_sudoers))
+    let targets = list_read_targets(&config);
+    let allow = (!targets.is_empty())
+        .then(|| render_targets(&targets).map_err(anyhow::Error::msg))
+        .transpose()?;
+    replace_file(Path::new(ALLOW_FILE), allow.as_deref(), 0o644, None)?;
+
+    let docker = find_program("docker");
+    let helper = helper_path();
+    let reader = (docker.is_some() && helper.is_file()).then_some(helper.as_path());
+    if let Some(helper) = reader {
+        check_sudoers_path(helper)?;
+    }
+
+    let render = |is_quiet| {
+        render_sudoers(&grants, reader, is_quiet, docker.as_deref(), systemctl.as_deref())
+    };
+    let sudoers = SUDOERS.as_ref();
+    replace_file(sudoers, render(true).as_deref(), 0o440, Some(check_sudoers)).or_else(
+        |_| replace_file(sudoers, render(false).as_deref(), 0o440, Some(check_sudoers)),
+    )
 }
 
 fn collect_grants(
@@ -163,19 +181,44 @@ polkit.addRule(function (action, subject) {{
     ))
 }
 
+fn list_read_targets(config: &Config) -> Vec<ListTarget> {
+    config
+        .processes
+        .iter()
+        .filter_map(|check| match &check.source {
+            Source::Docker(target) => Some(target.read_target()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn check_sudoers_path(path: &Path) -> Result<()> {
+    let text = path.to_str().unwrap_or_default();
+    let is_safe = path.is_absolute()
+        && text.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-')
+        });
+    if !is_safe {
+        bail!(
+            "{} must be an absolute path of letters, digits, '/', '.', '_' and '-' to go in sudoers",
+            path.display()
+        );
+    }
+
+    Ok(())
+}
+
 fn render_sudoers(
     grants: &[Grant],
+    reader: Option<&Path>,
+    is_quiet: bool,
     docker: Option<&Path>,
     systemctl: Option<&Path>,
 ) -> Option<String> {
-    let mut rules = Vec::new();
-
-    if let Some(docker) = docker {
-        let docker = docker.display();
-        for read in ["ps", "inspect", "logs", "events"] {
-            rules.push(format!("{docker} {read} *"));
-        }
-    }
+    let mut rules: Vec<String> = reader
+        .map(|reader| format!("{} *", reader.display()))
+        .into_iter()
+        .collect();
 
     for grant in grants {
         let (program, name) = match &grant.target {
@@ -194,8 +237,13 @@ fn render_sudoers(
         return None;
     }
 
+    let quiet = reader
+        .filter(|_| is_quiet)
+        .map(|reader| format!("Defaults!{} !syslog, !pam_session\n", reader.display()))
+        .unwrap_or_default();
+
     Some(format!(
-        "# Written by `daroyan grants` from /etc/daroyan/agent.yml on every agent start.\ndaroyan ALL=(root) NOPASSWD: {}\n",
+        "# Written by `daroyan grants` from /etc/daroyan/agent.yml on every agent start.\n{quiet}daroyan ALL=(root) NOPASSWD: {}\n",
         rules.join(", ")
     ))
 }
@@ -320,7 +368,8 @@ mod tests {
         );
 
         let sudoers =
-            render_sudoers(&grants, Some(Path::new("/usr/bin/docker")), None).unwrap();
+            render_sudoers(&grants, None, true, Some(Path::new("/usr/bin/docker")), None)
+                .unwrap();
         let rules = sudoers.lines().nth(1).unwrap();
         assert!(rules.contains("/usr/bin/docker restart app-blue,"));
         assert!(!rules.contains("app-*"));
@@ -396,12 +445,26 @@ mod tests {
         assert!(polkit.contains(r#"{"nginx.service":["start","stop","restart"]}"#));
         assert!(!polkit.contains("\\.service$"));
 
+        let helper = Path::new("/usr/local/bin/daroyan-docker-read");
         let sudoers = render_sudoers(
             &grants,
+            Some(helper),
+            true,
             Some(Path::new("/usr/bin/docker")),
             Some(Path::new("/usr/bin/systemctl")),
         )
         .unwrap();
+        assert!(sudoers.contains(
+            "Defaults!/usr/local/bin/daroyan-docker-read !syslog, !pam_session\n"
+        ));
+        assert!(sudoers.contains("NOPASSWD: /usr/local/bin/daroyan-docker-read *, "));
+        assert!(!sudoers.contains("docker inspect"));
+        assert!(!sudoers.contains("docker logs"));
+        let loud = render_sudoers(&grants, Some(helper), false, None, None).unwrap();
+        assert!(!loud.contains("Defaults"));
+        assert!(check_sudoers_path(Path::new("/opt/a,b/daroyan-docker-read")).is_err());
+        assert!(check_sudoers_path(Path::new("daroyan-docker-read")).is_err());
+        assert!(check_sudoers_path(helper).is_ok());
         assert!(sudoers.contains("/usr/bin/systemctl stop nginx,"));
         assert!(sudoers.contains("/usr/bin/docker restart app\n"));
         assert!(!sudoers.contains("systemctl start *"));
@@ -412,7 +475,8 @@ mod tests {
     fn writes_nothing_without_grants_or_docker() {
         assert!(render_polkit(&[]).is_none());
         assert!(
-            render_sudoers(&[], None, Some(Path::new("/usr/bin/systemctl"))).is_none()
+            render_sudoers(&[], None, true, None, Some(Path::new("/usr/bin/systemctl")))
+                .is_none()
         );
     }
 }

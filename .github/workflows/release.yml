@@ -38,6 +38,7 @@ jobs:
           cargo zigbuild --release --locked -p daroyan-agent --target ${{ matrix.arch }}-unknown-linux-musl
           mkdir -p dist/agent
           cp target/${{ matrix.arch }}-unknown-linux-musl/release/daroyan dist/agent/daroyan-${{ matrix.arch }}-linux-musl
+          cp target/${{ matrix.arch }}-unknown-linux-musl/release/daroyan-docker-read dist/agent/daroyan-docker-read-${{ matrix.arch }}-linux-musl
 
       - name: Upload the agent
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
