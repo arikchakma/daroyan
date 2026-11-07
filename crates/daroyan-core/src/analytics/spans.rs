@@ -750,6 +750,8 @@ pub async fn measure_span_windows(
     matcher: SpanMatch,
     since_us: i64,
     window_us: i64,
+    min_requests: u32,
+    limit: u32,
 ) -> Result<Vec<(i64, SpanStat)>> {
     analytics
         .read(move |conn| {
@@ -762,16 +764,22 @@ pub async fn measure_span_windows(
 
             matcher.push_filters(&mut sql, &mut values);
             sql.push_str(&format!(
-                " GROUP BY bucket, {} ORDER BY bucket, service, route",
+                " GROUP BY bucket, {} HAVING count(*) >= ? \
+                 ORDER BY bucket DESC, service, route LIMIT ?",
                 matcher.to_group()
             ));
+            values.push(SqlValue::UInt(min_requests));
+            values.push(SqlValue::UInt(limit));
 
             let mut statement = conn.prepare(&sql)?;
-            statement
+            let mut windows = statement
                 .query_map(params_from_iter(values), |row| {
                     Ok((row.get(0)?, read_span_stat(row, 1)?))
                 })?
-                .collect()
+                .collect::<duckdb::Result<Vec<_>>>()?;
+
+            windows.reverse();
+            Ok(windows)
         })
         .await
 }

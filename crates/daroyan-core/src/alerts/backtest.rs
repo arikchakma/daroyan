@@ -20,6 +20,7 @@ use crate::servers::status::get_percent;
 
 const MAX_SAMPLE_GAP_MS: i64 = 60_000;
 const MAX_HITS: usize = 200;
+const MAX_TRACE_WINDOWS: u32 = 50_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BacktestHit {
@@ -233,19 +234,20 @@ async fn backtest_traces(
     since: i64,
 ) -> Result<Vec<BacktestHit>> {
     let window_us = trace.window_us();
-    let windows =
-        measure_span_windows(analytics, trace.to_span_match(), since * 1000, window_us)
-            .await?;
+    let windows = measure_span_windows(
+        analytics,
+        trace.to_span_match(),
+        since * 1000,
+        window_us,
+        trace.min_requests,
+        MAX_TRACE_WINDOWS,
+    )
+    .await?;
 
-    let min_requests = u64::from(trace.min_requests);
     let mut last_breach: HashMap<String, i64> = HashMap::new();
     let mut hits = Vec::new();
 
     for (bucket, stat) in windows {
-        if stat.requests < min_requests {
-            continue;
-        }
-
         let Some(reading) = make_trace_reading(trace.measure, &stat) else {
             continue;
         };
