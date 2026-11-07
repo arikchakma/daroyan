@@ -151,14 +151,14 @@ export default function LogsPage() {
   };
   const { data: servers } = useQuery(serverQueries.list());
   const { data: sources } = useQuery(logQueries.sources());
-  const { data, isLoading, isPlaceholderData: isLinesStale } = useQuery(
+  const { data, isLoading, isPlaceholderData: isShowingOldLines } = useQuery(
     logQueries.list({ ...filters, ...timeRange, offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE }, isFollowing)
   );
-  const { data: volume, isPlaceholderData: isVolumeStale } = useQuery(
+  const { data: volume, isPlaceholderData: isShowingOldVolume } = useQuery(
     logQueries.volume({ ...filters, ...timeRange }, isFollowing)
   );
-  const isStale = isLinesStale || isVolumeStale;
-  const isSearching = isStale || search.trim() !== q;
+  const isShowingOldResults = isShowingOldLines || isShowingOldVolume;
+  const isSearching = isShowingOldResults || search.trim() !== q;
 
   const serverNames = new Map([
     [OTLP_SERVER_ID, OTLP_SERVER_NAME],
@@ -439,7 +439,7 @@ export default function LogsPage() {
               <Icon name="align-left" />
             </button>
           </div>
-          <div className={cn('flex flex-col gap-2 transition-opacity', isStale && 'opacity-60')}>
+          <div className={cn('flex flex-col gap-2 transition-opacity', isShowingOldResults && 'opacity-60')}>
             <LogVolume volume={volume} onZoom={onZoom} />
             <DataTable table={table} label="Logs" size="sm" isLoading={isLoading} />
           </div>
