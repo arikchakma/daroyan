@@ -4,7 +4,7 @@ use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
 use crate::alerts::message::Moment;
-use crate::alerts::rules::{Condition, Target, read_log_severity};
+use crate::alerts::rules::{Condition, Target, TraceMeasure, read_log_severity};
 use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, LogRun, OTLP_SERVER_ID, list_last_lines, list_top_messages,
@@ -12,6 +12,7 @@ use crate::analytics::log_lines::{
 };
 use crate::analytics::server_events::{ProcessExit, find_last_exit};
 use crate::analytics::server_states::{DiskTrend, fit_disk_trend};
+use crate::analytics::spans::{SpanMatch, SpanOrder, SpanStat, measure_spans};
 use crate::analytics::uptime_results::{
     ResultItem, find_last_up, list_cert_expiries, list_recent_results,
 };
@@ -31,6 +32,7 @@ const LAST_LINES: u32 = 3;
 const LAST_LINES_WINDOW_MS: i64 = 3_600_000;
 const EXIT_SLACK_MS: i64 = 5 * 60_000;
 const RECENT_RESULTS: u32 = 20;
+const TOP_ROUTES: u32 = 3;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum AlertFacts {
@@ -43,6 +45,13 @@ pub enum AlertFacts {
     Disk(DiskFacts),
     Offline(OfflineFacts),
     Cert(CertFacts),
+    Traces(TraceFacts),
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TraceFacts {
+    pub total: Option<SpanStat>,
+    pub routes: Vec<SpanStat>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -182,6 +191,51 @@ impl FactSources<'_> {
 
                     AlertFacts::Logs(LogFacts { top, run: None })
                 }
+            }
+            Condition::TraceErrors { .. } | Condition::TraceLatency { .. } => {
+                let Some(trace) = condition.trace_rule() else {
+                    return Ok(AlertFacts::None);
+                };
+
+                let (service, route) = trace.read_subject(&alert.subject);
+                let matcher = SpanMatch {
+                    service: Some(service.to_string()),
+                    route: route.map(str::to_string),
+                    is_by_route: false,
+                    ..trace.to_span_match()
+                };
+                let since_us = now.timestamp_micros() - trace.window_us();
+
+                let total = measure_spans(
+                    self.analytics,
+                    matcher.clone(),
+                    since_us,
+                    SpanOrder::Requests,
+                    1,
+                )
+                .await?
+                .into_iter()
+                .next();
+
+                let routes = if route.is_some() {
+                    Vec::new()
+                } else {
+                    let order = match trace.measure {
+                        TraceMeasure::Errors => SpanOrder::Errors,
+                        TraceMeasure::Latency(_) => SpanOrder::Duration,
+                    };
+                    let by_route = SpanMatch { is_by_route: true, ..matcher };
+
+                    measure_spans(self.analytics, by_route, since_us, order, TOP_ROUTES)
+                        .await?
+                        .into_iter()
+                        .filter(|stat| {
+                            trace.measure != TraceMeasure::Errors || stat.errors > 0
+                        })
+                        .collect()
+                };
+
+                AlertFacts::Traces(TraceFacts { total, routes })
             }
             Condition::Cpu { .. } | Condition::Memory { .. } | Condition::Load { .. } => {
                 let (Some(report), Some(host)) = (self.report(), self.host()) else {

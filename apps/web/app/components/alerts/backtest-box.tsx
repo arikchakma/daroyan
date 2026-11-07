@@ -30,7 +30,7 @@ export function BacktestBox(props: BacktestBoxProps) {
         {compared}
       </span>
       {backtest.hits.slice(0, 3).map((hit) => (
-        <div key={`${hit.server_id}-${hit.at}`} className="flex items-center gap-3">
+        <div key={`${hit.server_id}-${hit.subject}-${hit.at}`} className="flex items-center gap-3">
           <span className="min-w-0 flex-1 truncate text-text-secondary">
             {hit.server_name} ·{' '}
             {hit.subject === 'CPU' || hit.subject === 'Memory' || hit.subject === 'Load' ? hit.value : hit.subject}

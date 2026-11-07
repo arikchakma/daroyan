@@ -3642,6 +3642,105 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "required": [
+              "above",
+              "within_secs",
+              "kind"
+            ],
+            "properties": {
+              "above": {
+                "type": "number",
+                "format": "double"
+              },
+              "group_by": {
+                "$ref": "#/components/schemas/TraceGroup"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "trace_errors"
+                ]
+              },
+              "min_requests": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "route": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "service": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "spans": {
+                "$ref": "#/components/schemas/TraceSpans"
+              },
+              "within_secs": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "above",
+              "within_secs",
+              "kind"
+            ],
+            "properties": {
+              "above": {
+                "type": "number",
+                "format": "double"
+              },
+              "group_by": {
+                "$ref": "#/components/schemas/TraceGroup"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "trace_latency"
+                ]
+              },
+              "min_requests": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "percentile": {
+                "$ref": "#/components/schemas/Percentile"
+              },
+              "route": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "service": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "spans": {
+                "$ref": "#/components/schemas/TraceSpans"
+              },
+              "within_secs": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
           }
         ]
       },
@@ -6022,6 +6121,14 @@
           }
         }
       },
+      "Percentile": {
+        "type": "string",
+        "enum": [
+          "p50",
+          "p95",
+          "p99"
+        ]
+      },
       "PortState": {
         "type": "object",
         "required": [
@@ -7377,6 +7484,13 @@
           }
         }
       },
+      "TraceGroup": {
+        "type": "string",
+        "enum": [
+          "service",
+          "route"
+        ]
+      },
       "TraceService": {
         "type": "object",
         "required": [
@@ -7498,6 +7612,13 @@
             ]
           }
         }
+      },
+      "TraceSpans": {
+        "type": "string",
+        "enum": [
+          "entry",
+          "all"
+        ]
       },
       "TraceStatus": {
         "type": "object",

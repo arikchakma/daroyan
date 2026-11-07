@@ -8,9 +8,11 @@ import {
   hasThreshold,
   isCheckKind,
   isCronKind,
+  isTraceKind,
   readLogCondition,
   readSubjectName,
   readThreshold,
+  readTraceCondition,
   REMIND_OPTIONS,
   RESOLVE_OPTIONS,
   WINDOW_OPTIONS,
@@ -19,7 +21,9 @@ import { joinNames, pluralize } from '~/utils/format';
 
 export type ScopeKind = 'all' | 'label' | 'picked';
 
-export type TargetNoun = 'server' | 'check' | 'cron';
+export type TargetNoun = 'server' | 'check' | 'cron' | 'service';
+
+const DEFAULT_MIN_REQUESTS = 10;
 
 export type SelectItemData = { value: string; label: string };
 
@@ -45,6 +49,13 @@ export type RuleFormState = {
   logService: string;
   logText: string;
   logGroupBy: Schemas['LogGroup'];
+  traceWithin: number;
+  traceMinRequests: string;
+  traceService: string;
+  traceRoute: string;
+  tracePercentile: Schemas['Percentile'];
+  traceSpans: Schemas['TraceSpans'];
+  traceGroupBy: Schemas['TraceGroup'];
   scopeKind: ScopeKind;
   label: string;
   pickedIds: string[];
@@ -94,6 +105,8 @@ export const TEMPLATES: RuleTemplate[] = [
     forSecs: 60,
   },
   { label: 'Certificate expiring', name: 'Certificate Expiring', kind: 'cert_days', critical: '7', warning: '14', forSecs: 0 },
+  { label: 'Failing requests', name: 'Failing Requests', kind: 'trace_errors', critical: '5', warning: '2', forSecs: 0 },
+  { label: 'Slow requests', name: 'Slow Requests', kind: 'trace_latency', critical: '1000', warning: '500', forSecs: 60 },
 ];
 
 const DEFAULT_THRESHOLDS: Partial<Record<ConditionKind, string>> = {
@@ -105,6 +118,8 @@ const DEFAULT_THRESHOLDS: Partial<Record<ConditionKind, string>> = {
   first_byte: '800',
   cert_days: '7',
   logs: '10',
+  trace_errors: '5',
+  trace_latency: '1000',
 };
 
 export const CONDITION_LABELS: Record<ConditionKind, string> = {
@@ -123,6 +138,8 @@ export const CONDITION_LABELS: Record<ConditionKind, string> = {
   cron_missed: 'Cron missed a run',
   cron_failed: 'Cron failed',
   logs: 'Log lines match',
+  trace_errors: 'Error rate above a limit',
+  trace_latency: 'Latency above a limit',
 };
 
 export const DECLARE_SEVERITY_OPTIONS = [
@@ -185,6 +202,23 @@ export function isLimitValid(form: RuleFormState) {
   return !hasThreshold(form.kind) || readLimit(form) !== null;
 }
 
+export function getTraceLimitHint(form: RuleFormState) {
+  const requests = form.traceSpans === 'entry' ? 'incoming requests' : 'spans';
+  const group = form.traceGroupBy === 'route' ? 'route' : 'service';
+  const window = formatSpan(form.traceWithin);
+  const minimum = `for each ${group} with at least ${form.traceMinRequests} ${requests}`;
+
+  if (form.kind === 'trace_latency') {
+    return `Fires when ${form.tracePercentile} latency is above ${form.critical} ms within ${window}, ${minimum}.`;
+  }
+  return `Fires when more than ${form.critical}% of ${requests} fail within ${window}, ${minimum}.`;
+}
+
+export function readMinRequests(form: RuleFormState) {
+  const value = readNumber(form.traceMinRequests);
+  return value !== null && Number.isInteger(value) && value >= 1 && value <= 100_000 ? value : null;
+}
+
 function readScopeKind(scope?: Scope): ScopeKind {
   if (scope?.kind === 'label') {
     return 'label';
@@ -208,6 +242,9 @@ function readPickedIds(scope?: Scope) {
 export function readTargetNoun(kind: ConditionKind): TargetNoun {
   if (isCheckKind(kind)) {
     return 'check';
+  }
+  if (isTraceKind(kind)) {
+    return 'service';
   }
   return isCronKind(kind) ? 'cron' : 'server';
 }
@@ -252,6 +289,7 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
   const saved = rule?.options;
   const initial = rule?.condition ?? draft?.condition;
   const savedLog = readLogCondition(initial);
+  const savedTrace = readTraceCondition(initial);
   const scope = rule?.scope ?? draft?.scope;
 
   return {
@@ -276,6 +314,13 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
     logService: savedLog?.service ?? '',
     logText: savedLog?.text ?? '',
     logGroupBy: savedLog?.group_by ?? 'server',
+    traceWithin: savedTrace?.within_secs ?? 300,
+    traceMinRequests: (savedTrace?.min_requests ?? DEFAULT_MIN_REQUESTS).toString(),
+    traceService: savedTrace?.service ?? '',
+    traceRoute: savedTrace?.route ?? '',
+    tracePercentile: (savedTrace?.kind === 'trace_latency' ? savedTrace.percentile : undefined) ?? 'p95',
+    traceSpans: savedTrace?.spans ?? 'entry',
+    traceGroupBy: savedTrace?.group_by ?? 'service',
     scopeKind: readScopeKind(scope),
     label: scope?.kind === 'label' ? scope.label : '',
     pickedIds: readPickedIds(scope),
@@ -360,6 +405,25 @@ export function readCondition(form: RuleFormState): Schemas['Condition'] | undef
         text: form.logText.trim() || null,
         group_by: form.logGroupBy,
       };
+    case 'trace_errors':
+    case 'trace_latency': {
+      const minRequests = readMinRequests(form);
+      if (minRequests === null) {
+        return undefined;
+      }
+
+      const filters = {
+        above: limit,
+        within_secs: form.traceWithin,
+        min_requests: minRequests,
+        service: form.traceService || null,
+        route: form.traceRoute.trim() || null,
+        spans: form.traceSpans,
+        group_by: form.traceGroupBy,
+      };
+
+      return kind === 'trace_errors' ? { kind, ...filters } : { kind, percentile: form.tracePercentile, ...filters };
+    }
     case 'cert_days':
       return { kind, below: limit };
     case 'cpu':
@@ -378,7 +442,7 @@ export function readScope(form: RuleFormState): Scope | undefined {
   if (form.scopeKind === 'label' && noun === 'server') {
     return form.label ? { kind: 'label', label: form.label } : undefined;
   }
-  if (form.scopeKind !== 'picked') {
+  if (form.scopeKind !== 'picked' || noun === 'service') {
     return { kind: 'all' };
   }
   if (form.pickedIds.length === 0) {

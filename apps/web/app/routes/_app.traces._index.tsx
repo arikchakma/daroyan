@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ColumnVisibilityState, SortingState } from '@tanstack/react-table';
 import { Link, useSearchParams } from 'react-router';
 
+import { AlertBanners } from '~/components/alerts/alert-banners';
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
 import { ColumnMenu } from '~/components/ui/column-menu';
@@ -15,7 +16,7 @@ import { TRACE_COLUMN_LABELS, useTracesTable } from '~/hooks/use-traces-table';
 import { useStoredState } from '~/hooks/use-stored-state';
 import { serverQueries } from '~/queries/servers';
 import { traceQueries } from '~/queries/traces';
-import { SLOW_MS } from '~/utils/traces';
+import { SLOW_MS, TRACES_TARGET_ID } from '~/utils/traces';
 import { HOUR_MS } from '~/utils/format';
 
 const PAGE_SIZE = 50;
@@ -53,6 +54,7 @@ export default function TracesPage() {
   const sort = SORTS.find((item) => item.value === searchParams.get('sort')) ?? SORTS[0];
   const search = searchParams.get('q') ?? '';
   const serverId = searchParams.get('server') ?? '';
+  const service = searchParams.get('service') ?? '';
   const page = Math.max(Number(searchParams.get('page')) || 1, 1);
 
   const [hiddenColumns, setHiddenColumns] = useStoredState<ColumnVisibilityState>(COLUMNS_KEY, {});
@@ -60,10 +62,13 @@ export default function TracesPage() {
   const { data: status } = useQuery(traceQueries.status());
   const { data: servers } = useQuery(serverQueries.list());
   const server = servers?.find((item) => item.id === serverId);
+  const { data: services } = useQuery(traceQueries.services(range.ms));
+  const serviceNames = [...new Set([...(services ?? []).map((item) => item.service), ...(service ? [service] : [])])].sort();
   const { data, isLoading } = useQuery(
     traceQueries.list({
       rangeMs: range.ms,
       server_id: serverId || undefined,
+      service: service || undefined,
       status: view === 'error' ? 'error' : undefined,
       min_duration_ms: view === 'slow' ? SLOW_MS : undefined,
       q: search.trim() || undefined,
@@ -137,6 +142,29 @@ export default function TracesPage() {
             </Menu.Portal>
           </Menu.Root>
         )}
+        {serviceNames.length > 0 && (
+          <Menu.Root>
+            <Menu.Trigger render={<Button variant="secondary" className="w-fit" />}>
+              <Icon name="layers" />
+              {service || 'All Services'}
+              <Icon name="chevron-down" />
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner align="end">
+                <Menu.Popup className="min-w-40">
+                  <Menu.RadioGroup value={service} onValueChange={(value: string) => setParams({ service: value || null })}>
+                    <Menu.RadioItem value="">All Services</Menu.RadioItem>
+                    {serviceNames.map((item) => (
+                      <Menu.RadioItem key={item} value={item}>
+                        {item}
+                      </Menu.RadioItem>
+                    ))}
+                  </Menu.RadioGroup>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
+        )}
         <Menu.Root>
           <Menu.Trigger render={<Button variant="secondary" className="w-fit" />}>
             <Icon name="calendar" />
@@ -167,6 +195,7 @@ export default function TracesPage() {
       </PageBar>
 
       <div className="flex flex-1 flex-col gap-2 px-3 pb-3">
+        <AlertBanners serverId={TRACES_TARGET_ID} />
         <ViewsToolbar
           views={VIEWS}
           view={view}

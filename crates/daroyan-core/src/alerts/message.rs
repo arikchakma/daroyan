@@ -3,17 +3,18 @@ use chrono_tz::Tz;
 use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
-use crate::alerts::evaluate::{Level, NO_DATA};
+use crate::alerts::evaluate::{Level, NO_DATA, format_rate};
 use crate::alerts::facts::{
     AlertFacts, CertFacts, CheckFacts, DiskFacts, LogFacts, OfflineFacts, ProcessFacts,
-    UsageFacts,
+    TraceFacts, UsageFacts,
 };
 use crate::alerts::notify::{Details, Field, Link, LinkStyle, Snippet, Text, Tone};
 use crate::alerts::rules::{
-    Condition, RuleOptions, Target, describe_log_level, describe_rule, format_moment,
-    format_ms, parse_runbook_url, read_time_zone,
+    Condition, RuleOptions, Target, TraceMeasure, describe_log_level, describe_rule,
+    format_moment, format_ms, parse_runbook_url, read_time_zone,
 };
 use crate::analytics::log_lines::read_level;
+use crate::analytics::spans::SpanStat;
 use crate::db::entities::alert_rules::Model as AlertRule;
 use crate::db::entities::alerts::Model as Alert;
 use crate::servers::status::get_percent;
@@ -88,6 +89,7 @@ impl AlertMessage<'_> {
             (_, AlertFacts::Disk(facts)) => self.disk(facts),
             (_, AlertFacts::Offline(facts)) => self.offline(facts),
             (_, AlertFacts::Cert(facts)) => self.cert(facts),
+            (_, AlertFacts::Traces(facts)) => self.traces(facts),
             (_, AlertFacts::None) => self.generic(),
         };
 
@@ -101,6 +103,13 @@ impl AlertMessage<'_> {
         }
 
         details
+    }
+
+    pub fn url(&self) -> Option<String> {
+        if self.target == Target::Traces {
+            return self.traces_link().map(|link| link.url);
+        }
+        self.target_url()
     }
 
     fn generic(&self) -> Details {
@@ -170,6 +179,68 @@ impl AlertMessage<'_> {
             fields,
             snippet,
             links: self.logs_link().into_iter().map(Link::primary).collect(),
+            ..Details::default()
+        }
+    }
+
+    fn traces(&self, facts: &TraceFacts) -> Details {
+        let Some(trace) = self.condition.trace_rule() else {
+            return self.generic();
+        };
+
+        let (service, route) = trace.read_subject(&self.alert.subject);
+        let window = format_span(u64::from(trace.within_secs));
+
+        let summary = match (trace.measure, &facts.total) {
+            (TraceMeasure::Errors, Some(total)) => Text::default()
+                .bold(format!("{} of {} requests failed", total.errors, total.requests))
+                .plain(format!(
+                    " ({}) in the last {window}. ",
+                    format_rate(total.error_percent())
+                )),
+            (TraceMeasure::Latency(percentile), Some(total))
+                if let Some(duration_us) = total.duration_us =>
+            {
+                Text::default()
+                    .bold(format!(
+                        "{percentile} latency is {}",
+                        format_ms(duration_us / 1000.0)
+                    ))
+                    .plain(format!(
+                        " over {} requests in the last {window}. ",
+                        total.requests
+                    ))
+            }
+            _ => Text::from(format!("{}: ", self.alert.subject))
+                .bold(self.alert.value.as_str())
+                .plain(". "),
+        };
+
+        let mut fields = vec![self.target_field(), Field::new("Service", service)];
+        fields.extend(route.map(|route| Field::new("Route", route)));
+        fields.push(self.started_field());
+        fields.push(Field::new("Rule", &self.rule.name));
+
+        let snippet = (!facts.routes.is_empty()).then(|| Snippet {
+            label: Some(
+                match trace.measure {
+                    TraceMeasure::Errors => "Failing routes",
+                    TraceMeasure::Latency(_) => "Slowest routes",
+                }
+                .to_string(),
+            ),
+            lines: facts
+                .routes
+                .iter()
+                .map(|stat| describe_route(trace.measure, stat))
+                .collect(),
+        });
+
+        Details {
+            summary: summary.plain(self.describe_trigger()),
+            fields,
+            snippet,
+            links: self.traces_link().into_iter().map(Link::primary).collect(),
             ..Details::default()
         }
     }
@@ -619,6 +690,12 @@ impl AlertMessage<'_> {
             Condition::Load { above } => {
                 format!("{trigger} above {}{held}.", warning.unwrap_or(*above))
             }
+            Condition::TraceErrors { above, .. } => {
+                format!("{trigger} above {}%{held}.", warning.unwrap_or(*above))
+            }
+            Condition::TraceLatency { above, .. } => {
+                format!("{trigger} above {}{held}.", format_ms(warning.unwrap_or(*above)))
+            }
             _ => format!(
                 "The rule fires on: {}.",
                 describe_rule(self.condition, self.options, self.for_secs())
@@ -690,7 +767,13 @@ impl AlertMessage<'_> {
 
         let mut links: Vec<Link> = mute.into_iter().collect();
         if Level::read(&self.alert.severity) == Level::Critical
-            && matches!(self.condition, Condition::Logs { .. } | Condition::UptimeDown)
+            && matches!(
+                self.condition,
+                Condition::Logs { .. }
+                    | Condition::UptimeDown
+                    | Condition::TraceErrors { .. }
+                    | Condition::TraceLatency { .. }
+            )
             && let Some(link) = self.target_link("Declare incident", "declare", id)
         {
             links.push(link.danger());
@@ -727,6 +810,22 @@ impl AlertMessage<'_> {
         Some(Link::new("Open logs", url.as_str()))
     }
 
+    fn traces_link(&self) -> Option<Link> {
+        let app_url = self.app_url()?;
+        let trace = self.condition.trace_rule()?;
+        let (service, route) = trace.read_subject(&self.alert.subject);
+
+        let mut params = vec![("service", service), ("range", "1h")];
+        params.push(match trace.measure {
+            TraceMeasure::Errors => ("view", "error"),
+            TraceMeasure::Latency(_) => ("sort", "slowest"),
+        });
+        params.extend(route.map(|route| ("q", route)));
+
+        let url = Url::parse_with_params(&format!("{app_url}/traces"), params).ok()?;
+        Some(Link::new("Open traces", url.as_str()))
+    }
+
     fn firing_links(&self) -> Vec<Link> {
         let Some(app_url) = self.app_url() else { return Vec::new() };
 
@@ -742,6 +841,24 @@ impl AlertMessage<'_> {
         links.extend(runbook);
 
         links
+    }
+}
+
+fn describe_route(measure: TraceMeasure, stat: &SpanStat) -> String {
+    let route = stat.route.as_deref().unwrap_or_default();
+
+    match measure {
+        TraceMeasure::Errors => format!(
+            "{} of {} failed ({}) · {route}",
+            stat.errors,
+            stat.requests,
+            format_rate(stat.error_percent())
+        ),
+        TraceMeasure::Latency(percentile) => format!(
+            "{percentile} {} · {route} ({} requests)",
+            format_ms(stat.duration_us.unwrap_or_default() / 1000.0),
+            stat.requests
+        ),
     }
 }
 

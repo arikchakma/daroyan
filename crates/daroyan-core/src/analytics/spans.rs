@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use duckdb::{Connection, OptionalExt, params};
+use duckdb::types::Value as SqlValue;
+use duckdb::{Connection, OptionalExt, params, params_from_iter};
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValueKind;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
@@ -611,6 +612,166 @@ pub async fn list_issue_events(
                 })
             })?;
             rows.collect()
+        })
+        .await
+}
+
+pub const TRACES_TARGET_ID: &str = "traces";
+pub const TRACES_TARGET_NAME: &str = "Traces";
+
+const SPAN_ROUTE: &str = "coalesce(http_route, name)";
+const ENTRY_SPAN: &str = "(kind IN ('server', 'consumer') OR parent_span_id IS NULL)";
+const FAILED_SPAN: &str = "(status = 'error' OR coalesce(http_status, 0) >= 500)";
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SpanMatch {
+    pub service: Option<String>,
+    pub route: Option<String>,
+    pub is_entry_only: bool,
+    pub is_by_route: bool,
+    pub quantile: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpanOrder {
+    Requests,
+    Errors,
+    Duration,
+}
+
+impl SpanOrder {
+    fn to_sql(self) -> &'static str {
+        match self {
+            Self::Requests => "requests DESC",
+            Self::Errors => "errors DESC, requests DESC",
+            Self::Duration => "duration_us DESC NULLS LAST, requests DESC",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpanStat {
+    pub service: String,
+    pub route: Option<String>,
+    pub requests: u64,
+    pub errors: u64,
+    pub duration_us: Option<f64>,
+}
+
+impl SpanStat {
+    pub fn error_percent(&self) -> f64 {
+        if self.requests == 0 {
+            return 0.0;
+        }
+        self.errors as f64 * 100.0 / self.requests as f64
+    }
+}
+
+impl SpanMatch {
+    fn to_select(&self) -> String {
+        let route = if self.is_by_route { SPAN_ROUTE } else { "NULL::VARCHAR" };
+        let duration = match self.quantile {
+            Some(quantile) => format!("quantile_cont(duration_us, {quantile})"),
+            None => "NULL::DOUBLE".to_string(),
+        };
+
+        format!(
+            "service, {route} AS route, count(*) AS requests, \
+             count(*) FILTER (WHERE {FAILED_SPAN}) AS errors, {duration} AS duration_us"
+        )
+    }
+
+    fn to_group(&self) -> &'static str {
+        if self.is_by_route { "service, route" } else { "service" }
+    }
+
+    fn push_filters(&self, sql: &mut String, values: &mut Vec<SqlValue>) {
+        if self.is_entry_only {
+            sql.push_str(" AND ");
+            sql.push_str(ENTRY_SPAN);
+        }
+
+        if let Some(service) = &self.service {
+            sql.push_str(" AND service = ?");
+            values.push(SqlValue::Text(service.clone()));
+        }
+
+        if let Some(route) = &self.route {
+            sql.push_str(" AND (http_route = ? OR name = ?)");
+            values.push(SqlValue::Text(route.clone()));
+            values.push(SqlValue::Text(route.clone()));
+        }
+    }
+}
+
+fn read_span_stat(row: &duckdb::Row, offset: usize) -> duckdb::Result<SpanStat> {
+    Ok(SpanStat {
+        service: row.get(offset)?,
+        route: row.get(offset + 1)?,
+        requests: row.get(offset + 2)?,
+        errors: row.get(offset + 3)?,
+        duration_us: row.get(offset + 4)?,
+    })
+}
+
+pub async fn measure_spans(
+    analytics: &Analytics,
+    matcher: SpanMatch,
+    since_us: i64,
+    order: SpanOrder,
+    limit: u32,
+) -> Result<Vec<SpanStat>> {
+    analytics
+        .read(move |conn| {
+            let mut sql = format!(
+                "SELECT {} FROM spans WHERE started_at >= ?",
+                matcher.to_select()
+            );
+            let mut values = vec![SqlValue::BigInt(since_us)];
+
+            matcher.push_filters(&mut sql, &mut values);
+            sql.push_str(&format!(
+                " GROUP BY {} ORDER BY {}, service, route LIMIT ?",
+                matcher.to_group(),
+                order.to_sql()
+            ));
+            values.push(SqlValue::UInt(limit));
+
+            let mut statement = conn.prepare(&sql)?;
+            statement
+                .query_map(params_from_iter(values), |row| read_span_stat(row, 0))?
+                .collect()
+        })
+        .await
+}
+
+pub async fn measure_span_windows(
+    analytics: &Analytics,
+    matcher: SpanMatch,
+    since_us: i64,
+    window_us: i64,
+) -> Result<Vec<(i64, SpanStat)>> {
+    analytics
+        .read(move |conn| {
+            let mut sql = format!(
+                "SELECT started_at // ? AS bucket, {} FROM spans WHERE started_at >= ?",
+                matcher.to_select()
+            );
+            let mut values =
+                vec![SqlValue::BigInt(window_us), SqlValue::BigInt(since_us)];
+
+            matcher.push_filters(&mut sql, &mut values);
+            sql.push_str(&format!(
+                " GROUP BY bucket, {} ORDER BY bucket, service, route",
+                matcher.to_group()
+            ));
+
+            let mut statement = conn.prepare(&sql)?;
+            statement
+                .query_map(params_from_iter(values), |row| {
+                    Ok((row.get(0)?, read_span_stat(row, 1)?))
+                })?
+                .collect()
         })
         .await
 }

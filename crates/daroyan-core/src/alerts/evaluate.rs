@@ -1,6 +1,10 @@
 use daroyan_protocol::report::ContainerCount;
 
-use crate::alerts::rules::{Condition, LogGroup, format_duration};
+use crate::alerts::rules::{
+    Condition, LogGroup, TraceMeasure, TraceRule, format_duration, format_ms,
+    make_trace_subject,
+};
+use crate::analytics::spans::SpanStat;
 use crate::servers::report::LastReport;
 use crate::servers::status::get_percent;
 
@@ -168,6 +172,48 @@ pub fn make_log_reading(
         found as f64,
         format!("{found} {level} lines in {}", format_duration(within_secs)),
     )
+}
+
+pub fn find_trace_readings(
+    trace: &TraceRule,
+    stats: &[SpanStat],
+) -> Option<Vec<Reading>> {
+    if stats.is_empty() {
+        return None;
+    }
+
+    let min_requests = u64::from(trace.min_requests);
+    let readings = stats
+        .iter()
+        .filter(|stat| stat.requests >= min_requests)
+        .filter_map(|stat| make_trace_reading(trace.measure, stat))
+        .collect();
+
+    Some(readings)
+}
+
+pub fn make_trace_reading(measure: TraceMeasure, stat: &SpanStat) -> Option<Reading> {
+    let subject = make_trace_subject(&stat.service, stat.route.as_deref());
+
+    match measure {
+        TraceMeasure::Errors => {
+            let percent = stat.error_percent();
+            let label =
+                format!("{} of {} requests failed", format_rate(percent), stat.requests);
+            Some(make_reading(&subject, percent, label))
+        }
+        TraceMeasure::Latency(percentile) => {
+            let ms = stat.duration_us? / 1000.0;
+            let label =
+                format!("{percentile} {} over {} requests", format_ms(ms), stat.requests);
+            Some(make_reading(&subject, ms, label))
+        }
+    }
+}
+
+pub fn format_rate(percent: f64) -> String {
+    let rate = format!("{percent:.1}");
+    format!("{}%", rate.trim_end_matches(".0"))
 }
 
 pub fn format_percent(value: f64) -> String {
@@ -354,6 +400,48 @@ mod tests {
             log_counts: &[],
         };
         assert_eq!(find_readings(&Condition::Offline, &server), None);
+    }
+
+    #[test]
+    fn reads_trace_stats_per_service_above_the_minimum() {
+        let stat = |service: &str, route: Option<&str>, requests, errors, duration_us| {
+            SpanStat {
+                service: service.to_string(),
+                route: route.map(str::to_string),
+                requests,
+                errors,
+                duration_us,
+            }
+        };
+        let errors: Condition = serde_json::from_str(
+            r#"{"kind":"trace_errors","above":5,"within_secs":300,"min_requests":10}"#,
+        )
+        .unwrap();
+        let trace = errors.trace_rule().unwrap();
+
+        assert_eq!(find_trace_readings(&trace, &[]), None);
+
+        let stats = [stat("api", None, 1204, 86, None), stat("cron", None, 2, 1, None)];
+        let readings = find_trace_readings(&trace, &stats).unwrap();
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].subject, "api");
+        assert_eq!(readings[0].label, "7.1% of 1204 requests failed");
+        assert_eq!(rate(&errors, None, readings[0].value), Level::Critical);
+
+        let quiet = [stat("cron", None, 2, 2, None)];
+        assert_eq!(find_trace_readings(&trace, &quiet), Some(Vec::new()));
+
+        let latency: Condition = serde_json::from_str(
+            r#"{"kind":"trace_latency","above":1000,"within_secs":300,"group_by":"route"}"#,
+        )
+        .unwrap();
+        let trace = latency.trace_rule().unwrap();
+        let stats = [stat("api", Some("GET /search"), 40, 0, Some(2_400_000.0))];
+        let readings = find_trace_readings(&trace, &stats).unwrap();
+        assert_eq!(readings[0].subject, "api · GET /search");
+        assert_eq!(readings[0].value, 2400.0);
+        assert_eq!(readings[0].label, "p95 2.4 s over 40 requests");
+        assert_eq!(format_rate(20.0), "20%");
     }
 
     #[test]

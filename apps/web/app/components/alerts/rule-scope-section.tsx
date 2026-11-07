@@ -35,6 +35,16 @@ export function RuleScopeSection(props: RuleScopeSectionProps) {
     noun
   );
 
+  if (noun === 'service') {
+    return (
+      <FormSection title={nouns}>
+        <p className="p-3.5 text-caption leading-4.5 text-text-secondary">
+          Covers every service that sends traces, with one alert per service. Pick a service in the rule to watch only that one.
+        </p>
+      </FormSection>
+    );
+  }
+
   const scopeItems: { value: ScopeKind; label: string }[] = [
     { value: 'all', label: `All ${nouns}` },
     ...(noun === 'server' ? [{ value: 'label' as const, label: 'With Label' }] : []),

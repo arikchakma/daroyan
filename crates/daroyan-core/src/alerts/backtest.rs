@@ -1,11 +1,17 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use daroyan_protocol::host::Host;
 use duckdb::params;
 
-use crate::alerts::rules::{Condition, Scope, Target, read_log_severity};
+use crate::alerts::evaluate::{Level, make_trace_reading, rate};
+use crate::alerts::rules::{Condition, Scope, Target, TraceRule, read_log_severity};
 use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source, list_busy_windows,
+};
+use crate::analytics::spans::{
+    TRACES_TARGET_ID, TRACES_TARGET_NAME, measure_span_windows,
 };
 use crate::db::Database;
 use crate::db::entities::servers::Model as Server;
@@ -47,6 +53,12 @@ pub async fn backtest_rule(
     for_secs: u32,
     days: i64,
 ) -> Result<Option<Vec<BacktestHit>>> {
+    let since = Utc::now().timestamp_millis() - days * 86_400_000;
+
+    if let Some(trace) = condition.trace_rule() {
+        return Ok(Some(backtest_traces(analytics, condition, &trace, since).await?));
+    }
+
     if matches!(
         condition,
         Condition::PortClosed { .. } | Condition::ProcessDegraded { .. }
@@ -54,7 +66,7 @@ pub async fn backtest_rule(
     {
         return Ok(None);
     }
-    let since = Utc::now().timestamp_millis() - days * 86_400_000;
+
     let for_ms = i64::from(for_secs) * 1000;
     let servers = database.list_servers().await?;
     if matches!(condition, Condition::Logs { .. }) {
@@ -207,6 +219,52 @@ async fn backtest_logs(
                 });
             }
         }
+    }
+
+    hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
+    hits.truncate(MAX_HITS);
+    Ok(hits)
+}
+
+async fn backtest_traces(
+    analytics: &Analytics,
+    condition: &Condition,
+    trace: &TraceRule<'_>,
+    since: i64,
+) -> Result<Vec<BacktestHit>> {
+    let window_us = trace.window_us();
+    let windows =
+        measure_span_windows(analytics, trace.to_span_match(), since * 1000, window_us)
+            .await?;
+
+    let min_requests = u64::from(trace.min_requests);
+    let mut last_breach: HashMap<String, i64> = HashMap::new();
+    let mut hits = Vec::new();
+
+    for (bucket, stat) in windows {
+        if stat.requests < min_requests {
+            continue;
+        }
+
+        let Some(reading) = make_trace_reading(trace.measure, &stat) else {
+            continue;
+        };
+        if rate(condition, None, reading.value) == Level::Ok {
+            continue;
+        }
+
+        let previous = last_breach.insert(reading.subject.clone(), bucket);
+        if previous == Some(bucket - 1) {
+            continue;
+        }
+
+        hits.push(BacktestHit {
+            server_id: TRACES_TARGET_ID.to_string(),
+            server_name: TRACES_TARGET_NAME.to_string(),
+            subject: reading.subject,
+            value: reading.label,
+            at: bucket * window_us / 1000,
+        });
     }
 
     hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
