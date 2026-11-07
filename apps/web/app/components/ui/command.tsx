@@ -79,7 +79,7 @@ function CommandItem(props: CommandItemProps) {
   return (
     <AutocompletePrimitive.Item
       className={cn(
-        'relative flex h-9 cursor-default [scroll-margin-block:0.375rem] items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:pointer-events-none data-disabled:opacity-50 data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+        'relative flex h-9 cursor-default [scroll-margin-block:0.375rem] items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:cursor-not-allowed data-disabled:data-highlighted:bg-transparent data-disabled:opacity-50 data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
         className
       )}
       {...rest}

@@ -42,7 +42,7 @@ function MenuItem(props: MenuItemProps) {
   return (
     <MenuPrimitive.Item
       className={cn(
-        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:pointer-events-none data-disabled:text-text-tertiary data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:cursor-not-allowed data-disabled:data-highlighted:bg-transparent data-disabled:text-text-tertiary data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
         className
       )}
       {...rest}
@@ -58,7 +58,7 @@ function MenuLinkItem(props: MenuLinkItemProps) {
   return (
     <MenuPrimitive.LinkItem
       className={cn(
-        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:pointer-events-none data-disabled:text-text-tertiary data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:cursor-not-allowed data-disabled:data-highlighted:bg-transparent data-disabled:text-text-tertiary data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
         className
       )}
       {...rest}
@@ -74,7 +74,7 @@ function MenuCheckboxItem(props: MenuCheckboxItemProps) {
   return (
     <MenuPrimitive.CheckboxItem
       className={cn(
-        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:pointer-events-none data-disabled:text-text-tertiary data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:cursor-not-allowed data-disabled:data-highlighted:bg-transparent data-disabled:text-text-tertiary data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
         className
       )}
       {...rest}
@@ -95,7 +95,7 @@ function MenuRadioItem(props: MenuRadioItemProps) {
   return (
     <MenuPrimitive.RadioItem
       className={cn(
-        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:pointer-events-none data-disabled:text-text-tertiary data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:cursor-not-allowed data-disabled:data-highlighted:bg-transparent data-disabled:text-text-tertiary data-highlighted:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
         className
       )}
       {...rest}
@@ -116,7 +116,7 @@ function MenuSubmenuTrigger(props: MenuSubmenuTriggerProps) {
   return (
     <MenuPrimitive.SubmenuTrigger
       className={cn(
-        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:pointer-events-none data-disabled:text-text-tertiary data-highlighted:bg-surface-fill data-popup-open:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:cursor-not-allowed data-disabled:data-highlighted:bg-transparent data-disabled:text-text-tertiary data-highlighted:bg-surface-fill data-popup-open:bg-surface-fill [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
         className
       )}
       {...rest}

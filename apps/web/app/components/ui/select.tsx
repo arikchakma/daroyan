@@ -11,7 +11,7 @@ function SelectTrigger(props: SelectTriggerProps) {
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        'flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-border-ring bg-surface-default pr-2.5 pl-3 text-body whitespace-nowrap text-text-primary outline-none focus-visible:border-border-strong data-disabled:cursor-not-allowed data-disabled:opacity-60 data-popup-open:border-border-strong',
+        'flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-border-ring bg-surface-default pr-2.5 pl-3 text-body whitespace-nowrap text-text-primary outline-none focus-visible:border-border-strong data-disabled:cursor-not-allowed data-disabled:data-highlighted:bg-transparent data-disabled:opacity-60 data-popup-open:border-border-strong',
         className
       )}
       {...rest}
@@ -76,7 +76,7 @@ function SelectItem(props: SelectItemProps) {
   return (
     <SelectPrimitive.Item
       className={cn(
-        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:pointer-events-none data-disabled:text-text-tertiary data-highlighted:bg-surface-fill data-selected:bg-surface-fill',
+        'relative flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-body text-text-primary outline-none select-none data-disabled:cursor-not-allowed data-disabled:data-highlighted:bg-transparent data-disabled:text-text-tertiary data-highlighted:bg-surface-fill data-selected:bg-surface-fill',
         className
       )}
       {...rest}
