@@ -28,7 +28,7 @@ export function UnitField(props: UnitFieldProps) {
           {unit && value && (
             <span aria-hidden className="pointer-events-none absolute inset-y-0 left-px flex items-center pl-3 text-body">
               <span className="invisible whitespace-pre">{value}</span>
-              <span className="text-text-primary">{unit === '%' ? unit : ` ${unit}`}</span>
+              <span className="whitespace-pre text-text-primary">{unit === '%' ? unit : ` ${unit}`}</span>
             </span>
           )}
         </div>
