@@ -109,7 +109,7 @@ function ValueHeader(props: ValueHeaderProps) {
           aria-label="What the value means"
           className="inline-flex items-center text-text-tertiary outline-none hover:text-text-primary focus-visible:text-text-primary"
         >
-          <Icon name="info" className="size-3.5" />
+          <Icon name="info" className="size-3" />
         </Tooltip.Trigger>
         <Tooltip.Portal>
           <Tooltip.Positioner side="top">
