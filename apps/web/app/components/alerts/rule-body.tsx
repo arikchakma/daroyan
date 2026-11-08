@@ -49,6 +49,7 @@ import {
   getRuleState,
   INTEGRATION_KINDS,
   getTraceScopeLabel,
+  getValueHint,
   isCheckKind,
   isCronKind,
   isIntegrationKind,
@@ -134,7 +135,7 @@ export function RuleBody(props: RuleBodyProps) {
     ? getTraceScopeLabel(traceCondition)
     : describeScope(rule.scope, servers, checks, isCheck, crons, isCron);
   const coveredCount = isTrace ? coveredServices.length : covered.length;
-  const table = useAlertHistoryTable(history, mutes);
+  const table = useAlertHistoryTable(history, mutes, getValueHint(rule.condition));
   const unmute = useMutation({
     ...deleteAlertMuteOptions(),
     meta: { errorMessage: 'The alert could not be unmuted' },

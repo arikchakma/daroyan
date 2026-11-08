@@ -450,6 +450,39 @@ export function describeResolve(condition?: Schemas['Condition']) {
   }
 }
 
+export function getValueHint(condition?: Schemas['Condition']) {
+  if (!condition) {
+    return undefined;
+  }
+
+  switch (condition.kind) {
+    case 'cpu':
+      return 'CPU usage when the alert fired.';
+    case 'memory':
+      return 'Memory usage when the alert fired.';
+    case 'disk':
+      return 'Disk usage when the alert fired.';
+    case 'load':
+      return 'Load average over 1 minute when the alert fired.';
+    case 'response_time':
+      return 'How long the check took to respond when the alert fired.';
+    case 'first_byte':
+      return 'How long the check took to send the first byte when the alert fired.';
+    case 'cert_days':
+      return 'Days left on the certificate when the alert fired.';
+    case 'logs':
+      return `Matching log lines in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
+    case 'trace_errors':
+      return `Share of requests that failed in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
+    case 'trace_latency': {
+      const percentile = condition.percentile ?? 'p95';
+      return `${percentile} latency in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired. ${percentile} means ${percentile.slice(1)}% of requests finished faster than this.`;
+    }
+    default:
+      return undefined;
+  }
+}
+
 export function describeAlertNow(alert: Schemas['Alert'], summary?: string) {
   const rest = summary?.match(/ (above|below|over) .*/)?.[0];
   return rest ? `${alert.subject} is at ${alert.value},${rest}.` : `${alert.subject}: ${alert.value}.`;
