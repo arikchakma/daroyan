@@ -10,8 +10,8 @@ use tokio::task::JoinHandle;
 use crate::agents::Agents;
 use crate::alerts::deploys::{DEPLOY_WINDOW_SECS, DeployNote, DeployWatch};
 use crate::alerts::evaluate::{
-    Level, NO_DATA, Reading, ServerSnapshot, find_readings, format_percent, is_past,
-    make_log_reading, make_reading, rate,
+    Level, NO_DATA, Reading, ServerSnapshot, find_readings, find_trace_readings,
+    format_percent, is_past, make_log_reading, make_reading, rate,
 };
 use crate::alerts::facts::{AlertFacts, CheckCount, FactSources};
 use crate::alerts::integrations::IntegrationConfig;
@@ -20,14 +20,17 @@ use crate::alerts::notify::{
     ChatMessage, Details, Notice, Thread, Tone, send_notice, update_parent,
 };
 use crate::alerts::rules::{
-    Condition, NoData, RuleOptions, Scope, Target, describe_rule, format_clock,
-    format_duration, format_ms, read_log_severity, read_time_zone,
+    Condition, NoData, RuleOptions, Scope, Target, TraceRule, describe_rule,
+    format_clock, format_duration, format_ms, read_log_severity, read_time_zone,
 };
 use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source,
 };
 use crate::analytics::server_states::aggregate_server_metric;
+use crate::analytics::spans::{
+    SpanOrder, TRACES_TARGET_ID, TRACES_TARGET_NAME, measure_spans,
+};
 use crate::analytics::uptime_results::{aggregate_check_metric, list_cert_expiries};
 use crate::db::Database;
 use crate::db::entities::alert_mutes::Model as AlertMute;
@@ -48,6 +51,7 @@ use crate::servers::report::LastReport;
 const TICK: Duration = Duration::from_secs(15);
 const DAY_MS: f64 = 86_400_000.0;
 const LIMIT_WINDOW_SECS: i64 = 3600;
+const MAX_TRACE_GROUPS: u32 = 200;
 
 type AlertKey = (String, String, String);
 
@@ -154,6 +158,7 @@ fn get_target(alert: &Alert) -> Target {
         (Some(_), _, _) => Target::Check,
         (_, Some(_), _) => Target::Cron,
         (_, _, Some(OTLP_SERVER_ID)) => Target::Telemetry,
+        (_, _, Some(TRACES_TARGET_ID)) => Target::Traces,
         _ => Target::Server,
     }
 }
@@ -240,6 +245,29 @@ impl AlertEngine {
         })
     }
 
+    async fn read_trace_target(
+        &self,
+        trace: &TraceRule<'_>,
+        now: DateTime<Utc>,
+    ) -> Result<TargetReadings> {
+        let since_us = now.timestamp_micros() - trace.window_us();
+        let stats = measure_spans(
+            &self.analytics,
+            trace.to_span_match(),
+            since_us,
+            SpanOrder::Requests,
+            MAX_TRACE_GROUPS,
+        )
+        .await?;
+
+        Ok(TargetReadings {
+            id: TRACES_TARGET_ID.to_string(),
+            name: TRACES_TARGET_NAME.to_string(),
+            target: Target::Traces,
+            readings: find_trace_readings(trace, &stats),
+        })
+    }
+
     async fn aggregate_servers(
         &self,
         parsed: &ParsedRule,
@@ -296,6 +324,10 @@ impl AlertEngine {
         cron_failures: &HashMap<(String, String), String>,
         now: DateTime<Utc>,
     ) -> Result<Vec<TargetReadings>> {
+        if let Some(trace) = parsed.condition.trace_rule() {
+            return Ok(vec![self.read_trace_target(&trace, now).await?]);
+        }
+
         if parsed.condition.target() == Target::Cron {
             let (kind, label) = match parsed.condition {
                 Condition::CronMissed => ("missed", "Missed"),
@@ -465,7 +497,10 @@ impl AlertEngine {
             .map(|server| (server.id.clone(), server.name.clone()))
             .chain(checks.iter().map(|check| (check.id.clone(), check.name.clone())))
             .chain(crons.iter().map(|cron| (cron.id.clone(), cron.name.clone())))
-            .chain([(OTLP_SERVER_ID.to_string(), OTLP_SERVER_NAME.to_string())])
+            .chain([
+                (OTLP_SERVER_ID.to_string(), OTLP_SERVER_NAME.to_string()),
+                (TRACES_TARGET_ID.to_string(), TRACES_TARGET_NAME.to_string()),
+            ])
             .collect();
         self.end_mutes(&rules, &firing, &target_names, &integrations, now)
             .await?;
@@ -628,10 +663,6 @@ impl AlertEngine {
         summary
     }
 
-    fn get_target_url(&self, target: Target, id: &str) -> Option<String> {
-        self.app_url.as_ref().map(|url| target.url(url, id))
-    }
-
     fn make_title(parsed: &ParsedRule, prefix: &str, rule: &AlertRule) -> String {
         match &parsed.options.severity_label {
             Some(label) => format!("[{label}] {prefix}: {}", rule.name),
@@ -728,7 +759,7 @@ impl AlertEngine {
             tone: moment.tone(&alert.severity),
             title: Self::make_title(parsed, prefix, rule),
             body,
-            url: self.get_target_url(target, &target_id),
+            url: message.url(),
             data: describe_alert(rule, target, &target_id, target_name, alert),
             details: message.details(moment),
         }
@@ -755,7 +786,8 @@ impl AlertEngine {
                 id: new_id(Prefix::Alert),
                 rule_id: rule.id.clone(),
                 server_id: target_of(Target::Server)
-                    .or_else(|| target_of(Target::Telemetry)),
+                    .or_else(|| target_of(Target::Telemetry))
+                    .or_else(|| target_of(Target::Traces)),
                 check_id: target_of(Target::Check),
                 cron_id: target_of(Target::Cron),
                 subject: reading.subject,
@@ -806,7 +838,7 @@ impl AlertEngine {
             rule,
             target_kind: target.kind(),
             target_id,
-            target_name: if target == Target::Telemetry {
+            target_name: if matches!(target, Target::Telemetry | Target::Traces) {
                 &alert.subject
             } else {
                 target_name

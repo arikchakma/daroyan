@@ -1419,6 +1419,33 @@ export interface components {
         } | {
             /** @enum {string} */
             kind: "cron_failed";
+        } | {
+            /** Format: double */
+            above: number;
+            group_by?: components["schemas"]["TraceGroup"];
+            /** @enum {string} */
+            kind: "trace_errors";
+            /** Format: int32 */
+            min_requests?: number;
+            route?: string | null;
+            service?: string | null;
+            spans?: components["schemas"]["TraceSpans"];
+            /** Format: int32 */
+            within_secs: number;
+        } | {
+            /** Format: double */
+            above: number;
+            group_by?: components["schemas"]["TraceGroup"];
+            /** @enum {string} */
+            kind: "trace_latency";
+            /** Format: int32 */
+            min_requests?: number;
+            percentile?: components["schemas"]["Percentile"];
+            route?: string | null;
+            service?: string | null;
+            spans?: components["schemas"]["TraceSpans"];
+            /** Format: int32 */
+            within_secs: number;
         };
         Container: {
             config_hash?: string | null;
@@ -2056,6 +2083,8 @@ export interface components {
         OverviewUpcoming: {
             items: components["schemas"]["UpcomingItem"][];
         };
+        /** @enum {string} */
+        Percentile: "p50" | "p95" | "p99";
         PortState: {
             host: string;
             /** Format: int32 */
@@ -2429,6 +2458,8 @@ export interface components {
             mem_used: number;
             name: string;
         };
+        /** @enum {string} */
+        TraceGroup: "service" | "route";
         TraceService: {
             /** Format: int64 */
             error_count: number;
@@ -2461,6 +2492,8 @@ export interface components {
             status: string;
             status_message?: string | null;
         };
+        /** @enum {string} */
+        TraceSpans: "entry" | "all";
         TraceStatus: {
             /** Format: int64 */
             last_span_at?: number | null;

@@ -8,6 +8,7 @@ use daroyan_core::alerts::engine::{DeliveryLog, notify_integrations, parse_rule}
 use daroyan_core::alerts::notify::{Details, Notice, Tone};
 use daroyan_core::alerts::rules::{format_clock, format_duration, read_time_zone};
 use daroyan_core::analytics::log_lines::{OTLP_SERVER_ID, OTLP_SERVER_NAME};
+use daroyan_core::analytics::spans::{TRACES_TARGET_ID, TRACES_TARGET_NAME};
 use daroyan_core::db::entities::users::Model as User;
 use daroyan_core::db::ids::{AlertMuteId, AlertRuleId, CronId};
 use daroyan_core::db::queries::alert_mutes::NewAlertMute;
@@ -121,6 +122,7 @@ async fn create_alert_mute(
     }
     let target_name = match (&body.server_id, &body.check_id, &body.cron_id) {
         (Some(id), _, _) if id == OTLP_SERVER_ID => OTLP_SERVER_NAME.to_string(),
+        (Some(id), _, _) if id == TRACES_TARGET_ID => TRACES_TARGET_NAME.to_string(),
         (Some(id), _, _) => state
             .database
             .list_servers()

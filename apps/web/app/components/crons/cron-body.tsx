@@ -145,7 +145,7 @@ export function CronBody(props: CronBodyProps) {
         <div className="flex w-200 max-w-full min-w-0 flex-col gap-6">
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2.5">
-              <h1 className="truncate font-mono text-title-page font-semibold">{cron.name}</h1>
+              <h1 className="truncate text-title-page font-semibold">{cron.name}</h1>
               <CronStatusBadge status={cron.status} />
             </div>
             <p className="truncate text-body text-text-secondary">{subtitle}</p>

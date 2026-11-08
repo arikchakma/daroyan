@@ -3,6 +3,7 @@ import type { Schemas } from '@daroyan/client';
 import type { IconName } from '~/components/icons/icon-paths';
 import { formatClock, formatDate, formatUnit } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
+import { getTraceService, TRACES_TARGET_ID } from '~/utils/traces';
 
 export const CONNECTED_MESSAGE = 'daroyan:integration-connected';
 
@@ -45,12 +46,20 @@ export const METRIC_GROUPS: { label: string; items: { kind: ConditionKind; label
     ],
   },
   { label: 'Logs', items: [{ kind: 'logs', label: 'Matching lines' }] },
+  {
+    label: 'Traces',
+    items: [
+      { kind: 'trace_errors', label: 'Error rate' },
+      { kind: 'trace_latency', label: 'Latency' },
+    ],
+  },
 ];
 
 export const CONDITION_OPTIONS = METRIC_GROUPS.flatMap((group) => group.items);
 
 const CHECK_KINDS: ConditionKind[] = ['uptime_down', 'response_time', 'first_byte', 'cert_days'];
 const CRON_KINDS: ConditionKind[] = ['cron_missed', 'cron_failed'];
+const TRACE_KINDS: ConditionKind[] = ['trace_errors', 'trace_latency'];
 const AGGREGATED_KINDS: ConditionKind[] = ['cpu', 'memory', 'disk', 'load', 'response_time', 'first_byte'];
 
 export function isCheckKind(kind: ConditionKind) {
@@ -59,6 +68,10 @@ export function isCheckKind(kind: ConditionKind) {
 
 export function isCronKind(kind: ConditionKind) {
   return CRON_KINDS.includes(kind);
+}
+
+export function isTraceKind(kind: ConditionKind) {
+  return TRACE_KINDS.includes(kind);
 }
 
 export function hasAggregation(kind: ConditionKind) {
@@ -70,9 +83,11 @@ export function getUnit(kind: ConditionKind) {
     case 'cpu':
     case 'memory':
     case 'disk':
+    case 'trace_errors':
       return '%';
     case 'response_time':
     case 'first_byte':
+    case 'trace_latency':
       return 'ms';
     case 'cert_days':
       return 'days';
@@ -142,7 +157,7 @@ export function getAlertMute(mutes: Schemas['AlertMute'][], alert: MuteMatch) {
 }
 
 export function getMutedService(alert: Pick<Schemas['Alert'], 'server_id' | 'subject'>, rule?: Schemas['AlertRule']) {
-  if (alert.server_id === OTLP_SERVER_ID) {
+  if (alert.server_id === OTLP_SERVER_ID || alert.server_id === TRACES_TARGET_ID) {
     return alert.subject;
   }
   if (readLogCondition(rule?.condition)?.group_by === 'source') {
@@ -243,6 +258,33 @@ export const LOG_WINDOW_OPTIONS: { value: number; label: string }[] = [
   { value: 3600, label: '1 hour' },
 ];
 
+export const TRACE_WINDOW_OPTIONS = LOG_WINDOW_OPTIONS;
+
+export const PERCENTILE_OPTIONS: { value: Schemas['Percentile']; label: string }[] = [
+  { value: 'p50', label: 'p50' },
+  { value: 'p95', label: 'p95' },
+  { value: 'p99', label: 'p99' },
+];
+
+export const TRACE_SPANS_OPTIONS: { value: Schemas['TraceSpans']; label: string }[] = [
+  { value: 'entry', label: 'Incoming requests' },
+  { value: 'all', label: 'All spans' },
+];
+
+export const TRACE_GROUP_OPTIONS: { value: Schemas['TraceGroup']; label: string }[] = [
+  { value: 'service', label: 'Each service' },
+  { value: 'route', label: 'Each route' },
+];
+
+export type TraceCondition = Extract<Schemas['Condition'], { kind: 'trace_errors' | 'trace_latency' }>;
+
+export function readTraceCondition(condition?: Schemas['Condition']): TraceCondition | undefined {
+  if (condition?.kind === 'trace_errors' || condition?.kind === 'trace_latency') {
+    return condition;
+  }
+  return undefined;
+}
+
 export type LogCondition = Extract<Schemas['Condition'], { kind: 'logs' }>;
 
 export function readLogCondition(condition?: Schemas['Condition']) {
@@ -272,7 +314,7 @@ export function isIntegrationKind(value: string): value is IntegrationKind {
 }
 
 export function hasThreshold(kind: ConditionKind) {
-  return hasAggregation(kind) || kind === 'cert_days' || kind === 'logs';
+  return hasAggregation(kind) || isTraceKind(kind) || kind === 'cert_days' || kind === 'logs';
 }
 
 export function isProcessKind(kind: ConditionKind) {
@@ -323,6 +365,20 @@ export function describeScope(
   return names.length > 2 ? `${names.length} ${noun}` : names.join(', ');
 }
 
+export function getTraceScopeLabel(condition?: TraceCondition) {
+  return condition?.service ?? 'All services';
+}
+
+export function getAlertNoun(alert: Pick<Schemas['Alert'], 'server_id' | 'check_id' | 'cron_id'>) {
+  if (alert.check_id) {
+    return 'check';
+  }
+  if (alert.cron_id) {
+    return 'cron';
+  }
+  return alert.server_id === TRACES_TARGET_ID ? 'service' : 'server';
+}
+
 export function formatForSecs(secs: number) {
   return FOR_OPTIONS.find((option) => option.value === secs)?.label ?? `${Math.round(secs / 60)} minutes`;
 }
@@ -343,6 +399,9 @@ export function getAlertTargetPath(alert: Pick<Schemas['Alert'], 'server_id' | '
   }
   if (alert.server_id === OTLP_SERVER_ID) {
     return `/logs?${new URLSearchParams({ server_id: OTLP_SERVER_ID, service: alert.subject })}`;
+  }
+  if (alert.server_id === TRACES_TARGET_ID) {
+    return `/traces?${new URLSearchParams({ service: getTraceService(alert.subject) })}`;
   }
   return alert.check_id ? `/uptime/${alert.check_id}` : `/servers/${alert.server_id}`;
 }
@@ -383,9 +442,44 @@ export function describeResolve(condition?: Schemas['Condition']) {
         load: 'load',
         response_time: 'the response time',
         first_byte: 'the first byte time',
+        trace_errors: 'the error rate',
+        trace_latency: 'the latency',
       };
       return `Ends when ${names[condition.kind] ?? 'it'} drops below ${formatLimit(condition.kind, limit ?? 0)}`;
     }
+  }
+}
+
+export function getValueHint(condition?: Schemas['Condition']) {
+  if (!condition) {
+    return undefined;
+  }
+
+  switch (condition.kind) {
+    case 'cpu':
+      return 'CPU usage when the alert fired.';
+    case 'memory':
+      return 'Memory usage when the alert fired.';
+    case 'disk':
+      return 'Disk usage when the alert fired.';
+    case 'load':
+      return 'Load average over 1 minute when the alert fired.';
+    case 'response_time':
+      return 'How long the check took to respond when the alert fired.';
+    case 'first_byte':
+      return 'How long the check took to send the first byte when the alert fired.';
+    case 'cert_days':
+      return 'Days left on the certificate when the alert fired.';
+    case 'logs':
+      return `Matching log lines in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
+    case 'trace_errors':
+      return `Share of requests that failed in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
+    case 'trace_latency': {
+      const percentile = condition.percentile ?? 'p95';
+      return `${percentile} latency in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired. ${percentile} means ${percentile.slice(1)}% of requests finished faster than this.`;
+    }
+    default:
+      return undefined;
   }
 }
 

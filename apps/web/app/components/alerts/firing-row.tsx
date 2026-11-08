@@ -8,6 +8,7 @@ import { describeFiring, describeMuteEnd, getAlertTargetPath } from '~/utils/ale
 import { cn } from '~/utils/classname';
 import { formatClock, joinNames } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
+import { TRACES_TARGET_ID } from '~/utils/traces';
 
 function getOpenAction(alert: Schemas['Alert']): { icon: IconName; label: string } {
   if (alert.check_id) {
@@ -18,6 +19,9 @@ function getOpenAction(alert: Schemas['Alert']): { icon: IconName; label: string
   }
   if (alert.server_id === OTLP_SERVER_ID) {
     return { icon: 'terminal', label: 'Open Logs' };
+  }
+  if (alert.server_id === TRACES_TARGET_ID) {
+    return { icon: 'layers', label: 'Open Traces' };
   }
   return { icon: 'server', label: 'Open Server' };
 }

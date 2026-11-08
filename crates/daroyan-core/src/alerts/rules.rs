@@ -1,8 +1,11 @@
+use std::fmt;
+
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::analytics::spans::SpanMatch;
 use crate::error::{Error, ErrorName, Result};
 
 pub const MAX_FOR_SECS: u32 = 86_400;
@@ -53,6 +56,181 @@ pub enum Condition {
     },
     CronMissed,
     CronFailed,
+    TraceErrors {
+        above: f64,
+        within_secs: u32,
+        #[serde(default = "default_min_requests")]
+        min_requests: u32,
+        service: Option<String>,
+        route: Option<String>,
+        #[serde(default)]
+        spans: TraceSpans,
+        #[serde(default)]
+        group_by: TraceGroup,
+    },
+    TraceLatency {
+        above: f64,
+        #[serde(default)]
+        percentile: Percentile,
+        within_secs: u32,
+        #[serde(default = "default_min_requests")]
+        min_requests: u32,
+        service: Option<String>,
+        route: Option<String>,
+        #[serde(default)]
+        spans: TraceSpans,
+        #[serde(default)]
+        group_by: TraceGroup,
+    },
+}
+
+pub const DEFAULT_MIN_REQUESTS: u32 = 10;
+pub const MAX_TRACE_WINDOW_SECS: u32 = 3600;
+const MAX_TRACE_FILTER: usize = 200;
+const ROUTE_SEPARATOR: &str = " · ";
+
+fn default_min_requests() -> u32 {
+    DEFAULT_MIN_REQUESTS
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceSpans {
+    #[default]
+    Entry,
+    All,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceGroup {
+    #[default]
+    Service,
+    Route,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Percentile {
+    P50,
+    #[default]
+    P95,
+    P99,
+}
+
+impl Percentile {
+    pub fn quantile(self) -> f64 {
+        match self {
+            Self::P50 => 0.5,
+            Self::P95 => 0.95,
+            Self::P99 => 0.99,
+        }
+    }
+}
+
+impl fmt::Display for Percentile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::P50 => "p50",
+            Self::P95 => "p95",
+            Self::P99 => "p99",
+        };
+        formatter.write_str(label)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TraceMeasure {
+    Errors,
+    Latency(Percentile),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TraceRule<'a> {
+    pub measure: TraceMeasure,
+    pub above: f64,
+    pub within_secs: u32,
+    pub min_requests: u32,
+    pub service: Option<&'a str>,
+    pub route: Option<&'a str>,
+    pub spans: TraceSpans,
+    pub group_by: TraceGroup,
+}
+
+impl TraceRule<'_> {
+    pub fn to_span_match(&self) -> SpanMatch {
+        SpanMatch {
+            service: self.service.map(str::to_string),
+            route: self.route.map(str::to_string),
+            is_entry_only: self.spans == TraceSpans::Entry,
+            is_by_route: self.group_by == TraceGroup::Route,
+            quantile: match self.measure {
+                TraceMeasure::Errors => None,
+                TraceMeasure::Latency(percentile) => Some(percentile.quantile()),
+            },
+        }
+    }
+
+    pub fn window_us(&self) -> i64 {
+        i64::from(self.within_secs) * 1_000_000
+    }
+}
+
+impl<'a> TraceRule<'a> {
+    pub fn read_subject(&self, subject: &'a str) -> (&'a str, Option<&'a str>) {
+        if self.group_by == TraceGroup::Service {
+            return (subject, self.route);
+        }
+
+        match subject.split_once(ROUTE_SEPARATOR) {
+            Some((service, route)) => (service, Some(route)),
+            None => (subject, self.route),
+        }
+    }
+}
+
+impl fmt::Display for TraceRule<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.measure {
+            TraceMeasure::Errors => {
+                write!(formatter, "Error rate above {}%", self.above)?;
+            }
+            TraceMeasure::Latency(percentile) => {
+                write!(
+                    formatter,
+                    "{percentile} latency above {}",
+                    format_ms(self.above)
+                )?;
+            }
+        }
+
+        write!(formatter, " in {}", format_duration(self.within_secs))?;
+
+        if let Some(service) = self.service {
+            write!(formatter, " for {service}")?;
+        }
+
+        if let Some(route) = self.route {
+            write!(formatter, " on {route}")?;
+        }
+
+        if self.group_by == TraceGroup::Route {
+            formatter.write_str(" per route")?;
+        }
+
+        if self.spans == TraceSpans::All {
+            formatter.write_str(" across all spans")?;
+        }
+
+        write!(formatter, ", with {}+ requests", self.min_requests)
+    }
+}
+
+pub fn make_trace_subject(service: &str, route: Option<&str>) -> String {
+    match route {
+        Some(route) => format!("{service}{ROUTE_SEPARATOR}{route}"),
+        None => service.to_string(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +239,7 @@ pub enum Target {
     Check,
     Cron,
     Telemetry,
+    Traces,
 }
 
 impl Target {
@@ -69,7 +248,7 @@ impl Target {
             Self::Server => "Server",
             Self::Check => "Check",
             Self::Cron => "Cron",
-            Self::Telemetry => "Source",
+            Self::Telemetry | Self::Traces => "Source",
         }
     }
 
@@ -79,6 +258,7 @@ impl Target {
             Self::Check => "check",
             Self::Cron => "cron",
             Self::Telemetry => "telemetry",
+            Self::Traces => "traces",
         }
     }
 
@@ -89,6 +269,7 @@ impl Target {
             Self::Check => format!("{app_url}/uptime/{id}"),
             Self::Cron => format!("{app_url}/crons/{id}"),
             Self::Telemetry => format!("{app_url}/logs?server_id={id}"),
+            Self::Traces => format!("{app_url}/traces"),
         }
     }
 }
@@ -101,6 +282,7 @@ impl Condition {
             | Self::FirstByte { .. }
             | Self::CertDays { .. } => Target::Check,
             Self::CronMissed | Self::CronFailed => Target::Cron,
+            Self::TraceErrors { .. } | Self::TraceLatency { .. } => Target::Traces,
             _ => Target::Server,
         }
     }
@@ -112,7 +294,9 @@ impl Condition {
             | Self::Disk { above }
             | Self::Load { above }
             | Self::ResponseTime { above }
-            | Self::FirstByte { above } => Some(*above),
+            | Self::FirstByte { above }
+            | Self::TraceErrors { above, .. }
+            | Self::TraceLatency { above, .. } => Some(*above),
             Self::CertDays { below } => Some(*below),
             Self::Logs { count, .. } => Some(f64::from(*count)),
             _ => None,
@@ -137,6 +321,49 @@ impl Condition {
             return Some(subject);
         }
         service.as_deref()
+    }
+
+    pub fn trace_rule(&self) -> Option<TraceRule<'_>> {
+        match self {
+            Self::TraceErrors {
+                above,
+                within_secs,
+                min_requests,
+                service,
+                route,
+                spans,
+                group_by,
+            } => Some(TraceRule {
+                measure: TraceMeasure::Errors,
+                above: *above,
+                within_secs: *within_secs,
+                min_requests: *min_requests,
+                service: service.as_deref(),
+                route: route.as_deref(),
+                spans: *spans,
+                group_by: *group_by,
+            }),
+            Self::TraceLatency {
+                above,
+                percentile,
+                within_secs,
+                min_requests,
+                service,
+                route,
+                spans,
+                group_by,
+            } => Some(TraceRule {
+                measure: TraceMeasure::Latency(*percentile),
+                above: *above,
+                within_secs: *within_secs,
+                min_requests: *min_requests,
+                service: service.as_deref(),
+                route: route.as_deref(),
+                spans: *spans,
+                group_by: *group_by,
+            }),
+            _ => None,
+        }
     }
 
     pub fn is_below(&self) -> bool {
@@ -423,9 +650,39 @@ pub fn validate_options(
                 "Leave the source and text out to match any, or give up to 200 characters",
             );
         }
+        Condition::TraceErrors { above, .. } if !(0.0..100.0).contains(above) => {
+            return invalid("The error rate must be between 0 and 100 percent");
+        }
+        Condition::TraceLatency { above, .. } if !(1.0..=600_000.0).contains(above) => {
+            return invalid("The latency must be between 1 ms and 10 minutes");
+        }
         _ => {}
     }
+
+    if let Some(trace) = condition.trace_rule() {
+        if !(60..=MAX_TRACE_WINDOW_SECS).contains(&trace.within_secs) {
+            return invalid("The window must be between 1 minute and 1 hour");
+        }
+
+        if !(1..=100_000).contains(&trace.min_requests) {
+            return invalid("The minimum must be between 1 and 100,000 requests");
+        }
+
+        let is_bad_filter =
+            |text: &str| text.trim().is_empty() || text.len() > MAX_TRACE_FILTER;
+        if [trace.service, trace.route].into_iter().flatten().any(is_bad_filter) {
+            return invalid(
+                "Leave the service and route out to match any, or give up to 200 characters",
+            );
+        }
+    }
+
     match (condition.target(), scope) {
+        (Target::Traces, scope) if *scope != Scope::All => {
+            return invalid(
+                "Trace rules cover all services. Pick a service in the rule to narrow it",
+            );
+        }
         (_, Scope::Label { label }) if label.trim().is_empty() => {
             return invalid("Pick a label");
         }
@@ -584,6 +841,10 @@ pub fn describe_condition(condition: &Condition, for_secs: u32) -> String {
             }
             what
         }
+        Condition::TraceErrors { .. } | Condition::TraceLatency { .. } => condition
+            .trace_rule()
+            .map(|trace| trace.to_string())
+            .unwrap_or_default(),
     };
     if for_secs == 0 { what } else { format!("{what} for {}", format_duration(for_secs)) }
 }
@@ -604,12 +865,13 @@ pub fn describe_rule(
     }
     if let Some(warning) = options.warning {
         let warning = match condition {
-            Condition::ResponseTime { .. } | Condition::FirstByte { .. } => {
-                format_ms(warning)
-            }
-            Condition::Cpu { .. } | Condition::Memory { .. } | Condition::Disk { .. } => {
-                format!("{warning}%")
-            }
+            Condition::ResponseTime { .. }
+            | Condition::FirstByte { .. }
+            | Condition::TraceLatency { .. } => format_ms(warning),
+            Condition::Cpu { .. }
+            | Condition::Memory { .. }
+            | Condition::Disk { .. }
+            | Condition::TraceErrors { .. } => format!("{warning}%"),
             _ => warning.to_string(),
         };
         what.push_str(&format!(", warning at {warning}"));
@@ -704,6 +966,75 @@ mod tests {
         assert!(!scope.includes("srv_2", &[]));
         let offline: Condition = serde_json::from_str(r#"{"kind":"offline"}"#).unwrap();
         assert_eq!(offline, Condition::Offline);
+    }
+
+    #[test]
+    fn reads_and_checks_trace_conditions() {
+        let errors: Condition = serde_json::from_str(
+            r#"{"kind":"trace_errors","above":5,"within_secs":300}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            errors,
+            Condition::TraceErrors {
+                above: 5.0,
+                within_secs: 300,
+                min_requests: DEFAULT_MIN_REQUESTS,
+                service: None,
+                route: None,
+                spans: TraceSpans::Entry,
+                group_by: TraceGroup::Service,
+            }
+        );
+        assert_eq!(errors.target(), Target::Traces);
+        assert_eq!(
+            describe_condition(&errors, 0),
+            "Error rate above 5% in 5m, with 10+ requests"
+        );
+        assert!(validate_rule(&errors, &Scope::All, 0).is_ok());
+        let picked = Scope::Servers { server_ids: vec!["srv_1".into()] };
+        assert!(validate_rule(&errors, &picked, 0).is_err());
+
+        let latency: Condition = serde_json::from_str(
+            r#"{"kind":"trace_latency","above":2400,"percentile":"p99","within_secs":900,"min_requests":50,"service":"inboxjot-api","group_by":"route","spans":"all"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            describe_condition(&latency, 60),
+            "p99 latency above 2.4 s in 15m for inboxjot-api per route across all spans, with 50+ requests for 1m"
+        );
+
+        let trace = latency.trace_rule().unwrap();
+        assert_eq!(trace.measure, TraceMeasure::Latency(Percentile::P99));
+        assert_eq!(
+            trace.read_subject("inboxjot-api · GET /api/search"),
+            ("inboxjot-api", Some("GET /api/search"))
+        );
+        assert_eq!(errors.trace_rule().unwrap().read_subject("a · b"), ("a · b", None));
+
+        let span_match = trace.to_span_match();
+        assert!(span_match.is_by_route && !span_match.is_entry_only);
+        assert_eq!(span_match.quantile, Some(0.99));
+
+        let options = RuleOptions { warning: Some(1000.0), ..RuleOptions::default() };
+        assert!(validate_options(&latency, &options, &Scope::All, 0).is_ok());
+        assert_eq!(
+            describe_rule(&latency, &options, 0),
+            "p99 latency above 2.4 s in 15m for inboxjot-api per route across all spans, with 50+ requests, warning at 1 s"
+        );
+
+        let invalid = [
+            r#"{"kind":"trace_errors","above":120,"within_secs":300}"#,
+            r#"{"kind":"trace_errors","above":5,"within_secs":30}"#,
+            r#"{"kind":"trace_errors","above":5,"within_secs":7200}"#,
+            r#"{"kind":"trace_errors","above":5,"within_secs":300,"min_requests":0}"#,
+            r#"{"kind":"trace_errors","above":5,"within_secs":300,"service":" "}"#,
+            r#"{"kind":"trace_latency","above":0,"within_secs":300}"#,
+        ];
+        for text in invalid {
+            let condition: Condition = serde_json::from_str(text).unwrap();
+            assert!(validate_rule(&condition, &Scope::All, 0).is_err(), "{text}");
+        }
     }
 
     #[test]

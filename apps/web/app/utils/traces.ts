@@ -9,7 +9,15 @@ export type Issue = Schemas['Issue'];
 export type IssueEvent = Schemas['IssueEvent'];
 
 export const ERROR_COLOR = 'var(--color-tone-critical-fg)';
+export const TRACES_TARGET_ID = 'traces';
+export const TRACES_TARGET_NAME = 'Traces';
+
+const ROUTE_SEPARATOR = ' · ';
 export const SLOW_MS = 10_000;
+
+export function getTraceService(subject: string) {
+  return subject.split(ROUTE_SEPARATOR)[0] ?? subject;
+}
 
 export function getServiceColor(service: string) {
   let hash = 0x811c9dc5;

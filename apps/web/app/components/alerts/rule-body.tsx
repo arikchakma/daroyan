@@ -35,6 +35,7 @@ import {
 } from '~/queries/alerts';
 import { cronQueries } from '~/queries/crons';
 import { serverQueries } from '~/queries/servers';
+import { traceQueries } from '~/queries/traces';
 import { uptimeCheckQueries } from '~/queries/uptime';
 import {
   CONDITION_OPTIONS,
@@ -47,16 +48,22 @@ import {
   getMutedService,
   getRuleState,
   INTEGRATION_KINDS,
+  getTraceScopeLabel,
+  getValueHint,
   isCheckKind,
   isCronKind,
   isIntegrationKind,
+  isTraceKind,
   isProcessKind,
   isWholeRuleMute,
   readSubjectName,
   readThreshold,
+  readTraceCondition,
 } from '~/utils/alerts';
-import { formatClock, formatDate, formatRelative, pluralize } from '~/utils/format';
+import { DAY_MS, formatClock, formatDate, formatRelative, pluralize } from '~/utils/format';
 import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
+import { readTargetNoun, readTargetNouns } from '~/utils/rule-form';
+import { TRACES_TARGET_ID, TRACES_TARGET_NAME } from '~/utils/traces';
 
 const RECENT_MS = 30 * 86_400_000;
 
@@ -75,6 +82,8 @@ export function RuleBody(props: RuleBodyProps) {
   const { data: crons = [] } = useQuery({ ...cronQueries.list(), refetchInterval: false });
   const { data: integrations = [] } = useQuery(integrationQueries.list());
   const { data: allMutes = [] } = useQuery(alertMuteQueries.list());
+  const isTrace = isTraceKind(rule.condition.kind);
+  const { data: traceServices = [] } = useQuery({ ...traceQueries.services(DAY_MS), enabled: isTrace });
   const isAdmin = useIsAdmin();
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [muting, setMuting] = useState<{ target?: MuteTarget } | undefined>();
@@ -104,8 +113,12 @@ export function RuleBody(props: RuleBodyProps) {
       : undefined;
   const isCheck = isCheckKind(rule.condition.kind);
   const isCron = isCronKind(rule.condition.kind);
-  const noun = isCheck ? 'check' : isCron ? 'cron' : 'server';
-  const nounTitle = isCheck ? 'Checks' : isCron ? 'Crons' : 'Servers';
+  const noun = readTargetNoun(rule.condition.kind);
+  const nounTitle = readTargetNouns(noun);
+  const traceCondition = readTraceCondition(rule.condition);
+  const coveredServices = traceServices.filter(
+    (item) => !traceCondition?.service || item.service === traceCondition.service
+  );
   const covered: { id: string }[] = isCheck
     ? checks.filter((check) => rule.scope.kind === 'all' || (rule.scope.kind === 'checks' && rule.scope.check_ids.includes(check.id)))
     : isCron
@@ -118,8 +131,11 @@ export function RuleBody(props: RuleBodyProps) {
             : rule.scope.kind === 'servers' && rule.scope.server_ids.includes(server.id)
       );
   const notified = integrations.filter((integration) => rule.integration_ids.includes(integration.id));
-  const scopeLabel = describeScope(rule.scope, servers, checks, isCheck, crons, isCron);
-  const table = useAlertHistoryTable(history, mutes);
+  const scopeLabel = isTrace
+    ? getTraceScopeLabel(traceCondition)
+    : describeScope(rule.scope, servers, checks, isCheck, crons, isCron);
+  const coveredCount = isTrace ? coveredServices.length : covered.length;
+  const table = useAlertHistoryTable(history, mutes, getValueHint(rule.condition));
   const unmute = useMutation({
     ...deleteAlertMuteOptions(),
     meta: { errorMessage: 'The alert could not be unmuted' },
@@ -134,6 +150,9 @@ export function RuleBody(props: RuleBodyProps) {
     }
     if (mute.server_id === OTLP_SERVER_ID) {
       return OTLP_SERVER_NAME;
+    }
+    if (mute.server_id === TRACES_TARGET_ID) {
+      return TRACES_TARGET_NAME;
     }
     if (mute.server_id) {
       return servers.find((server) => server.id === mute.server_id)?.name ?? 'A server';
@@ -279,7 +298,7 @@ export function RuleBody(props: RuleBodyProps) {
           </div>
 
           <StatStrip columns={4}>
-            <Stat label={nounTitle} value={covered.length.toString()} detail="covered" />
+            <Stat label={nounTitle} value={coveredCount.toString()} detail="covered" />
             <Stat
               label="Fired"
               value={recent.length === 1 ? '1 time' : `${recent.length} times`}

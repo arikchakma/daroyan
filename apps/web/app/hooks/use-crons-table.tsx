@@ -49,11 +49,11 @@ export function useCronsTable(options: UseCronsTableOptions) {
             <span className="flex min-w-0 flex-col gap-0.5">
               <Link
                 to={`/crons/${row.original.id}`}
-                className="truncate font-mono text-code outline-none after:absolute after:inset-0 focus-visible:underline"
+                className="truncate font-medium outline-none after:absolute after:inset-0 focus-visible:underline"
               >
                 {row.original.name}
               </Link>
-              <span className="truncate font-mono text-code-small text-text-tertiary">{describeJob(row.original)}</span>
+              <span className="truncate text-small text-text-tertiary">{describeJob(row.original)}</span>
             </span>
           ),
         }),

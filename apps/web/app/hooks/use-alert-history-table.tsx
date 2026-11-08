@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 
 import { Icon } from '~/components/icons/icon';
 import { Badge } from '~/components/ui/badge';
+import { Tooltip } from '~/components/ui/tooltip';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
 import { formatAlertDuration, getAlertMute, getAlertTargetPath } from '~/utils/alerts';
@@ -12,7 +13,11 @@ import { formatDate, formatClock } from '~/utils/format';
 
 const helper = createColumnHelper<DataTableFeatures, Schemas['Alert']>();
 
-export function useAlertHistoryTable(alerts: Schemas['Alert'][], mutes: Schemas['AlertMute'][] = []) {
+export function useAlertHistoryTable(
+  alerts: Schemas['Alert'][],
+  mutes: Schemas['AlertMute'][] = [],
+  valueHint?: string
+) {
   const columns = useMemo(
     () =>
       helper.columns([
@@ -37,7 +42,7 @@ export function useAlertHistoryTable(alerts: Schemas['Alert'][], mutes: Schemas[
         helper.accessor('started_at', {
           header: 'Started',
           enableSorting: false,
-          meta: { width: 150 },
+          meta: { width: 130 },
           cell: ({ getValue }) => {
             const at = new Date(getValue()).getTime();
             return `${formatDate(at)}, ${formatClock(at)}`;
@@ -47,13 +52,13 @@ export function useAlertHistoryTable(alerts: Schemas['Alert'][], mutes: Schemas[
           id: 'duration',
           header: 'Duration',
           enableSorting: false,
-          meta: { width: 90, align: 'right' },
+          meta: { width: 80, align: 'right' },
           cell: ({ row }) => formatAlertDuration(row.original.started_at, row.original.resolved_at),
         }),
         helper.accessor('value', {
-          header: 'Value',
+          header: () => <ValueHeader hint={valueHint} />,
           enableSorting: false,
-          meta: { width: 80, align: 'right' },
+          meta: { width: 110, align: 'right' },
         }),
         helper.accessor('status', {
           header: 'Status',
@@ -78,8 +83,40 @@ export function useAlertHistoryTable(alerts: Schemas['Alert'][], mutes: Schemas[
             ),
         }),
       ]),
-    [mutes]
+    [mutes, valueHint]
   );
 
   return useDataTable({ columns, data: alerts });
+}
+
+type ValueHeaderProps = {
+  hint?: string;
+};
+
+function ValueHeader(props: ValueHeaderProps) {
+  const { hint } = props;
+
+  if (!hint) {
+    return 'Value';
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      Value
+      <Tooltip.Root>
+        <Tooltip.Trigger
+          delay={200}
+          aria-label="What the value means"
+          className="inline-flex items-center text-text-tertiary outline-none hover:text-text-primary focus-visible:text-text-primary"
+        >
+          <Icon name="info" className="size-3" />
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Positioner side="top">
+            <Tooltip.Popup className="max-w-64 text-left">{hint}</Tooltip.Popup>
+          </Tooltip.Positioner>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </span>
+  );
 }

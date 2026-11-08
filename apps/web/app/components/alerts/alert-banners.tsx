@@ -23,11 +23,13 @@ import {
   describeMuteEnd,
   describeResolve,
   formatMinutesLong,
+  getAlertNoun,
   getMutedService,
   isWholeRuleMute,
 } from '~/utils/alerts';
 import { formatClock } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
+import { TRACES_TARGET_ID } from '~/utils/traces';
 
 const QUICK_LENGTHS: { value: Exclude<MuteLength, 'custom'>; label: string }[] = [
   { value: '1h', label: 'For 1 hour' },
@@ -208,7 +210,7 @@ export function AlertBanners(props: AlertBannersProps) {
           onOpenChange={(open) => !open && setMuting(undefined)}
           ruleId={muting.alert.rule_id}
           ruleName={muting.alert.rule_name}
-          ruleNoun={muting.alert.check_id ? 'check' : muting.alert.cron_id ? 'cron' : 'server'}
+          ruleNoun={getAlertNoun(muting.alert)}
           resolveHint={describeResolve(getRule(muting.alert)?.condition)}
           target={muting.isWholeRule ? undefined : getTarget(muting.alert)}
           isFiring
@@ -218,6 +220,10 @@ export function AlertBanners(props: AlertBannersProps) {
   );
 }
 
+function isPseudoTarget(serverId: string) {
+  return serverId === OTLP_SERVER_ID || serverId === TRACES_TARGET_ID;
+}
+
 function getDeclareTarget(alert: Schemas['Alert']) {
   if (alert.check_id) {
     return { kind: 'check', id: alert.check_id };
@@ -225,7 +231,7 @@ function getDeclareTarget(alert: Schemas['Alert']) {
   if (alert.cron_id) {
     return { kind: 'cron', id: alert.cron_id };
   }
-  if (alert.server_id && alert.server_id !== OTLP_SERVER_ID) {
+  if (alert.server_id && !isPseudoTarget(alert.server_id)) {
     return { kind: 'server', id: alert.server_id };
   }
   return undefined;
@@ -233,7 +239,7 @@ function getDeclareTarget(alert: Schemas['Alert']) {
 
 function toDeclareDefaults(alert: Schemas['Alert']): DeclareDefaults {
   const target = getDeclareTarget(alert);
-  const name = alert.server_id === OTLP_SERVER_ID ? alert.subject : alert.target_name;
+  const name = alert.server_id && isPseudoTarget(alert.server_id) ? alert.subject : alert.target_name;
   return {
     title: `${alert.rule_name} on ${name}`,
     severity: alert.severity === 'warning' ? 'minor' : 'major',
