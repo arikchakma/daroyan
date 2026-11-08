@@ -37,7 +37,7 @@ export function useAlertHistoryTable(alerts: Schemas['Alert'][], mutes: Schemas[
         helper.accessor('started_at', {
           header: 'Started',
           enableSorting: false,
-          meta: { width: 150 },
+          meta: { width: 130 },
           cell: ({ getValue }) => {
             const at = new Date(getValue()).getTime();
             return `${formatDate(at)}, ${formatClock(at)}`;
@@ -47,13 +47,13 @@ export function useAlertHistoryTable(alerts: Schemas['Alert'][], mutes: Schemas[
           id: 'duration',
           header: 'Duration',
           enableSorting: false,
-          meta: { width: 90, align: 'right' },
+          meta: { width: 80, align: 'right' },
           cell: ({ row }) => formatAlertDuration(row.original.started_at, row.original.resolved_at),
         }),
         helper.accessor('value', {
           header: 'Value',
           enableSorting: false,
-          meta: { width: 80, align: 'right' },
+          meta: { width: 110, align: 'right' },
         }),
         helper.accessor('status', {
           header: 'Status',
