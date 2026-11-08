@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use daroyan_protocol::log::{LogBatch, LogFormat, LogLine};
+use daroyan_protocol::log::{LogBatch, LogDrop, LogFormat, LogLine};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
@@ -77,6 +77,7 @@ impl Positions {
 struct Budget {
     limit: u64,
     used: Vec<u64>,
+    dropped: Vec<u64>,
     window_start: Instant,
 }
 
@@ -85,22 +86,25 @@ impl Budget {
         Self {
             limit,
             used: vec![0; sources.max(1)],
+            dropped: vec![0; sources.max(1)],
             window_start: Instant::now(),
         }
     }
 
-    fn allow(&mut self, source: usize, line: &RawLine) -> bool {
-        if self.window_start.elapsed() >= BUDGET_WINDOW {
-            self.window_start = Instant::now();
-            self.used.fill(0);
-        }
+    fn share(&self) -> u64 {
+        self.limit / self.used.len() as u64
+    }
 
-        let share = self.limit / self.used.len() as u64;
+    fn allow(&mut self, source: usize, line: &RawLine) -> bool {
+        let share = self.share();
         let size = line.text.len() as u64 + LINE_OVERHEAD;
-        let Some(used) = self.used.get_mut(source) else {
+        let (Some(used), Some(dropped)) =
+            (self.used.get_mut(source), self.dropped.get_mut(source))
+        else {
             return false;
         };
         if *used + size > share {
+            *dropped += 1;
             return false;
         }
 
@@ -108,12 +112,30 @@ impl Budget {
         true
     }
 
-    fn admit(&mut self, lines: Vec<(usize, RawLine)>) -> (Vec<(usize, RawLine)>, u64) {
-        let (kept, dropped): (Vec<_>, Vec<_>) = lines
+    fn admit(&mut self, lines: Vec<(usize, RawLine)>) -> Vec<(usize, RawLine)> {
+        lines
             .into_iter()
-            .partition(|(source, line)| self.allow(*source, line));
+            .filter(|(source, line)| self.allow(*source, line))
+            .collect()
+    }
 
-        (kept, dropped.len() as u64)
+    fn roll(&mut self, now: Instant) -> Vec<(usize, u64)> {
+        if now.duration_since(self.window_start) < BUDGET_WINDOW {
+            return Vec::new();
+        }
+
+        self.window_start = now;
+        self.used.fill(0);
+        self.take_dropped()
+    }
+
+    fn take_dropped(&mut self) -> Vec<(usize, u64)> {
+        self.dropped
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, dropped)| **dropped > 0)
+            .map(|(source, dropped)| (source, std::mem::take(dropped)))
+            .collect()
     }
 }
 
@@ -415,15 +437,29 @@ pub fn collect_logs(
             ));
         }
 
-        let (ready, dropped) = budget.admit(ready);
+        let mut over = budget.roll(now);
+        let ready = budget.admit(ready);
+        if is_stopping {
+            over.extend(budget.take_dropped());
+        }
+        let over_budget: Vec<LogDrop> = over
+            .into_iter()
+            .map(|(index, lines)| LogDrop {
+                service: sources[index].name.clone(),
+                lines,
+                budget: budget.share(),
+            })
+            .collect();
         let lines: Vec<LogLine> = ready
             .into_iter()
             .map(|(index, raw)| {
                 to_log_line(&sources[index].name, sources[index].format, raw)
             })
             .collect();
-        if (!lines.is_empty() || dropped > 0)
-            && batches.blocking_send(LogBatch { lines, dropped }).is_err()
+        if (!lines.is_empty() || !over_budget.is_empty())
+            && batches
+                .blocking_send(LogBatch { lines, over_budget, ..LogBatch::default() })
+                .is_err()
         {
             if sent != saved {
                 sent.save(&positions_path);
@@ -550,9 +586,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        Budget, FollowedLine, Held, IDLE_FLUSH, LogSource, Position, Positions, RawLine,
-        SourceKind, flush_held, join_continuations, resolve_format, take_ready_lines,
-        take_streamed,
+        BUDGET_WINDOW, Budget, FollowedLine, Held, IDLE_FLUSH, LogSource, Position,
+        Positions, RawLine, SourceKind, flush_held, join_continuations, resolve_format,
+        take_ready_lines, take_streamed,
     };
     use crate::config::DockerTarget;
 
@@ -795,9 +831,23 @@ mod tests {
             })
             .collect();
 
-        let (kept, dropped) = budget.admit(lines);
+        let kept = budget.admit(lines);
         assert_eq!(kept.len(), 2);
-        assert_eq!(dropped, 3);
+        assert_eq!(budget.take_dropped(), [(0, 3)]);
+    }
+
+    #[test]
+    fn reports_drops_once_the_window_ends() {
+        let mut budget = Budget::new(400, 2);
+        let line = || raw(LogStream::Stdout, &"x".repeat(10));
+        let flood = (0..5).map(|_| (1, line())).collect();
+        let started = budget.window_start;
+
+        assert_eq!(budget.admit(flood).len(), 2);
+        assert!(budget.roll(started + Duration::from_secs(30)).is_empty());
+        assert_eq!(budget.roll(started + BUDGET_WINDOW), [(1, 3)]);
+        assert!(budget.allow(1, &line()));
+        assert!(budget.take_dropped().is_empty());
     }
 
     #[test]
@@ -806,12 +856,12 @@ mod tests {
         let line = |text: &str| raw(LogStream::Stdout, &text.repeat(36));
 
         let flood = (0..20).map(|_| (0, line("x"))).collect();
-        let (kept, dropped) = budget.admit(flood);
-        assert_eq!((kept.len(), dropped), (5, 15));
+        assert_eq!(budget.admit(flood).len(), 5);
+        assert_eq!(budget.take_dropped(), [(0, 15)]);
 
         let quiet = (0..5).map(|_| (1, line("y"))).collect();
-        let (kept, dropped) = budget.admit(quiet);
-        assert_eq!((kept.len(), dropped), (5, 0));
+        assert_eq!(budget.admit(quiet).len(), 5);
+        assert!(budget.take_dropped().is_empty());
         assert!(!budget.allow(1, &line("y")));
     }
 

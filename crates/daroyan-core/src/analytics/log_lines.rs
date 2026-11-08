@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
+use crate::alerts::message::format_bytes;
 use crate::analytics::log_parse::{
     normalize_json_line, parse_text_line, read_level_value, read_level_word,
     take_json_time,
@@ -122,21 +123,42 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
         .collect();
     let dropped = batch.dropped + over;
     if dropped > 0 {
-        rows.push(LogRow {
-            server_id: server_id.to_string(),
-            at: now_ms,
-            service: AGENT_SERVICE.to_string(),
-            stream: "stderr",
-            severity: SEVERITY_WARN,
-            message: format!("Dropped {dropped} log lines over the budget"),
-            attributes: None,
-            trace_id: None,
-            span_id: None,
-            raw: None,
-            resource: None,
-        });
+        let message = format!("Dropped {dropped} log lines over the budget");
+        rows.push(make_agent_warning(server_id, now_ms, message, None));
+    }
+
+    for drop in batch.over_budget {
+        let service = cut(&drop.service, MAX_NAME_BYTES);
+        let message = format!(
+            "Dropped {} {service} lines over its {} a minute log budget",
+            drop.lines,
+            format_bytes(drop.budget)
+        );
+        let attributes = serde_json::json!({ "log.source": service }).to_string();
+        rows.push(make_agent_warning(server_id, now_ms, message, Some(attributes)));
     }
     rows
+}
+
+fn make_agent_warning(
+    server_id: &str,
+    now_ms: i64,
+    message: String,
+    attributes: Option<String>,
+) -> LogRow {
+    LogRow {
+        server_id: server_id.to_string(),
+        at: now_ms,
+        service: AGENT_SERVICE.to_string(),
+        stream: "stderr",
+        severity: SEVERITY_WARN,
+        message,
+        attributes,
+        trace_id: None,
+        span_id: None,
+        raw: None,
+        resource: None,
+    }
 }
 
 pub fn count_otlp_records(request: &ExportLogsServiceRequest) -> usize {
@@ -732,7 +754,7 @@ pub async fn list_last_lines(
 #[cfg(test)]
 mod tests {
     use daroyan_protocol::log::{
-        LogBatch, LogFormat, LogLine, LogStream, SEVERITY_ERROR,
+        LogBatch, LogDrop, LogFormat, LogLine, LogStream, SEVERITY_ERROR,
     };
 
     use super::{
@@ -781,7 +803,7 @@ mod tests {
         .unwrap();
         let rows = to_log_rows(
             "srv_1",
-            LogBatch { lines: vec![empty, mongo], dropped: 0 },
+            LogBatch { lines: vec![empty, mongo], ..LogBatch::default() },
             2_000_000_000_000,
         );
         let attributes = rows[0].attributes.as_deref().unwrap();
@@ -796,7 +818,7 @@ mod tests {
         let raw = "2026-10-16T01:42:01.546Z [maily-api] INFO: 209.71.83.120 d9f7326e POST /v1/emails 202 84ms";
         let batch = LogBatch {
             lines: vec![line(1, "api", 9, raw), line(2, "api", 9, "plain text line")],
-            dropped: 0,
+            ..LogBatch::default()
         };
         let rows = to_log_rows("srv_1", batch, 50);
         assert_eq!(rows[0].message, "209.71.83.120 · d9f7326e");
@@ -806,11 +828,35 @@ mod tests {
 
     #[test]
     fn records_dropped_lines() {
-        let batch = LogBatch { lines: vec![line(1, "api", 9, "ok")], dropped: 3 };
+        let batch = LogBatch {
+            lines: vec![line(1, "api", 9, "ok")],
+            dropped: 3,
+            ..LogBatch::default()
+        };
         let rows = to_log_rows("srv_1", batch, 50);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1].message, "Dropped 3 log lines over the budget");
         assert_eq!(rows[1].at, 50);
+    }
+
+    #[test]
+    fn names_the_source_over_its_budget() {
+        let batch = LogBatch {
+            over_budget: vec![LogDrop {
+                service: "Caddy".to_string(),
+                lines: 120,
+                budget: 128 * 1024,
+            }],
+            ..LogBatch::default()
+        };
+        let rows = to_log_rows("srv_1", batch, 50);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].service, "Daroyan agent");
+        assert_eq!(
+            rows[0].message,
+            "Dropped 120 Caddy lines over its 128 KB a minute log budget"
+        );
+        assert_eq!(rows[0].attributes.as_deref(), Some(r#"{"log.source":"Caddy"}"#));
     }
 
     fn search(until: i64) -> LogSearch {
@@ -831,7 +877,7 @@ mod tests {
                 line(3, "worker", 13, "slow job"),
                 line(4, "api", 9, "GET /v1/servers 200"),
             ],
-            dropped: 0,
+            ..LogBatch::default()
         };
         analytics.buffer_logs("srv_1", batch);
         analytics.flush().await.unwrap();
@@ -959,7 +1005,7 @@ mod tests {
             .collect();
         lines.push(line(1_500, "api", 9, "SES failed"));
         lines.push(line(9_000, "api", SEVERITY_ERROR, "SES failed"));
-        analytics.buffer_logs("srv_1", LogBatch { lines, dropped: 0 });
+        analytics.buffer_logs("srv_1", LogBatch { lines, ..LogBatch::default() });
         analytics.flush().await.unwrap();
 
         let matcher = || super::LogMatch {
