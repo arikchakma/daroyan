@@ -332,8 +332,8 @@ async fn alerts_on_trace_error_rate_and_latency_per_service() {
     assert_eq!(
         summary,
         [
-            ("traces", "Traces", "inboxjot-api", "20% of 20 requests failed"),
-            ("traces", "Traces", "inboxjot-worker", "30% of 20 requests failed"),
+            ("traces", "Traces", "inboxjot-api", "20%"),
+            ("traces", "Traces", "inboxjot-worker", "30%"),
         ]
     );
 
@@ -397,7 +397,7 @@ async fn alerts_on_trace_error_rate_and_latency_per_service() {
         .iter()
         .map(|hit| (hit["subject"].as_str().unwrap(), hit["value"].as_str().unwrap()))
         .collect();
-    assert_eq!(hits, [("inboxjot-api · /api/search", "p95 2.4 s over 2 requests")]);
+    assert_eq!(hits, [("inboxjot-api · /api/search", "p95 2.4 s")]);
 
     let backtest: Value = http
         .post(format!("{base}/v1/alert-rules/backtest"))

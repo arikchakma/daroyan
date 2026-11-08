@@ -198,15 +198,11 @@ pub fn make_trace_reading(measure: TraceMeasure, stat: &SpanStat) -> Option<Read
     match measure {
         TraceMeasure::Errors => {
             let percent = stat.error_percent();
-            let label =
-                format!("{} of {} requests failed", format_rate(percent), stat.requests);
-            Some(make_reading(&subject, percent, label))
+            Some(make_reading(&subject, percent, format_rate(percent)))
         }
         TraceMeasure::Latency(percentile) => {
             let ms = stat.duration_us? / 1000.0;
-            let label =
-                format!("{percentile} {} over {} requests", format_ms(ms), stat.requests);
-            Some(make_reading(&subject, ms, label))
+            Some(make_reading(&subject, ms, format!("{percentile} {}", format_ms(ms))))
         }
     }
 }
@@ -425,7 +421,7 @@ mod tests {
         let readings = find_trace_readings(&trace, &stats).unwrap();
         assert_eq!(readings.len(), 1);
         assert_eq!(readings[0].subject, "api");
-        assert_eq!(readings[0].label, "7.1% of 1204 requests failed");
+        assert_eq!(readings[0].label, "7.1%");
         assert_eq!(rate(&errors, None, readings[0].value), Level::Critical);
 
         let quiet = [stat("cron", None, 2, 2, None)];
@@ -440,7 +436,7 @@ mod tests {
         let readings = find_trace_readings(&trace, &stats).unwrap();
         assert_eq!(readings[0].subject, "api · GET /search");
         assert_eq!(readings[0].value, 2400.0);
-        assert_eq!(readings[0].label, "p95 2.4 s over 40 requests");
+        assert_eq!(readings[0].label, "p95 2.4 s");
         assert_eq!(format_rate(20.0), "20%");
     }
 
