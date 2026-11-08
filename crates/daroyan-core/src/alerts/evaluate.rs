@@ -198,7 +198,11 @@ pub fn make_trace_reading(measure: TraceMeasure, stat: &SpanStat) -> Option<Read
     match measure {
         TraceMeasure::Errors => {
             let percent = stat.error_percent();
-            Some(make_reading(&subject, percent, format_rate(percent)))
+            Some(make_reading(
+                &subject,
+                percent,
+                format!("{} errors", format_rate(percent)),
+            ))
         }
         TraceMeasure::Latency(percentile) => {
             let ms = stat.duration_us? / 1000.0;
@@ -421,7 +425,7 @@ mod tests {
         let readings = find_trace_readings(&trace, &stats).unwrap();
         assert_eq!(readings.len(), 1);
         assert_eq!(readings[0].subject, "api");
-        assert_eq!(readings[0].label, "7.1%");
+        assert_eq!(readings[0].label, "7.1% errors");
         assert_eq!(rate(&errors, None, readings[0].value), Level::Critical);
 
         let quiet = [stat("cron", None, 2, 2, None)];

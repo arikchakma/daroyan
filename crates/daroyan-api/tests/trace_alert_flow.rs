@@ -332,8 +332,8 @@ async fn alerts_on_trace_error_rate_and_latency_per_service() {
     assert_eq!(
         summary,
         [
-            ("traces", "Traces", "inboxjot-api", "20%"),
-            ("traces", "Traces", "inboxjot-worker", "30%"),
+            ("traces", "Traces", "inboxjot-api", "20% errors"),
+            ("traces", "Traces", "inboxjot-worker", "30% errors"),
         ]
     );
 
