@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnVisibilityState } from '@tanstack/react-table';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
 import { AlertBanners } from '~/components/alerts/alert-banners';
@@ -131,11 +131,13 @@ export default function LogsPage() {
     setUntil(Date.now());
   };
 
+  const commitSearch = useEffectEvent(() => setParams({ q: search.trim() || null }));
+
   useEffect(() => {
     if (search === q) {
       return;
     }
-    const timer = setTimeout(() => setParams({ q: search.trim() || null }), 300);
+    const timer = setTimeout(commitSearch, 300);
     return () => clearTimeout(timer);
   }, [search, q]);
 
