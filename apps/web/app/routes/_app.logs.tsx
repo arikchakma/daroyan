@@ -395,12 +395,18 @@ export default function LogsPage() {
               label="Search, or -path:/v1/health"
               fields={fields}
               filters={filterValues}
-              onFilterChange={(change) => {
-                const { key, param } = FILTER_KEYS.find((item) => item.key === change.key)!;
-                setParams({
-                  [param]: change.value?.values.join(',') || null,
-                  [`${key}_op`]: change.value?.negate ? 'not' : null,
-                });
+              onFilterChange={(changes) => {
+                setParams(
+                  Object.fromEntries(
+                    changes.flatMap((change) => {
+                      const { key, param } = FILTER_KEYS.find((item) => item.key === change.key)!;
+                      return [
+                        [param, change.value?.values.join(',') || null],
+                        [`${key}_op`, change.value?.negate ? 'not' : null],
+                      ];
+                    })
+                  )
+                );
               }}
               query={search}
               onQueryChange={setSearch}

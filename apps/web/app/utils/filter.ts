@@ -1,4 +1,8 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import type { EditorState } from '@tiptap/pm/state';
+
+export const FILTER_TOKEN_NODE = 'filterToken';
+export const FILTER_SEARCH_MARK = 'filterSearch';
 
 export type SearchFilterField = {
   key: string;
@@ -130,20 +134,85 @@ export function getFilterItems(options: GetFilterItemsOptions): FilterItem[] {
 
 export type FilterDoc = {
   tokens: FilterTokenAttrs[];
+  query: string;
+  search: string;
+};
+
+export type FilterRange = {
+  from: number;
+  to: number;
+};
+
+export type FilterCaret = FilterRange & {
   text: string;
 };
 
+export function isFilterToken(node: ProseMirrorNode | null | undefined) {
+  return node?.type.name === FILTER_TOKEN_NODE;
+}
+
+export function isFilterSearch(node: ProseMirrorNode | null | undefined) {
+  return (
+    !!node?.isText &&
+    node.marks.some((mark) => mark.type.name === FILTER_SEARCH_MARK)
+  );
+}
+
+export function getQuery(segments: string[]) {
+  return segments
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 export function readDoc(doc: ProseMirrorNode): FilterDoc {
   const tokens: FilterTokenAttrs[] = [];
-  let text = '';
+  const segments = [''];
+  let search = '';
+
   doc.forEach((node) => {
-    if (node.type.name === 'filterToken') {
+    if (isFilterToken(node)) {
       tokens.push(node.attrs as FilterTokenAttrs);
-    } else if (node.isText) {
-      text += node.text;
+      segments.push('');
+      return;
+    }
+    if (isFilterSearch(node)) {
+      search += node.text;
+      return;
+    }
+    if (node.isText) {
+      segments[segments.length - 1] += node.text;
     }
   });
-  return { tokens, text };
+
+  return { tokens, query: getQuery(segments), search };
+}
+
+export function readCaret(state: EditorState): FilterCaret {
+  const caret = state.selection.from;
+  let start = 0;
+  let end = state.doc.content.size;
+
+  state.doc.forEach((node, pos) => {
+    if (!isFilterToken(node)) {
+      return;
+    }
+    if (pos + node.nodeSize <= caret) {
+      start = pos + node.nodeSize;
+    } else if (pos >= caret) {
+      end = Math.min(end, pos);
+    }
+  });
+
+  const raw = state.doc.textBetween(start, end);
+  const leading = raw.length - raw.trimStart().length;
+  const trailing = raw.length - raw.trimEnd().length;
+
+  return {
+    text: raw.trim(),
+    from: start + leading,
+    to: Math.max(start + leading, end - trailing),
+  };
 }
 
 function toFilterValue(token: FilterTokenAttrs | undefined) {
