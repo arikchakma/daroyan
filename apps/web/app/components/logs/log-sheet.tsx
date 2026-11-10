@@ -38,6 +38,16 @@ function toRecord(line: LogRow) {
   };
 }
 
+function useFullLine(line: LogRow) {
+  const { data: context, isLoading } = useQuery(
+    logQueries.context({ server_id: line.server_id, service: line.service, at: line.at })
+  );
+  const match = context?.find((item) => item.at === line.at && item.message === line.message);
+  const full: LogRow = { ...line, raw: match?.raw, resource: match?.resource };
+
+  return { context, isLoading, full };
+}
+
 function buildAlertLink(line: LogRow) {
   const params = new URLSearchParams({ logService: line.service, logLevel: line.level === 'warn' ? 'warn' : 'error' });
   const text = line.message.split('\n')[0]?.trim() ?? '';
@@ -51,7 +61,6 @@ export function LogSheet(props: LogSheetProps) {
   const { line, canGoPrevious, canGoNext, onNavigate, onClose } = props;
 
   const panel = useContext(PanelContext);
-  const navigate = useNavigate();
 
   return (
     <Sheet.Root side="bottom" open={!!line} onOpenChange={(open) => !open && onClose()}>
@@ -67,26 +76,7 @@ export function LogSheet(props: LogSheetProps) {
                 </Sheet.Title>
               </div>
               <div className="flex items-center gap-1 rounded-full bg-surface-code p-1 empty:hidden">
-                {line && (
-                  <>
-                    <ActionPill
-                      icon="copy"
-                      tone="dark"
-                      onClick={() =>
-                        void navigator.clipboard
-                          .writeText(JSON.stringify(toRecord(line), null, 2))
-                          .then(() => toast.success('Copied the line as JSON'))
-                      }
-                    >
-                      Copy JSON
-                    </ActionPill>
-                    {line.server_id !== OTLP_SERVER_ID && (
-                      <ActionPill icon="bell" tone="light" onClick={() => navigate(buildAlertLink(line))}>
-                        Alert on This
-                      </ActionPill>
-                    )}
-                  </>
-                )}
+                {line && <LogActions key={line.id} line={line} />}
               </div>
               <div className="flex items-center justify-end gap-2">
                 <div className="flex">
@@ -114,16 +104,46 @@ export function LogSheet(props: LogSheetProps) {
   );
 }
 
+type LogActionsProps = {
+  line: LogRow;
+};
+
+function LogActions(props: LogActionsProps) {
+  const { line } = props;
+
+  const navigate = useNavigate();
+  const { full } = useFullLine(line);
+
+  return (
+    <>
+      <ActionPill
+        icon="copy"
+        tone="dark"
+        onClick={() =>
+          void navigator.clipboard
+            .writeText(JSON.stringify(toRecord(full), null, 2))
+            .then(() => toast.success('Copied the line as JSON'))
+        }
+      >
+        Copy JSON
+      </ActionPill>
+      {line.server_id !== OTLP_SERVER_ID && (
+        <ActionPill icon="bell" tone="light" onClick={() => navigate(buildAlertLink(line))}>
+          Alert on This
+        </ActionPill>
+      )}
+    </>
+  );
+}
+
 type LogBodyProps = {
   line: LogRow;
 };
 
 function LogBody(props: LogBodyProps) {
-  const { line } = props;
+  const { line: row } = props;
 
-  const { data: context, isLoading } = useQuery(
-    logQueries.context({ server_id: line.server_id, service: line.service, at: line.at })
-  );
+  const { context, isLoading, full: line } = useFullLine(row);
   const values = (line.attributes ?? {}) as Record<string, unknown>;
   const request = describeRequest(line);
   const duration = formatDuration(values['duration_ms']);

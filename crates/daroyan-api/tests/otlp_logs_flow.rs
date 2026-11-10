@@ -311,10 +311,32 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
     assert_eq!(lines[4]["span_id"], "01".repeat(8));
     assert_eq!(lines[4]["attributes"]["email.id"], "eml_1");
     assert_eq!(lines[4]["attributes"].get("host.name"), None);
-    assert_eq!(lines[4]["resource"]["host.name"], "inboxjot");
-    assert_eq!(lines[4]["resource"]["service.name"], "inboxjot-api");
     assert_eq!(lines[4]["attributes"]["otel.scope.name"], "inboxjot");
-    assert!(lines[4]["raw"].as_str().unwrap().contains("SES SendEmail failed"));
+    assert_eq!(lines[4].get("raw"), None);
+    assert_eq!(lines[4].get("resource"), None);
+
+    let context: Value = http
+        .get(format!("{base}/v1/logs/context"))
+        .query(&[
+            ("server_id", lines[4]["server_id"].as_str().unwrap()),
+            ("service", "inboxjot-api"),
+            ("at", &lines[4]["at"].to_string()),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let full = context
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["message"] == "SES SendEmail failed")
+        .unwrap();
+    assert_eq!(full["resource"]["host.name"], "inboxjot");
+    assert_eq!(full["resource"]["service.name"], "inboxjot-api");
+    assert!(full["raw"].as_str().unwrap().contains("SES SendEmail failed"));
 
     let traced: Value = http
         .get(format!("{base}/v1/logs?q=trace_id:{}", "ab".repeat(16)))
