@@ -1,3 +1,5 @@
+import { describeRequest } from '~/hooks/use-logs-table';
+import type { LogRow } from '~/hooks/use-logs-table';
 import { DAY_MS, formatClock, formatDate, HOUR_MS } from '~/utils/format';
 
 export const OTLP_SERVER_ID = 'otlp';
@@ -19,6 +21,30 @@ export function getLogOrigin(line: LogOrigin) {
   }
 
   return `${line.service} wrote this to ${line.stream} on ${line.serverName}.`;
+}
+
+export function getLogRecord(line: LogRow) {
+  return {
+    time: new Date(line.at).toISOString(),
+    server: line.serverName,
+    source: line.service,
+    stream: line.stream,
+    level: line.level,
+    message: line.message,
+    attributes: line.attributes ?? {},
+    raw: line.raw ?? line.message,
+    ...(line.trace_id && { traceId: line.trace_id }),
+  };
+}
+
+export function getLogAlertLink(line: LogRow) {
+  const params = new URLSearchParams({ logService: line.service, logLevel: line.level === 'warn' ? 'warn' : 'error' });
+  const text = line.message.split('\n')[0]?.trim() ?? '';
+  if (!describeRequest(line) && text) {
+    params.set('logText', text.slice(0, 120));
+  }
+
+  return `/alerts/new?${params}`;
 }
 
 const SECOND_CLOCK_FORMAT = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
