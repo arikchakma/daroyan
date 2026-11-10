@@ -12,7 +12,7 @@ import { useDataTable } from '~/hooks/use-data-table';
 import { ServiceDot } from '~/hooks/use-traces-table';
 import type { DataTableFeatures } from '~/lib/table';
 import { formatClock, formatCount, formatDate, formatEventTime, formatRelative } from '~/utils/format';
-import { formatMicrosClock, shortenId } from '~/utils/traces';
+import { formatMicrosClock, getTraceLink, shortenId } from '~/utils/traces';
 import type { Issue, IssueEvent } from '~/utils/traces';
 
 const OCCURRENCE_LIMIT = 20;
@@ -37,9 +37,9 @@ const columns = helper.columns([
     header: 'Trace',
     enableSorting: false,
     meta: { width: 160, align: 'right' },
-    cell: ({ getValue }) => (
+    cell: ({ row, getValue }) => (
       <Link
-        to={`/traces/${getValue()}`}
+        to={getTraceLink(getValue(), row.original.occurred_at)}
         className="font-mono text-code-small outline-none after:absolute after:inset-0 focus-visible:underline"
       >
         {shortenId(getValue())}
@@ -86,7 +86,7 @@ export function IssueDetail(props: IssueDetailProps) {
         <Button
           nativeButton={false}
           variant="secondary"
-          render={<Link to={`/traces/${issue.trace_id}`} />}
+          render={<Link to={getTraceLink(issue.trace_id, issue.last_seen_at)} />}
           className="w-fit"
         >
           <Icon name="layers" />

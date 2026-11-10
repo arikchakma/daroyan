@@ -5,8 +5,8 @@ import { useNavigate } from 'react-router';
 
 import { CronStatusBadge } from '~/components/crons/cron-status-badge';
 import { Icon } from '~/components/icons/icon';
-import type { IconName } from '~/components/icons/icon-paths';
 import { PanelContext } from '~/components/navigation/panel-context';
+import { ActionPill } from '~/components/ui/action-pill';
 import { Button } from '~/components/ui/button';
 import { Sheet } from '~/components/ui/sheet';
 import { toast } from '~/lib/toast';
@@ -92,18 +92,26 @@ export function RunSheet(props: RunSheetProps) {
               </div>
               <div className="flex items-center justify-end gap-2">
                 <div className="flex">
-                  <IconButton label="Older Run" icon="chevron-down" disabled={!canGoNext} onClick={() => onNavigate(1)} />
-                  <IconButton
-                    label="Newer Run"
-                    icon="chevron-up"
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    aria-label="Older Run"
+                    disabled={!canGoNext}
+                    onClick={() => onNavigate(1)}
+                  >
+                    <Icon name="chevron-down" />
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    aria-label="Newer Run"
                     disabled={!canGoPrevious}
                     onClick={() => onNavigate(-1)}
-                  />
+                  >
+                    <Icon name="chevron-up" />
+                  </Button>
                 </div>
-                <Sheet.Close
-                  aria-label="Close"
-                  className="flex size-8 items-center justify-center rounded-full border border-border-ring bg-surface-default shadow-button-secondary outline-none hover:bg-surface-subtle focus-visible:ring-2 focus-visible:ring-text-link/40"
-                >
+                <Sheet.Close aria-label="Close" render={<Button variant="secondary" size="icon" />}>
                   <Icon name="x" />
                 </Sheet.Close>
               </div>
@@ -197,56 +205,5 @@ function RailRow(props: RailRowProps) {
       <dt className="w-27 shrink-0 truncate text-text-secondary">{label}</dt>
       <dd className="min-w-0 flex-1 wrap-anywhere">{children}</dd>
     </div>
-  );
-}
-
-type ActionPillProps = {
-  icon: IconName;
-  tone: 'dark' | 'light';
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-};
-
-function ActionPill(props: ActionPillProps) {
-  const { icon, tone, disabled, onClick, children } = props;
-
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'flex h-7 items-center gap-1.5 rounded-full pr-3 pl-2 text-body font-medium outline-none focus-visible:ring-2 focus-visible:ring-text-link/60 disabled:opacity-40 [&_svg]:size-3.5',
-        tone === 'dark' && 'bg-sidebar-item-active text-text-on-dark',
-        tone === 'light' && 'bg-surface-default text-text-primary'
-      )}
-    >
-      <Icon name={icon} />
-      {children}
-    </button>
-  );
-}
-
-type IconButtonProps = {
-  label: string;
-  icon: IconName;
-  disabled: boolean;
-  onClick: () => void;
-};
-
-function IconButton(props: IconButtonProps) {
-  const { label, icon, disabled, onClick } = props;
-
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-      className="flex size-8 items-center justify-center rounded-full border border-border-ring bg-surface-default shadow-button-secondary outline-none hover:bg-surface-subtle focus-visible:ring-2 focus-visible:ring-text-link/40 disabled:opacity-40"
-    >
-      <Icon name={icon} />
-    </button>
   );
 }

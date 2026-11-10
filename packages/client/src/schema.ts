@@ -4796,7 +4796,10 @@ export interface operations {
     };
     get_trace_spans: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description A time in ms near the trace, like its start. It makes the lookup faster */
+                at?: number;
+            };
             header?: never;
             path: {
                 trace_id: string;

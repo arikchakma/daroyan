@@ -205,7 +205,9 @@ export function useLogsTable(options: UseLogsTableOptions) {
 
 export function collapseRepeats(lines: Schemas['LogLine'][], serverNames: Map<string, string>): LogRow[] {
   const rows: LogRow[] = [];
-  for (const [index, line] of lines.entries()) {
+  const seen = new Map<string, number>();
+
+  for (const line of lines) {
     const previous = rows.at(-1);
     const isRepeat =
       previous &&
@@ -220,9 +222,13 @@ export function collapseRepeats(lines: Schemas['LogLine'][], serverNames: Map<st
       previous.repeatSpanMs = previous.at - line.at;
       continue;
     }
+    const key = `${line.server_id}-${line.service}-${line.at}`;
+    const count = seen.get(key) ?? 0;
+    seen.set(key, count + 1);
+
     rows.push({
       ...line,
-      id: `${line.at}-${index}`,
+      id: count ? `${key}-${count}` : key,
       serverName: serverNames.get(line.server_id) ?? line.server_id,
       repeats: 1,
       repeatSpanMs: 0,

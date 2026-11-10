@@ -13,6 +13,7 @@ import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 const LOG_LIMIT = 50;
 const WAIT_MS = 5_000;
 const RECENT_MS = 2 * 60_000;
+const SLACK_MS = 60 * 60_000;
 
 type TraceLogsProps = {
   traceId: string;
@@ -24,7 +25,7 @@ export function TraceLogs(props: TraceLogsProps) {
 
   const query = `trace_id:${traceId}`;
   const { data } = useQuery({
-    ...logQueries.list({ q: query, offset: 0, limit: LOG_LIMIT }, false),
+    ...logQueries.list({ q: query, since: startedAt - SLACK_MS, offset: 0, limit: LOG_LIMIT }, false),
     // Log batches arrive a few seconds after the spans, so keep looking while a
     // fresh trace has none yet.
     refetchInterval: (current) =>

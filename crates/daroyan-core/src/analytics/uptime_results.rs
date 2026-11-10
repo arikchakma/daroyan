@@ -9,6 +9,7 @@ use crate::error::Result;
 use crate::uptime::probe::Probe;
 
 pub const DAY_MS: i64 = 86_400_000;
+const LATEST_WINDOW_MS: i64 = 2 * DAY_MS;
 
 #[derive(Serialize, ToSchema, Clone, Debug, Default)]
 #[schema(as = UptimeDay)]
@@ -188,20 +189,26 @@ pub fn to_day_start(now_ms: i64, days: i64) -> i64 {
     (now_ms / DAY_MS - days + 1) * DAY_MS
 }
 
+pub fn to_recent_start(now_ms: i64, interval_secs: i32, count: u32) -> i64 {
+    let interval_ms = i64::from(interval_secs.max(1)) * 1_000;
+    now_ms - (i64::from(count) + 1) * interval_ms * 2
+}
+
 pub async fn summarize_checks(
     analytics: &Analytics,
     now_ms: i64,
     days: i64,
 ) -> Result<HashMap<String, CheckSummary>> {
     let since = to_day_start(now_ms, days);
+    let latest_since = now_ms - LATEST_WINDOW_MS;
     analytics
         .read(move |conn| {
             let mut summaries: HashMap<String, CheckSummary> = HashMap::new();
             let mut latest = conn.prepare(
                 "SELECT check_id, arg_max(status, checked_at), arg_max(response_ms, checked_at), max(checked_at) \
-                 FROM uptime_results GROUP BY check_id",
+                 FROM uptime_results WHERE checked_at >= ? GROUP BY check_id",
             )?;
-            for row in latest.query_map([], |row| {
+            for row in latest.query_map([latest_since], |row| {
                 Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })? {
                 let (id, status, response_ms, checked_at) = row?;
@@ -319,6 +326,7 @@ pub async fn list_response_points(
 pub async fn list_recent_results(
     analytics: &Analytics,
     check_id: String,
+    since: i64,
     limit: u32,
 ) -> Result<Vec<ResultItem>> {
     analytics
@@ -326,10 +334,10 @@ pub async fn list_recent_results(
             let mut statement = conn.prepare(
                 "SELECT checked_at, status, code, response_ms, error, dns_ms, connect_ms, tls_ms, ttfb_ms \
                  FROM uptime_results \
-                 WHERE check_id = ? ORDER BY checked_at DESC LIMIT ?",
+                 WHERE check_id = ? AND checked_at >= ? ORDER BY checked_at DESC LIMIT ?",
             )?;
             statement
-                .query_map(params![check_id, limit], |row| {
+                .query_map(params![check_id, since, limit], |row| {
                     Ok(ResultItem {
                         at: row.get(0)?,
                         status: row.get(1)?,

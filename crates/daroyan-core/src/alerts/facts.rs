@@ -14,7 +14,7 @@ use crate::analytics::server_events::{ProcessExit, find_last_exit};
 use crate::analytics::server_states::{DiskTrend, fit_disk_trend};
 use crate::analytics::spans::{SpanMatch, SpanOrder, SpanStat, measure_spans};
 use crate::analytics::uptime_results::{
-    ResultItem, find_last_up, list_cert_expiries, list_recent_results,
+    ResultItem, find_last_up, list_cert_expiries, list_recent_results, to_recent_start,
 };
 use crate::db::entities::alerts::Model as Alert;
 use crate::db::entities::servers::Model as Server;
@@ -325,9 +325,18 @@ impl FactSources<'_> {
             Condition::UptimeDown => {
                 let Some(check) = self.check else { return Ok(AlertFacts::None) };
 
-                let recent =
-                    list_recent_results(self.analytics, check.id.clone(), RECENT_RESULTS)
-                        .await?;
+                let since = to_recent_start(
+                    Utc::now().timestamp_millis(),
+                    check.interval_secs,
+                    RECENT_RESULTS,
+                );
+                let recent = list_recent_results(
+                    self.analytics,
+                    check.id.clone(),
+                    since,
+                    RECENT_RESULTS,
+                )
+                .await?;
                 let failures =
                     recent.iter().take_while(|result| result.status != STATUS_UP).count();
                 let last_up = find_last_up(self.analytics, check.id.clone()).await?;

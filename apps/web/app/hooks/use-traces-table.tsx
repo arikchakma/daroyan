@@ -11,7 +11,7 @@ import type { DataTableFeatures } from '~/lib/table';
 import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { formatLogStamp, formatLogTime } from '~/utils/format';
-import { describeSpans, formatMicros, getServiceColor, getTraceStatus } from '~/utils/traces';
+import { describeSpans, formatMicros, getServiceColor, getTraceLink, getTraceStatus } from '~/utils/traces';
 import type { TraceSummary } from '~/utils/traces';
 
 type TraceRow = TraceSummary & { id: string };
@@ -69,7 +69,7 @@ const columns = helper.columns([
     meta: { width: 316 },
     cell: ({ row }) => (
       <Link
-        to={`/traces/${row.original.trace_id}`}
+        to={getTraceLink(row.original.trace_id, row.original.started_at)}
         className="block truncate text-caption font-medium outline-none after:absolute after:inset-0 focus-visible:underline"
       >
         {row.original.name}

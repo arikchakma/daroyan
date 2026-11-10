@@ -429,7 +429,9 @@ pub struct LogItem {
     pub attributes: Option<Value>,
     pub trace_id: Option<String>,
     pub span_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
     pub resource: Option<Value>,
 }
@@ -438,7 +440,7 @@ pub async fn list_logs(analytics: &Analytics, query: LogQuery) -> Result<Vec<Log
     analytics
         .read(move |conn| {
             let mut sql = String::from(
-                "SELECT logged_at, server_id, service, stream, severity, message, CAST(attributes AS VARCHAR), trace_id, span_id, raw, CAST(resource AS VARCHAR) \
+                "SELECT logged_at, server_id, service, stream, severity, message, CAST(attributes AS VARCHAR), trace_id, span_id, NULL, NULL \
                  FROM log_lines",
             );
             let mut values = Vec::new();

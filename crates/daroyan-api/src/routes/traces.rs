@@ -125,18 +125,28 @@ async fn get_trace_services(
     ))
 }
 
+#[derive(Deserialize)]
+struct TraceAtQuery {
+    at: Option<i64>,
+}
+
 #[utoipa::path(
     get,
     path = "/v1/traces/{trace_id}",
-    params(("trace_id" = String, Path)),
+    params(
+        ("trace_id" = String, Path),
+        ("at" = Option<i64>, Query, description = "A time in ms near the trace, like its start. It makes the lookup faster")
+    ),
     responses((status = 200, body = Vec<SpanItem>))
 )]
 async fn get_trace_spans(
     State(state): State<AppState>,
     _user: CurrentUser,
     Path(trace_id): Path<String>,
+    Query(query): Query<TraceAtQuery>,
 ) -> Result<Json<Vec<SpanItem>>> {
-    let spans = get_trace(&state.analytics, trace_id.to_ascii_lowercase()).await?;
+    let at = query.at.map(|at| at * 1_000);
+    let spans = get_trace(&state.analytics, trace_id.to_ascii_lowercase(), at).await?;
     if spans.is_empty() {
         return Err(Error::new(ErrorName::NotFound, "Trace not found"));
     }
