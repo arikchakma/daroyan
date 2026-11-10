@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Icon } from '~/components/icons/icon';
 import { Menu } from '~/components/ui/menu';
 import { ResetViewButton } from '~/components/ui/reset-view-button';
+import { useDebouncedSearch } from '~/hooks/use-debounced-search';
 
 type View<T extends string> = {
   value: T;
@@ -35,6 +36,7 @@ export function ViewsToolbar<T extends string>(props: ViewsToolbarProps<T>) {
     actions,
   } = props;
 
+  const [text, setText] = useDebouncedSearch(search, onSearchChange);
   const current = views.find((item) => item.value === view) ?? views[0]!;
 
   return (
@@ -76,8 +78,8 @@ export function ViewsToolbar<T extends string>(props: ViewsToolbarProps<T>) {
           type="search"
           aria-label={searchLabel}
           placeholder={searchLabel}
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
           className="min-w-0 flex-1 bg-transparent text-body text-text-primary outline-none placeholder:text-text-tertiary [&::-webkit-search-cancel-button]:hidden"
         />
       </label>
