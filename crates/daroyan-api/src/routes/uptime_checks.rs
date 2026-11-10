@@ -7,6 +7,7 @@ use chrono::Utc;
 use daroyan_core::analytics::uptime_results::{
     CheckStats, DAY_MS, ResponsePoint, ResultItem, delete_check_results,
     list_recent_results, list_response_points, read_check_stats, summarize_checks,
+    to_recent_start,
 };
 use daroyan_core::db::entities::uptime_checks::Model as UptimeCheck;
 use daroyan_core::db::ids::UptimeCheckId;
@@ -334,14 +335,15 @@ async fn get_uptime_check_stats(
     _user: CurrentUser,
     Path(check_id): Path<UptimeCheckId>,
 ) -> Result<Json<StatsView>> {
-    find_uptime_check(&state, &check_id).await?;
+    let check = find_uptime_check(&state, &check_id).await?;
     let now = Utc::now().timestamp_millis();
     let id = check_id.to_string();
     let (stats, _) = read_check_stats(&state.analytics, id.clone(), now, 1).await?;
     let points =
         list_response_points(&state.analytics, id.clone(), now - DAY_MS, POINT_BUCKET_MS)
             .await?;
-    let recent = list_recent_results(&state.analytics, id, RECENT_LIMIT).await?;
+    let since = to_recent_start(now, check.interval_secs, RECENT_LIMIT);
+    let recent = list_recent_results(&state.analytics, id, since, RECENT_LIMIT).await?;
     let outages = state.database.list_uptime_outages(&check_id, OUTAGE_LIMIT).await?;
     Ok(Json(StatsView {
         stats,

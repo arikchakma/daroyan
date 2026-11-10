@@ -13,7 +13,9 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::analytics::Analytics;
-use crate::analytics::uptime_results::{ResultItem, append_result, list_recent_results};
+use crate::analytics::uptime_results::{
+    ResultItem, append_result, list_recent_results, to_recent_start,
+};
 use crate::db::Database;
 use crate::db::entities::uptime_checks::Model as UptimeCheck;
 use crate::db::ids::UptimeCheckId;
@@ -59,12 +61,11 @@ impl Uptime {
         let check_id = UptimeCheckId::from(check.id.as_str());
         let open = self.database.find_open_uptime_outage(&check_id).await?;
         let limit = check.failure_threshold.max(check.success_threshold);
-        let recent = list_recent_results(
-            &self.analytics,
-            check.id.clone(),
-            u32::try_from(limit).unwrap_or(1),
-        )
-        .await?;
+        let limit = u32::try_from(limit).unwrap_or(1);
+        let since =
+            to_recent_start(probe.at.timestamp_millis(), check.interval_secs, limit);
+        let recent =
+            list_recent_results(&self.analytics, check.id.clone(), since, limit).await?;
 
         let is_up = probe.status == STATUS_UP;
         let streak: Vec<&ResultItem> = recent
