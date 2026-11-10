@@ -210,10 +210,11 @@ pub fn build_app(state: AppState) -> Router {
         .merge(routes::otlp::router())
         .layer(from_fn(forbid_caching));
     router
-        .fallback_service(any(serve_web).layer(CompressionLayer::new()))
+        .fallback_service(any(serve_web))
         .method_not_allowed_fallback(|| async { not_found() })
         .layer(from_fn_with_state(state.clone(), limit_globally))
         .layer(from_fn(render_errors))
+        .layer(CompressionLayer::new())
         .layer(from_fn_with_state(state.clone(), detect_client_ip))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
