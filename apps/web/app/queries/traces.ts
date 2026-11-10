@@ -27,10 +27,11 @@ export const traceQueries = {
       },
       refetchInterval: REFRESH_MS,
     }),
-  detail: (traceId: string) =>
+  detail: (traceId: string, at?: number) =>
     queryOptions({
       queryKey: [...traceQueries.all(), 'detail', traceId],
-      queryFn: () => request(apiClient.GET('/v1/traces/{trace_id}', { params: { path: { trace_id: traceId } } })),
+      queryFn: () =>
+        request(apiClient.GET('/v1/traces/{trace_id}', { params: { path: { trace_id: traceId }, query: { at } } })),
     }),
   services: (rangeMs: number) =>
     queryOptions({

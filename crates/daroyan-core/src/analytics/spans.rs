@@ -19,6 +19,7 @@ pub(crate) const MAX_TEXT_CHARS: usize = 4096;
 const MAX_STACKTRACE_CHARS: usize = 16_384;
 pub(crate) const UNKNOWN_SERVICE: &str = "unknown_service";
 const EXCEPTION_EVENT: &str = "exception";
+const TRACE_SLACK_US: i64 = 3_600_000_000;
 
 pub struct SpanRow {
     pub trace_id: String,
@@ -390,7 +391,9 @@ pub async fn list_traces(
                         arg_min(json_extract_string(resource, '$.\"host.name\"'), (parent_span_id IS NOT NULL, started_at)),
                         arg_min(server_id, (parent_span_id IS NOT NULL, started_at))
                  FROM spans
-                 WHERE trace_id IN (
+                 WHERE started_at >= ?1 - ?10
+                   AND (?2 IS NULL OR started_at < ?2 + ?10)
+                   AND trace_id IN (
                      SELECT DISTINCT trace_id FROM spans
                      WHERE started_at >= ?1
                        AND (?2 IS NULL OR started_at < ?2)
@@ -415,6 +418,7 @@ pub async fn list_traces(
                     query.limit,
                     query.offset,
                     query.server_id,
+                    TRACE_SLACK_US,
                 ],
                 |row| {
                     Ok(TraceSummary {
@@ -471,16 +475,41 @@ fn read_json(text: Option<String>) -> Value {
         .unwrap_or(Value::Null)
 }
 
-pub async fn get_trace(analytics: &Analytics, trace_id: String) -> Result<Vec<SpanItem>> {
+pub async fn get_trace(
+    analytics: &Analytics,
+    trace_id: String,
+    at: Option<i64>,
+) -> Result<Vec<SpanItem>> {
+    if let Some(at) = at {
+        let range = (at - TRACE_SLACK_US, at + TRACE_SLACK_US);
+        let spans = read_trace(analytics, trace_id.clone(), Some(range)).await?;
+        if !spans.is_empty() {
+            return Ok(spans);
+        }
+    }
+
+    read_trace(analytics, trace_id, None).await
+}
+
+async fn read_trace(
+    analytics: &Analytics,
+    trace_id: String,
+    range: Option<(i64, i64)>,
+) -> Result<Vec<SpanItem>> {
+    let (since, until) = range.unzip();
     analytics
         .read(move |conn| {
             let mut statement = conn.prepare(
                 "SELECT span_id, parent_span_id, service, name, kind, started_at, duration_us, status,
                         status_message, http_method, http_route, http_status,
                         attributes::VARCHAR, resource::VARCHAR, events::VARCHAR, server_id
-                 FROM spans WHERE trace_id = ? ORDER BY started_at, span_id",
+                 FROM spans
+                 WHERE trace_id = ?1
+                   AND (?2 IS NULL OR started_at >= ?2)
+                   AND (?3 IS NULL OR started_at <= ?3)
+                 ORDER BY started_at, span_id",
             )?;
-            let rows = statement.query_map([trace_id], |row| {
+            let rows = statement.query_map(params![trace_id, since, until], |row| {
                 Ok(SpanItem {
                     span_id: row.get(0)?,
                     parent_span_id: row.get(1)?,

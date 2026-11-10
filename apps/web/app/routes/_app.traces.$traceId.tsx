@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 
 import { TraceDetail } from '~/components/traces/trace-detail';
 import { traceQueries } from '~/queries/traces';
@@ -11,7 +11,9 @@ export function meta() {
 
 export default function TracePage() {
   const { traceId = '' } = useParams();
-  const { data: spans, isError } = useQuery(traceQueries.detail(traceId));
+  const [searchParams] = useSearchParams();
+  const at = Number(searchParams.get('at')) || undefined;
+  const { data: spans, isError } = useQuery(traceQueries.detail(traceId, at));
 
   if (isError || spans?.length === 0) {
     return (

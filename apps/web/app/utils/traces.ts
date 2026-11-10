@@ -119,6 +119,10 @@ export function orderSpans(spans: TraceSpan[]): SpanNode[] {
   return ordered;
 }
 
+export function getTraceLink(traceId: string, startedAtUs: number) {
+  return `/traces/${traceId}?at=${Math.floor(startedAtUs / 1_000)}`;
+}
+
 export function shortenId(id: string) {
   return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id;
 }
