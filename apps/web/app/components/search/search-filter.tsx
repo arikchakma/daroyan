@@ -5,12 +5,22 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from '~/components/icons/icon';
 import { useSearchFilterEditor } from '~/hooks/use-search-filter-editor';
 import { cn } from '~/utils/classname';
-import { getFilterChanges, getFilterItems, readDoc } from '~/utils/filter';
+import {
+  FILTER_SEARCH_MARK,
+  getFilterChanges,
+  getFilterItems,
+  isFilterSearch,
+  isFilterToken,
+  readCaret,
+  readDoc,
+} from '~/utils/filter';
 import type {
   EditOptions,
+  FilterCaret,
   FilterDoc,
   FilterEditing,
   FilterItem,
+  FilterTokenAttrs,
   SearchFilterChange,
   SearchFilterField,
   SearchFilterValue,
@@ -19,11 +29,13 @@ import type {
 import { FilterList } from './filter-list';
 import { TokenContext } from './filter-token-context';
 
+const TYPING_PAUSE_MS = 600;
+
 type SearchFilterProps = {
   label: string;
   fields: SearchFilterField[];
   filters: Record<string, SearchFilterValue | undefined>;
-  onFilterChange: (options: SearchFilterChange) => void;
+  onFilterChange: (changes: SearchFilterChange[]) => void;
   query: string;
   onQueryChange: (query: string) => void;
   isSearching?: boolean;
@@ -42,20 +54,26 @@ export function SearchFilter(props: SearchFilterProps) {
 
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const typingTimerRef = useRef<number | undefined>(undefined);
   const listId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [editing, setEditing] = useState<FilterEditing | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
-  const [{ tokens, text }, setDoc] = useState<FilterDoc>({
+  const [isPicking, setIsPicking] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [{ tokens, query: docQuery, search }, setDoc] = useState<FilterDoc>({
     tokens: [],
-    text: '',
+    query: '',
+    search: '',
   });
+  const [caret, setCaret] = useState<FilterCaret>({ text: '', from: 0, to: 0 });
 
   const field = fields.find((item) => item.key === editing?.key) ?? null;
   const part = editing?.part ?? 'values';
   const value: SearchFilterValue = tokens.find(
     (token) => token.key === editing?.key
   ) ?? { values: [], negate: false };
+  const text = getListText();
   const items = getFilterItems({
     fields,
     usedKeys: tokens.map((token) => token.key),
@@ -81,10 +99,11 @@ export function SearchFilter(props: SearchFilterProps) {
   }
   const activeIndex = items.findIndex((item) => item.key === activeKey);
   const isAddVisible =
-    tokens.some((token) => token.values.length) &&
+    (!!docQuery || tokens.some((token) => token.values.length)) &&
     fields.some((item) => !tokens.some((token) => token.key === item.key)) &&
-    !text &&
-    !(isListVisible && !editing);
+    !editing &&
+    !isTyping &&
+    !isListVisible;
 
   const editor = useSearchFilterEditor({
     editorProps: {
@@ -101,12 +120,33 @@ export function SearchFilter(props: SearchFilterProps) {
           : {}),
       },
       handleKeyDown: (view, event) => handleKeyDown(event, view.state),
-      handleClick: () => {
+      handleTextInput: (view, from, to, input) => {
+        const mark = view.state.schema.marks[FILTER_SEARCH_MARK]!;
+        const tr = view.state.tr.insertText(input, from, to);
+        const end = from + input.length;
+
+        if (editing) {
+          tr.addMark(from, end, mark.create());
+        } else {
+          tr.removeMark(from, end, mark);
+        }
+
+        view.dispatch(tr);
+        return true;
+      },
+      handleClick: (_view, _pos, event) => {
+        const target = event.target as Element | null;
+        if (!target?.closest('[data-filter-token]')) {
+          stopEditing();
+        }
         setIsOpen(true);
         return false;
       },
     },
-    onTransaction: ({ editor: current }) => setDoc(readDoc(current.state.doc)),
+    onTransaction: ({ editor: current }) => {
+      setDoc(readDoc(current.state.doc));
+      setCaret(readCaret(current.state));
+    },
     onFocus: () => setIsOpen(true),
     onBlur: ({ event }) => {
       if (listRef.current?.contains(event.relatedTarget as Node | null)) {
@@ -114,27 +154,34 @@ export function SearchFilter(props: SearchFilterProps) {
       }
       stopEditing();
       setIsOpen(false);
+      setIsPicking(false);
     },
     onUpdate: ({ editor: current, transaction }) => {
       const before = readDoc(transaction.before);
       const after = readDoc(current.state.doc);
-      for (const change of getFilterChanges({
+      const changes = getFilterChanges({
         before: before.tokens,
         after: after.tokens,
-      })) {
-        onFilterChange(change);
+      });
+      if (changes.length) {
+        onFilterChange(changes);
       }
-      if (after.text !== before.text) {
+
+      if (after.query !== before.query) {
+        onQueryChange(after.query);
+      }
+      if (transaction.before.textContent !== current.state.doc.textContent) {
         setIsOpen(true);
+        setIsPicking(false);
       }
+
       if (!editing) {
-        onQueryChange(after.text);
         return;
       }
-      if (after.text !== before.text) {
+      if (after.search !== before.search) {
         fields
           .find((item) => item.key === editing.key)
-          ?.onSearchChange?.(after.text);
+          ?.onSearchChange?.(after.search);
       }
       if (!after.tokens.some((token) => token.key === editing.key)) {
         setEditing(null);
@@ -148,12 +195,9 @@ export function SearchFilter(props: SearchFilterProps) {
     editor?.commands.syncFilterTokens(JSON.parse(filtersKey));
   }, [editor, filtersKey]);
 
-  const isEditing = editing !== null;
   useEffect(() => {
-    if (!isEditing) {
-      editor?.commands.setFilterText(query);
-    }
-  }, [editor, isEditing, query]);
+    editor?.commands.setFilterQuery(query);
+  }, [editor, query]);
 
   useEffect(() => {
     if (!editor) {
@@ -162,7 +206,7 @@ export function SearchFilter(props: SearchFilterProps) {
     editor.commands.setFilterAddButton(
       isAddVisible
         ? () => {
-            setEditing(null);
+            setIsPicking(true);
             setIsOpen(true);
             editor.commands.focus('end');
           }
@@ -170,58 +214,94 @@ export function SearchFilter(props: SearchFilterProps) {
     );
   }, [editor, isAddVisible]);
 
+  useEffect(() => () => window.clearTimeout(typingTimerRef.current), []);
+
   useLayoutEffect(() => {
     const root = rootRef.current;
     const list = listRef.current;
     if (!editor || !root || !list) {
       return;
     }
+
     const index = tokens.findIndex((token) => token.key === editing?.key);
     const token = root.querySelectorAll('[data-filter-token]')[index];
+    const pos = isPicking ? editor.state.doc.content.size : caret.from;
     const left = token
       ? token.getBoundingClientRect().left
-      : editor.view.coordsAtPos(editor.state.doc.content.size).left;
+      : editor.view.coordsAtPos(pos).left;
     list.style.left = `${left - root.getBoundingClientRect().left - 4}px`;
-  }, [editor, isListVisible, editing?.key, tokens, text]);
+  }, [editor, isListVisible, editing?.key, tokens, isPicking, caret.from]);
+
+  function getListText() {
+    if (editing) {
+      return search;
+    }
+    if (isPicking) {
+      return '';
+    }
+    return caret.text;
+  }
+
+  function markTyping() {
+    setIsTyping(true);
+    window.clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = window.setTimeout(
+      () => setIsTyping(false),
+      TYPING_PAUSE_MS
+    );
+  }
 
   function startEditing(options: EditOptions) {
     if (editing && editing.key !== options.key && !value.values.length) {
       editor?.commands.removeFilterToken(editing.key);
     }
+
     const token = tokens.find((item) => item.key === options.key);
     fields.find((item) => item.key === options.key)?.onSearchChange?.('');
     setEditing({ ...options, snapshot: token?.values.length ? token : null });
+    setIsPicking(false);
     setIsOpen(true);
-    editor?.chain().setFilterText('').focus('end').run();
+    editor
+      ?.chain()
+      .clearFilterSearch()
+      .placeFilterCaret(options.key, 'after')
+      .focus()
+      .run();
   }
 
   function stopEditing() {
-    if (editing && !value.values.length) {
-      editor?.commands.removeFilterToken(editing.key);
+    if (!editing) {
+      return;
     }
+
+    const chain = editor?.chain().clearFilterSearch();
+    if (!value.values.length) {
+      chain?.removeFilterToken(editing.key);
+    }
+    chain?.run();
     setEditing(null);
   }
 
-  function commitToken() {
+  function commitToken(options: { isOpen: boolean }) {
+    editor?.chain().clearFilterSearch().focus('end').run();
     setEditing(null);
-    setIsOpen(true);
-    editor?.commands.focus('end');
+    setIsOpen(options.isOpen);
   }
 
   function choose(item: FilterItem) {
     if (item.kind === 'field') {
-      editor?.commands.setFilterText('');
-      editor?.commands.insertFilterToken({
-        key: item.field.key,
-        values: [],
-        negate: item.negate,
-      });
+      const range = isPicking ? undefined : caret;
+      editor?.commands.insertFilterToken(
+        { key: item.field.key, values: [], negate: item.negate },
+        range
+      );
       startEditing({ key: item.field.key, part: 'values' });
       return;
     }
     if (!field) {
       return;
     }
+
     if (item.kind === 'operator') {
       editor?.commands.updateFilterToken({
         key: field.key,
@@ -233,7 +313,7 @@ export function SearchFilter(props: SearchFilterProps) {
       }
       return;
     }
-    editor?.commands.setFilterText('');
+
     setActiveKey(item.key);
     if (!field.multiple) {
       editor?.commands.updateFilterToken({
@@ -241,10 +321,11 @@ export function SearchFilter(props: SearchFilterProps) {
         values: [item.value],
         negate: false,
       });
-      setEditing(null);
-      setIsOpen(false);
+      commitToken({ isOpen: false });
       return;
     }
+
+    editor?.commands.clearFilterSearch();
     editor?.commands.updateFilterToken({
       key: field.key,
       negate: value.negate,
@@ -254,10 +335,41 @@ export function SearchFilter(props: SearchFilterProps) {
     });
   }
 
+  function moveAcross(token: FilterTokenAttrs | null, step: number) {
+    if (!editing) {
+      return;
+    }
+
+    const key = editing.key;
+    stopEditing();
+    if (token) {
+      startEditing({ key: token.key, part: 'values' });
+      return;
+    }
+
+    editor
+      ?.chain()
+      .placeFilterCaret(key, step < 0 ? 'before' : 'after')
+      .focus()
+      .run();
+    setIsOpen(true);
+  }
+
   // Text input reaches React after the next key can arrive, so keys read the doc from the editor.
   function handleKeyDown(event: KeyboardEvent, state: EditorState) {
     const doc = readDoc(state.doc);
     const editedToken = doc.tokens.find((token) => token.key === editing?.key);
+    const { from, empty } = state.selection;
+    const $from = state.doc.resolve(from);
+
+    if (
+      event.key.length === 1 ||
+      event.key === 'Backspace' ||
+      event.key === 'Delete'
+    ) {
+      markTyping();
+    }
+
     switch (event.key) {
       case 'ArrowDown':
       case 'ArrowUp': {
@@ -266,6 +378,7 @@ export function SearchFilter(props: SearchFilterProps) {
           setIsOpen(true);
           return true;
         }
+
         const step = event.key === 'ArrowDown' ? 1 : -1;
         const next =
           activeIndex < 0
@@ -278,26 +391,41 @@ export function SearchFilter(props: SearchFilterProps) {
       }
       case 'ArrowLeft':
       case 'ArrowRight': {
-        const { from, empty } = state.selection;
         if (!editor || !empty || event.altKey || event.metaKey) {
           return false;
         }
-        const end = state.doc.content.size;
+
         const step = event.key === 'ArrowLeft' ? -1 : 1;
+        const node = step < 0 ? $from.nodeBefore : $from.nodeAfter;
+
         // The editor moves the caret itself, so the next key sees where it is.
-        if (step < 0 ? from > end - doc.text.length : from < end) {
-          editor.commands.setTextSelection(from + step);
+        if (editing) {
+          if (isFilterSearch(node)) {
+            editor.commands.setTextSelection(from + step);
+            return true;
+          }
+
+          const index = doc.tokens.findIndex(
+            (token) => token.key === editing.key
+          );
+          const beside =
+            step < 0
+              ? state.doc.resolve(from - 1).nodeBefore
+              : $from.nodeAfter;
+          moveAcross(
+            isFilterToken(beside) ? doc.tokens[index + step]! : null,
+            step
+          );
           return true;
         }
-        const index = editing
-          ? doc.tokens.findIndex((token) => token.key === editing.key)
-          : doc.tokens.length;
-        const next = doc.tokens[index + step];
-        if (next) {
-          startEditing({ key: next.key, part: 'values' });
-        } else if (editing && step > 0) {
-          stopEditing();
-          setIsOpen(true);
+
+        if (isFilterToken(node)) {
+          startEditing({
+            key: (node!.attrs as FilterTokenAttrs).key,
+            part: 'values',
+          });
+        } else if (node) {
+          editor.commands.setTextSelection(from + step);
         }
         return true;
       }
@@ -311,36 +439,65 @@ export function SearchFilter(props: SearchFilterProps) {
       case 'Escape':
         if (!editing) {
           setIsOpen(false);
-        } else if (editing.snapshot) {
-          editor?.commands.updateFilterToken({
-            key: editing.key,
-            ...editing.snapshot,
-          });
-          setEditing(null);
-        } else {
-          editor?.commands.removeFilterToken(editing.key);
-          setEditing(null);
+          setIsPicking(false);
+          return true;
         }
+
+        if (editing.snapshot) {
+          editor
+            ?.chain()
+            .clearFilterSearch()
+            .updateFilterToken({ key: editing.key, ...editing.snapshot })
+            .run();
+        } else {
+          editor
+            ?.chain()
+            .clearFilterSearch()
+            .removeFilterToken(editing.key)
+            .run();
+        }
+        setEditing(null);
         return true;
       case ' ':
-        if (!editing || doc.text || !editedToken?.values.length) {
+        if (!editing || doc.search || !editedToken?.values.length) {
           return false;
         }
-        commitToken();
+        commitToken({ isOpen: true });
         return true;
       case 'Backspace': {
-        if (doc.text) {
-          return false;
-        }
-        const last = doc.tokens.at(-1);
-        if (editing) {
-          editor?.commands.removeFilterToken(editing.key);
+        if (event.metaKey) {
+          editor?.commands.deleteRange({ from: 0, to: state.selection.to });
           setEditing(null);
           setIsOpen(true);
-        } else if (last) {
-          startEditing({ key: last.key, part: 'values' });
+          return true;
         }
-        return true;
+
+        if (!empty) {
+          return false;
+        }
+
+        if (editing) {
+          if (isFilterSearch($from.nodeBefore)) {
+            return false;
+          }
+          editor
+            ?.chain()
+            .clearFilterSearch()
+            .removeFilterToken(editing.key)
+            .run();
+          setEditing(null);
+          setIsOpen(true);
+          return true;
+        }
+
+        if (isFilterToken($from.nodeBefore)) {
+          startEditing({
+            key: ($from.nodeBefore!.attrs as FilterTokenAttrs).key,
+            part: 'values',
+          });
+          return true;
+        }
+        return false;
       }
       default:
         return false;
@@ -356,6 +513,7 @@ export function SearchFilter(props: SearchFilterProps) {
         onRemove: (key) => {
           editor?.commands.removeFilterToken(key);
           if (key === editing?.key) {
+            editor?.commands.clearFilterSearch();
             setEditing(null);
           }
         },
@@ -379,7 +537,7 @@ export function SearchFilter(props: SearchFilterProps) {
 
         <div className="relative flex min-w-0 flex-1 items-center">
           <EditorContent editor={editor} className="flex min-w-0 flex-1" />
-          {tokens.length === 0 && !text && (
+          {tokens.length === 0 && !docQuery && !search && (
             <span
               aria-hidden="true"
               className="pointer-events-none absolute inset-y-0 left-0 flex items-center text-body text-text-tertiary"
@@ -412,6 +570,7 @@ export function SearchFilter(props: SearchFilterProps) {
               }
               stopEditing();
               setIsOpen(false);
+              setIsPicking(false);
             }}
           />
         )}

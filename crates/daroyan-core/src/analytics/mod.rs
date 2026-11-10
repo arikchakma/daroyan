@@ -407,7 +407,7 @@ mod tests {
             .map(|_| serde_json::from_value(line.clone()).unwrap())
             .collect();
 
-        LogBatch { lines, dropped: 0 }
+        LogBatch { lines, ..LogBatch::default() }
     }
 
     #[test]

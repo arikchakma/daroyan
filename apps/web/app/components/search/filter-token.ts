@@ -1,23 +1,39 @@
 import { Node } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { Plugin, TextSelection } from '@tiptap/pm/state';
+import { TextSelection } from '@tiptap/pm/state';
 import type { Transaction } from '@tiptap/pm/state';
 import { ReactNodeViewRenderer } from '@tiptap/react';
 
-import type { FilterTokenAttrs, SearchFilterValue } from '~/utils/filter';
+import {
+  FILTER_TOKEN_NODE,
+  getQuery,
+  isFilterSearch,
+  isFilterToken,
+  readDoc,
+} from '~/utils/filter';
+import type {
+  FilterRange,
+  FilterTokenAttrs,
+  SearchFilterValue,
+} from '~/utils/filter';
 
 import { FilterTokenView } from './filter-token-view';
 
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     filterToken: {
-      insertFilterToken: (attrs: FilterTokenAttrs) => ReturnType;
+      insertFilterToken: (
+        attrs: FilterTokenAttrs,
+        range?: FilterRange
+      ) => ReturnType;
       updateFilterToken: (attrs: FilterTokenAttrs) => ReturnType;
       removeFilterToken: (key: string) => ReturnType;
       syncFilterTokens: (
         filters: Record<string, SearchFilterValue | undefined>
       ) => ReturnType;
-      setFilterText: (text: string) => ReturnType;
+      setFilterQuery: (query: string) => ReturnType;
+      clearFilterSearch: () => ReturnType;
+      placeFilterCaret: (key: string, side: 'before' | 'after') => ReturnType;
     };
   }
 }
@@ -25,16 +41,28 @@ declare module '@tiptap/core' {
 function getTokens(doc: ProseMirrorNode) {
   const tokens: { node: ProseMirrorNode; pos: number }[] = [];
   doc.forEach((node, pos) => {
-    if (node.type.name === 'filterToken') {
+    if (isFilterToken(node)) {
       tokens.push({ node, pos });
     }
   });
   return tokens;
 }
 
-function getTokensEnd(doc: ProseMirrorNode) {
-  const last = getTokens(doc).at(-1);
-  return last ? last.pos + last.node.nodeSize : 0;
+function findToken(doc: ProseMirrorNode, key: string) {
+  return getTokens(doc).find(({ node }) => node.attrs.key === key);
+}
+
+function deleteText(tr: Transaction, isSearch: boolean) {
+  const ranges: FilterRange[] = [];
+  tr.doc.forEach((node, pos) => {
+    if (node.isText && isFilterSearch(node) === isSearch) {
+      ranges.push({ from: pos, to: pos + node.nodeSize });
+    }
+  });
+
+  for (const { from, to } of ranges.reverse()) {
+    tr.delete(from, to);
+  }
 }
 
 function moveCaretToEnd(tr: Transaction) {
@@ -48,7 +76,7 @@ function markAsSync(tr: Transaction) {
 }
 
 export const FilterToken = Node.create({
-  name: 'filterToken',
+  name: FILTER_TOKEN_NODE,
   group: 'inline',
   inline: true,
   atom: true,
@@ -77,19 +105,28 @@ export const FilterToken = Node.create({
   addCommands() {
     return {
       insertFilterToken:
-        (attrs) =>
+        (attrs, range) =>
         ({ tr }) => {
-          tr.insert(getTokensEnd(tr.doc), this.type.create(attrs));
-          moveCaretToEnd(tr);
+          const end = tr.doc.content.size;
+          const { from, to } = range ?? { from: end, to: end };
+          tr.delete(from, to);
+
+          const previous = tr.doc.resolve(from).nodeBefore;
+          const gap = previous?.isText && !/\s$/.test(previous.text ?? '');
+          if (gap) {
+            tr.insert(from, tr.doc.type.schema.text(' '));
+          }
+
+          const at = gap ? from + 1 : from;
+          tr.insert(at, this.type.create(attrs));
+          tr.setSelection(TextSelection.create(tr.doc, at + 1));
           return true;
         },
 
       updateFilterToken:
         (attrs) =>
         ({ tr }) => {
-          const token = getTokens(tr.doc).find(
-            ({ node }) => node.attrs.key === attrs.key
-          );
+          const token = findToken(tr.doc, attrs.key);
           if (!token) {
             return false;
           }
@@ -100,9 +137,7 @@ export const FilterToken = Node.create({
       removeFilterToken:
         (key) =>
         ({ tr }) => {
-          const token = getTokens(tr.doc).find(
-            ({ node }) => node.attrs.key === key
-          );
+          const token = findToken(tr.doc, key);
           if (!token) {
             return false;
           }
@@ -129,71 +164,58 @@ export const FilterToken = Node.create({
               tr.setNodeMarkup(pos, undefined, { key, ...value });
             }
           }
+
           const missing = Object.entries(filters).flatMap(([key, value]) =>
             value?.values.length &&
             !tokens.some(({ node }) => node.attrs.key === key)
               ? [this.type.create({ key, ...value })]
               : []
           );
-          tr.insert(getTokensEnd(tr.doc), missing);
+          tr.insert(tr.doc.content.size, missing);
           if (!tr.docChanged) {
             return false;
           }
+
           markAsSync(tr);
           return true;
         },
 
-      setFilterText:
-        (text) =>
+      setFilterQuery:
+        (query) =>
         ({ tr }) => {
-          const from = getTokensEnd(tr.doc);
-          if (tr.doc.textBetween(from, tr.doc.content.size) === text) {
+          if (readDoc(tr.doc).query === getQuery([query])) {
             return false;
           }
-          if (text) {
-            tr.insertText(text, from, tr.doc.content.size);
-          } else {
-            tr.delete(from, tr.doc.content.size);
+
+          deleteText(tr, false);
+          if (query) {
+            tr.insert(tr.doc.content.size, tr.doc.type.schema.text(query));
           }
+
           markAsSync(tr);
+          return true;
+        },
+
+      clearFilterSearch:
+        () =>
+        ({ tr }) => {
+          deleteText(tr, true);
+          return true;
+        },
+
+      placeFilterCaret:
+        (key, side) =>
+        ({ tr }) => {
+          const token = findToken(tr.doc, key);
+          if (!token) {
+            return false;
+          }
+
+          const pos =
+            side === 'before' ? token.pos : token.pos + token.node.nodeSize;
+          tr.setSelection(TextSelection.create(tr.doc, pos));
           return true;
         },
     };
-  },
-
-  addProseMirrorPlugins() {
-    return [
-      new Plugin({
-        // The caret can move in front of a token. Text typed there moves to the end.
-        appendTransaction(transactions, _oldState, state) {
-          if (!transactions.some((tr) => tr.docChanged)) {
-            return null;
-          }
-          const end = getTokensEnd(state.doc);
-          const stray: { from: number; to: number; text: string }[] = [];
-          state.doc.forEach((node, pos) => {
-            if (node.isText && pos < end) {
-              stray.push({
-                from: pos,
-                to: pos + node.nodeSize,
-                text: node.text!,
-              });
-            }
-          });
-          if (stray.length === 0) {
-            return null;
-          }
-          const tr = state.tr;
-          for (const { from, to } of [...stray].reverse()) {
-            tr.delete(from, to);
-          }
-          tr.insertText(
-            stray.map((item) => item.text).join(''),
-            tr.doc.content.size
-          );
-          return moveCaretToEnd(tr);
-        },
-      }),
-    ];
   },
 });

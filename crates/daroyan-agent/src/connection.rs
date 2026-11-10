@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use daroyan_protocol::host::Host;
-use daroyan_protocol::log::{LogBatch, LogLine};
+use daroyan_protocol::log::{LogBatch, LogDrop, LogLine};
 use daroyan_protocol::message::{AgentMessage, ApiMessage};
 use daroyan_protocol::report::Report;
 use futures_util::stream::SplitSink;
@@ -38,6 +38,7 @@ pub struct Outbox {
     logs: VecDeque<LogBatch>,
     log_bytes: usize,
     log_dropped: u64,
+    over_budget: Vec<LogDrop>,
 }
 
 fn measure_line(line: &LogLine) -> usize {
@@ -53,23 +54,26 @@ impl Outbox {
         self.log_bytes += measure_batch(&batch);
         self.logs.push_back(batch);
         while self.log_bytes > LOG_QUEUE_BYTES {
-            let Some(oldest) = self.logs.pop_front() else { break };
+            let Some(mut oldest) = self.logs.pop_front() else { break };
             self.log_bytes -= measure_batch(&oldest);
             self.log_dropped += oldest.lines.len() as u64 + oldest.dropped;
+            self.over_budget.append(&mut oldest.over_budget);
         }
     }
 
     fn take_log_chunk(&mut self) -> Option<LogBatch> {
-        if self.logs.is_empty() && self.log_dropped == 0 {
+        if self.logs.is_empty() && self.log_dropped == 0 && self.over_budget.is_empty() {
             return None;
         }
         let mut chunk = LogBatch {
             lines: Vec::new(),
             dropped: std::mem::take(&mut self.log_dropped),
+            over_budget: std::mem::take(&mut self.over_budget),
         };
         let mut bytes = 0;
         while let Some(batch) = self.logs.front_mut() {
             chunk.dropped += std::mem::take(&mut batch.dropped);
+            chunk.over_budget.append(&mut batch.over_budget);
             let mut fits = 0;
             let mut is_full = false;
             for line in &batch.lines {
@@ -308,7 +312,11 @@ mod tests {
             raw: None,
             format: LogFormat::Auto,
         };
-        LogBatch { lines: vec![line; count], dropped }
+        LogBatch {
+            lines: vec![line; count],
+            dropped,
+            ..LogBatch::default()
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { useEditor } from '@tiptap/react';
 import type { UseEditorOptions } from '@tiptap/react';
 
 import { FilterAddWidget } from '~/components/search/filter-add-widget';
+import { FilterSearchMark } from '~/components/search/filter-search-mark';
 import { FilterToken } from '~/components/search/filter-token';
 
 const FilterDocument = Node.create({
@@ -16,7 +17,13 @@ const FilterText = Node.create({
   group: 'inline',
 });
 
-const EXTENSIONS = [FilterDocument, FilterText, FilterToken, FilterAddWidget];
+const EXTENSIONS = [
+  FilterDocument,
+  FilterText,
+  FilterToken,
+  FilterSearchMark,
+  FilterAddWidget,
+];
 
 export function useSearchFilterEditor(options: UseEditorOptions) {
   const { editorProps, ...rest } = options;
@@ -27,8 +34,15 @@ export function useSearchFilterEditor(options: UseEditorOptions) {
     editorProps: {
       ...editorProps,
       handlePaste: (view, event) => {
-        const pasted = event.clipboardData?.getData('text/plain') ?? '';
-        view.dispatch(view.state.tr.insertText(pasted.replace(/\s+/g, ' ')));
+        const pasted = (event.clipboardData?.getData('text/plain') ?? '').replace(/\s+/g, ' ');
+        const { from, to } = view.state.selection;
+        const getDefault = () => view.state.tr.insertText(pasted, from, to);
+        const isHandled = view.someProp('handleTextInput', (handle) =>
+          handle(view, from, to, pasted, getDefault)
+        );
+        if (!isHandled) {
+          view.dispatch(getDefault());
+        }
         return true;
       },
     },

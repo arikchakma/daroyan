@@ -9,11 +9,20 @@ pub const SEVERITY_INFO: u8 = 9;
 pub const SEVERITY_WARN: u8 = 13;
 pub const SEVERITY_ERROR: u8 = 17;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct LogBatch {
     pub lines: Vec<LogLine>,
     #[serde(default)]
     pub dropped: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub over_budget: Vec<LogDrop>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct LogDrop {
+    pub service: String,
+    pub lines: u64,
+    pub budget: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
