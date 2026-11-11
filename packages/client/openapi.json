@@ -3929,6 +3929,66 @@
                 "minimum": 0
               }
             }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "threshold",
+              "within_secs",
+              "kind"
+            ],
+            "properties": {
+              "aggregation": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MetricAggregation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "below": {
+                "type": "boolean"
+              },
+              "filter": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "group_by": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "metric"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "service": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "threshold": {
+                "type": "number",
+                "format": "double"
+              },
+              "within_secs": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
           }
         ]
       },

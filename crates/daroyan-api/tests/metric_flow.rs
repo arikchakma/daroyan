@@ -2,10 +2,13 @@ mod common;
 
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
-use axum::Router;
+use axum::routing::post;
+use axum::{Json, Router};
 use daroyan_api::AppState;
 use daroyan_api::app::{build_app, open_state};
+use daroyan_core::alerts::engine::AlertEngine;
 use daroyan_core::analytics::Analytics;
 use daroyan_core::config::{Config, MetricSettings};
 use daroyan_core::db::queries::servers::NewServer;
@@ -522,6 +525,161 @@ async fn drops_new_series_past_the_limit_and_counts_them() {
         .await
         .unwrap();
     assert_eq!(tokens[0]["rejected_metric_points"], 2);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn fires_metric_alerts_per_group() {
+    let dir = std::env::temp_dir()
+        .join(format!("daroyan-metric-alerts-{}", std::process::id()));
+    let state = open_test_state(&dir, MetricSettings::default()).await;
+    let analytics = state.analytics.clone();
+    let mut engine = AlertEngine::new(
+        state.database.clone(),
+        state.agents.clone(),
+        state.analytics.clone(),
+        state.config.app_url.clone(),
+    );
+    let http = common::sign_in(&state.database).await;
+    let anonymous = Client::new();
+    let base = serve(build_app(state)).await;
+    let token = create_token(&http, &base).await;
+
+    let received = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let hook_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let hook_url = format!("http://{}/hook", hook_listener.local_addr().unwrap());
+    let hook_store = Arc::clone(&received);
+    tokio::spawn(async move {
+        let app = Router::new().route(
+            "/hook",
+            post(move |Json(body): Json<Value>| async move {
+                hook_store.lock().unwrap().push(body);
+            }),
+        );
+        axum::serve(hook_listener, app).await
+    });
+    let integration: Value = http
+        .post(format!("{base}/v1/integrations"))
+        .json(&json!({ "name": "Ops hook", "config": { "kind": "webhook", "url": hook_url } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let at = now_nanos() - MINUTE_NANOS;
+    let depth = |queue: &str, value: f64| NumberDataPoint {
+        attributes: vec![text("queue", queue)],
+        time_unix_nano: at,
+        value: Some(NumberValue::AsDouble(value)),
+        ..Default::default()
+    };
+    let body = request(
+        "worker-1",
+        vec![Metric {
+            name: "queue.depth".to_string(),
+            unit: "{job}".to_string(),
+            data: Some(Data::Gauge(Gauge {
+                data_points: vec![depth("email", 1200.0), depth("webhook", 40.0)],
+            })),
+            ..Default::default()
+        }],
+    );
+    send(&anonymous, &format!("{base}/v1/otlp/v1/metrics"), &token, &body).await;
+    analytics.flush().await.unwrap();
+
+    let condition = json!({
+        "kind": "metric",
+        "name": "queue.depth",
+        "aggregation": "last",
+        "threshold": 1000,
+        "within_secs": 300,
+        "group_by": "queue"
+    });
+    let narrowed = http
+        .post(format!("{base}/v1/alert-rules"))
+        .json(&json!({
+            "name": "Queue Backed Up",
+            "condition": condition,
+            "scope": { "kind": "servers", "server_ids": ["srv_inboxjot"] },
+            "integration_ids": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(narrowed.status(), StatusCode::BAD_REQUEST);
+
+    let rule: Value = http
+        .post(format!("{base}/v1/alert-rules"))
+        .json(&json!({
+            "name": "Queue Backed Up",
+            "condition": condition,
+            "scope": { "kind": "all" },
+            "integration_ids": [integration["id"]]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(rule["id"].is_string(), "{rule}");
+
+    engine.check_alerts(chrono::Utc::now()).await.unwrap();
+
+    let firing: Vec<Value> = http
+        .get(format!("{base}/v1/alerts?status=firing"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let summary: Vec<(&str, &str, &str, &str)> = firing
+        .iter()
+        .map(|alert| {
+            (
+                alert["server_id"].as_str().unwrap(),
+                alert["target_name"].as_str().unwrap(),
+                alert["subject"].as_str().unwrap(),
+                alert["value"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(summary, [("metrics", "Metrics", "email", "1200 jobs")]);
+
+    for _ in 0..50 {
+        if !received.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let hook = received.lock().unwrap()[0].clone();
+    assert_eq!(hook["event"], "alert.firing");
+    assert_eq!(
+        hook["url"],
+        "https://daroyan.example/metrics?metric=queue.depth&range=1h&agg=last&filter=queue%3Demail"
+    );
+
+    let backtest: Value = http
+        .post(format!("{base}/v1/alert-rules/backtest"))
+        .json(&json!({ "condition": condition, "scope": { "kind": "all" } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(backtest["is_supported"], true);
+    let hits: Vec<(&str, &str)> = backtest["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|hit| (hit["subject"].as_str().unwrap(), hit["value"].as_str().unwrap()))
+        .collect();
+    assert_eq!(hits, [("email", "1200 jobs")]);
 
     std::fs::remove_dir_all(&dir).ok();
 }

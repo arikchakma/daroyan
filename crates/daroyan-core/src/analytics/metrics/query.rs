@@ -76,6 +76,40 @@ impl Aggregation {
         }
     }
 
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rate => "rate",
+            Self::RatePerMinute => "rate_per_minute",
+            Self::Increase => "increase",
+            Self::Last => "last",
+            Self::Avg => "avg",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::P50 => "p50",
+            Self::P90 => "p90",
+            Self::P95 => "p95",
+            Self::P99 => "p99",
+            Self::CountRate => "count_rate",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rate => "rate per second",
+            Self::RatePerMinute => "rate per minute",
+            Self::Increase => "increase",
+            Self::Last => "value",
+            Self::Avg => "average",
+            Self::Min => "minimum",
+            Self::Max => "maximum",
+            Self::P50 => "p50",
+            Self::P90 => "p90",
+            Self::P95 => "p95",
+            Self::P99 => "p99",
+            Self::CountRate => "count per second",
+        }
+    }
+
     fn quantile(self) -> Option<f64> {
         match self {
             Self::P50 => Some(0.5),
@@ -380,16 +414,19 @@ impl Source {
 
 struct Window<'a> {
     source: &'a Source,
+    origin: i64,
     step_ms: i64,
     since: i64,
     until: i64,
 }
 
 impl Window<'_> {
-    fn params(&self) -> [SqlValue; 4] {
+    fn params(&self) -> [SqlValue; 6] {
         [
+            SqlValue::BigInt(self.origin),
             SqlValue::BigInt(self.step_ms),
             SqlValue::BigInt(self.step_ms),
+            SqlValue::BigInt(self.origin),
             SqlValue::BigInt(self.since),
             SqlValue::BigInt(self.until),
         ]
@@ -403,10 +440,10 @@ pub async fn query_metric(
     analytics.read(move |conn| run_query(conn, &query)).await?
 }
 
-fn run_query(
+fn resolve(
     conn: &Connection,
     query: &MetricQuery,
-) -> duckdb::Result<Result<MetricResult>> {
+) -> duckdb::Result<Result<(Shape, Aggregation)>> {
     let Some(shape) = read_shape(conn, query)? else {
         return Ok(Err(Error::new(
             ErrorName::NotFound,
@@ -428,6 +465,31 @@ fn run_query(
         )));
     }
 
+    Ok(Ok((shape, aggregation)))
+}
+
+fn read_cells(
+    conn: &Connection,
+    query: &MetricQuery,
+    shape: &Shape,
+    aggregation: Aggregation,
+    window: &Window,
+) -> duckdb::Result<Vec<Cell>> {
+    match aggregation.quantile() {
+        Some(quantile) => read_quantiles(conn, query, shape, window, quantile),
+        None => read_values(conn, query, shape, aggregation, window),
+    }
+}
+
+fn run_query(
+    conn: &Connection,
+    query: &MetricQuery,
+) -> duckdb::Result<Result<MetricResult>> {
+    let (shape, aggregation) = match resolve(conn, query)? {
+        Ok(resolved) => resolved,
+        Err(error) => return Ok(Err(error)),
+    };
+
     let range = (query.until - query.since).max(MINUTE_MS);
     let source = if range > RAW_RANGE_MS { Source::rollups() } else { Source::points() };
     let step_ms = pick_step(range, query.step_ms, source.time == "hour");
@@ -439,15 +501,12 @@ fn run_query(
 
     let window = Window {
         source: &source,
+        origin: 0,
         step_ms,
         since,
         until: query.until,
     };
-    let cells = match aggregation.quantile() {
-        Some(quantile) => read_quantiles(conn, query, &shape, &window, quantile)?,
-        None => read_values(conn, query, &shape, aggregation, &window)?,
-    };
-
+    let cells = read_cells(conn, query, &shape, aggregation, &window)?;
     let (series, is_truncated) = to_lines(cells, &times, step_ms);
     let exemplars = read_exemplars(conn, query)?;
 
@@ -463,6 +522,155 @@ fn run_query(
         is_truncated,
         exemplars,
     }))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MetricReading {
+    pub group: Option<String>,
+    pub value: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MetricMeasure {
+    pub aggregation: Aggregation,
+    pub unit: String,
+    pub readings: Vec<MetricReading>,
+}
+
+pub async fn measure_metric(
+    analytics: &Analytics,
+    query: MetricQuery,
+    max_groups: usize,
+) -> Result<Option<MetricMeasure>> {
+    analytics
+        .read(move |conn| {
+            let (shape, aggregation) = match resolve(conn, &query)? {
+                Ok(resolved) => resolved,
+                Err(error) if error.name() == ErrorName::NotFound => return Ok(Ok(None)),
+                Err(error) => return Ok(Err(error)),
+            };
+
+            let source = Source::points();
+            let window = Window {
+                source: &source,
+                origin: query.since,
+                step_ms: (query.until - query.since).max(1),
+                since: query.since,
+                until: query.until,
+            };
+            let mut readings: Vec<MetricReading> =
+                read_cells(conn, &query, &shape, aggregation, &window)?
+                    .into_iter()
+                    .map(|cell| MetricReading { group: cell.group, value: cell.value })
+                    .collect();
+            readings.sort_by(|a, b| b.value.total_cmp(&a.value));
+            readings.truncate(max_groups);
+
+            Ok(Ok(Some(MetricMeasure { aggregation, unit: shape.unit, readings })))
+        })
+        .await?
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MetricWindow {
+    pub at: i64,
+    pub group: Option<String>,
+    pub value: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MetricWindows {
+    pub aggregation: Aggregation,
+    pub unit: String,
+    pub windows: Vec<MetricWindow>,
+}
+
+pub async fn measure_metric_windows(
+    analytics: &Analytics,
+    query: MetricQuery,
+    window_ms: i64,
+) -> Result<Option<MetricWindows>> {
+    analytics
+        .read(move |conn| {
+            let (shape, aggregation) = match resolve(conn, &query)? {
+                Ok(resolved) => resolved,
+                Err(error) if error.name() == ErrorName::NotFound => return Ok(Ok(None)),
+                Err(error) => return Ok(Err(error)),
+            };
+
+            let source = Source::points();
+            let window = Window {
+                source: &source,
+                origin: 0,
+                step_ms: window_ms.max(MINUTE_MS),
+                since: query.since,
+                until: query.until,
+            };
+            let mut windows: Vec<MetricWindow> =
+                read_cells(conn, &query, &shape, aggregation, &window)?
+                    .into_iter()
+                    .map(|cell| MetricWindow {
+                        at: cell.bucket,
+                        group: cell.group,
+                        value: cell.value,
+                    })
+                    .collect();
+            windows.sort_by_key(|window| window.at);
+
+            Ok(Ok(Some(MetricWindows { aggregation, unit: shape.unit, windows })))
+        })
+        .await?
+}
+
+pub fn format_metric_value(value: f64, unit: &str, aggregation: Aggregation) -> String {
+    let amount = format_amount(value, unit);
+
+    match aggregation {
+        Aggregation::RatePerMinute => format!("{amount}/min"),
+        Aggregation::Rate => format!("{amount}/s"),
+        Aggregation::CountRate => format!("{}/s", format_number(value)),
+        Aggregation::P50 | Aggregation::P90 | Aggregation::P95 | Aggregation::P99 => {
+            format!("{} {amount}", aggregation.label())
+        }
+        _ => amount,
+    }
+}
+
+fn format_amount(value: f64, unit: &str) -> String {
+    match unit {
+        "s" => format_seconds(value),
+        "ms" => format_seconds(value / 1_000.0),
+        "By" => format!("{} B", format_number(value)),
+        "1" => format!("{}%", format_number(value * 100.0)),
+        "%" => format!("{}%", format_number(value)),
+        _ => {
+            let word = unit.trim_matches(['{', '}']).trim();
+            if word.is_empty() {
+                return format_number(value);
+            }
+
+            let plural = if word.ends_with('s') { "" } else { "s" };
+            format!("{} {word}{plural}", format_number(value))
+        }
+    }
+}
+
+fn format_seconds(seconds: f64) -> String {
+    if seconds < 1.0 {
+        return format!("{} ms", format_number(seconds * 1_000.0));
+    }
+
+    format!("{} s", format_number(seconds))
+}
+
+fn format_number(value: f64) -> String {
+    let text =
+        if value.abs() >= 100.0 { format!("{value:.0}") } else { format!("{value:.2}") };
+    if !text.contains('.') {
+        return text;
+    }
+
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn read_shape(conn: &Connection, query: &MetricQuery) -> duckdb::Result<Option<Shape>> {
@@ -531,7 +739,7 @@ fn read_values(
     let sql = match value {
         Some(value) => format!(
             "WITH {sel}
-             SELECT g, {time} // ? * ? AS bucket, {value}
+             SELECT g, ({time} - ?) // ? * ? + ? AS bucket, {value}
              FROM {table} JOIN sel USING (series_id)
              WHERE {time} >= ? AND {time} < ?
              GROUP BY g, bucket",
@@ -547,7 +755,7 @@ fn read_values(
             format!(
                 "WITH {sel}
                  SELECT g, bucket, {outer}(v) FROM (
-                    SELECT series_id, g, {time} // ? * ? AS bucket, {inner} AS v
+                    SELECT series_id, g, ({time} - ?) // ? * ? + ? AS bucket, {inner} AS v
                     FROM {table} JOIN sel USING (series_id)
                     WHERE {time} >= ? AND {time} < ?
                     GROUP BY series_id, g, bucket
@@ -605,7 +813,7 @@ fn read_quantiles(
     let sql = format!(
         "WITH {sel},
          slots AS (
-            SELECT g, {time} // ? * ? AS bucket,
+            SELECT g, ({time} - ?) // ? * ? + ? AS bucket,
                    generate_subscripts(bucket_deltas, 1) AS slot,
                    unnest(bucket_deltas) AS count
             FROM {table} JOIN sel USING (series_id)

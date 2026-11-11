@@ -1499,6 +1499,19 @@ export interface components {
             spans?: components["schemas"]["TraceSpans"];
             /** Format: int32 */
             within_secs: number;
+        } | {
+            aggregation?: components["schemas"]["MetricAggregation"] | null;
+            below?: boolean;
+            filter?: string | null;
+            group_by?: string | null;
+            /** @enum {string} */
+            kind: "metric";
+            name: string;
+            service?: string | null;
+            /** Format: double */
+            threshold: number;
+            /** Format: int32 */
+            within_secs: number;
         };
         Container: {
             config_hash?: string | null;
