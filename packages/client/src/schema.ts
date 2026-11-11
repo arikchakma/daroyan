@@ -837,6 +837,54 @@ export interface paths {
         patch: operations["update_member"];
         trace?: never;
     };
+    "/v1/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_metrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/metrics/{name}/attributes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_metric_attributes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/metrics/{name}/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_metric_query"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/overview/events": {
         parameters: {
             query?: never;
@@ -1314,6 +1362,11 @@ export interface components {
             value: string;
         };
         AlertRuleId: string;
+        AttributeValueCount: {
+            /** Format: int64 */
+            series: number;
+            value: string;
+        };
         BacktestAlertRuleBody: {
             condition: components["schemas"]["Condition"];
             /** Format: int32 */
@@ -2037,6 +2090,23 @@ export interface components {
             role: string;
             user?: components["schemas"]["User"] | null;
         };
+        MetricAttribute: {
+            key: string;
+            values: components["schemas"]["AttributeValueCount"][];
+        };
+        MetricExemplar: {
+            /** Format: int64 */
+            at: number;
+            group?: string | null;
+            span_id?: string | null;
+            trace_id: string;
+        };
+        /** @enum {string} */
+        MetricKind: "sum" | "gauge" | "histogram";
+        MetricLine: {
+            group?: string | null;
+            values: (number | null)[];
+        };
         MetricPoint: {
             /** Format: int64 */
             at: number;
@@ -2060,6 +2130,31 @@ export interface components {
             tcp_conn_count: number;
             /** Format: double */
             udp_conn_count: number;
+        };
+        MetricResult: {
+            aggregation: components["schemas"]["Aggregation"];
+            exemplars: components["schemas"]["MetricExemplar"][];
+            is_monotonic: boolean;
+            is_truncated: boolean;
+            kind: components["schemas"]["MetricKind"];
+            name: string;
+            series: components["schemas"]["MetricLine"][];
+            /** Format: int64 */
+            step_ms: number;
+            times: number[];
+            unit: string;
+        };
+        MetricSummary: {
+            description: string;
+            is_monotonic: boolean;
+            kind: components["schemas"]["MetricKind"];
+            /** Format: int64 */
+            last_seen_at: number;
+            name: string;
+            /** Format: int64 */
+            series: number;
+            services: string[];
+            unit: string;
         };
         NewIncidentBody: components["schemas"]["IncidentBody"] & {
             alert_id?: string | null;
@@ -4287,6 +4382,87 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_metrics: {
+        parameters: {
+            query?: {
+                /** @description Only metrics seen at or after this time in ms. Defaults to the last 30 days */
+                since?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricSummary"][];
+                };
+            };
+        };
+    };
+    get_metric_attributes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Metric name, like http.server.request.duration */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricAttribute"][];
+                };
+            };
+        };
+    };
+    get_metric_query: {
+        parameters: {
+            query?: {
+                /** @description Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg or count_rate. Defaults to rate_per_minute, last or p95 */
+                agg?: components["schemas"]["Aggregation"];
+                service?: string;
+                server_id?: string;
+                /** @description Attribute filters separated by commas, like route=/checkout,status!=200 */
+                filter?: string;
+                /** @description service, server or an attribute key. At most 50 groups, largest first */
+                group_by?: string;
+                /** @description Time in ms. Defaults to the last hour */
+                since?: number;
+                /** @description Time in ms. Defaults to now */
+                until?: number;
+                /** @description Bucket size in ms. Defaults to about 120 buckets */
+                step_ms?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Metric name, like http.server.request.duration */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricResult"];
+                };
             };
         };
     };

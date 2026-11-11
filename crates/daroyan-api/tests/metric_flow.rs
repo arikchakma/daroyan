@@ -336,6 +336,124 @@ async fn stores_metrics_and_works_out_counter_changes() {
         )
     );
 
+    let catalog: Value = http
+        .get(format!("{base}/v1/metrics"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let names: Vec<&str> = catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["emails.sent", "job.duration", "queue.depth"]);
+    assert_eq!(catalog[0]["kind"], "sum");
+    assert_eq!(catalog[0]["is_monotonic"], true);
+    assert_eq!(catalog[0]["series"], 2);
+    assert_eq!(catalog[0]["services"], json!(["inboxjot-api"]));
+
+    let attributes: Value = http
+        .get(format!("{base}/v1/metrics/emails.sent/attributes"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        attributes,
+        json!([{ "key": "provider", "values": [{ "value": "ses", "series": 2 }] }])
+    );
+
+    let since = (start / 1_000_000) as i64;
+    let until = since + 4 * 60_000;
+    let query = |name: &str, extra: &str| {
+        format!(
+            "{base}/v1/metrics/{name}/query?since={since}&until={until}&step_ms=60000{extra}"
+        )
+    };
+
+    let sent: Value = http
+        .get(query("emails.sent", "&group_by=service"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sent["aggregation"], "rate_per_minute");
+    assert_eq!(sent["series"].as_array().unwrap().len(), 1);
+    assert_eq!(sent["series"][0]["group"], "inboxjot-api");
+    let values: Vec<f64> = sent["series"][0]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    assert_eq!(values, [5.0, 47.0, 8.0]);
+
+    let filtered: Value = http
+        .get(query("emails.sent", "&agg=increase&filter=provider!=ses"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(filtered["series"], json!([]));
+
+    let median: Value = http
+        .get(query("job.duration", "&agg=p50"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let median: Vec<f64> = median["series"][0]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    assert_eq!(median, [1.5]);
+
+    let slowest: Value = http
+        .get(query("job.duration", ""))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(slowest["aggregation"], "p95");
+    assert_eq!(slowest["exemplars"][0]["trace_id"], "ab".repeat(16));
+
+    let depth: Value = http
+        .get(query("queue.depth", ""))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(depth["aggregation"], "last");
+    assert!(
+        depth["series"][0]["values"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(340.0))
+    );
+
+    let wrong = http.get(query("emails.sent", "&agg=p95")).send().await.unwrap();
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+    let missing = http.get(query("nope", "")).send().await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
     std::fs::remove_dir_all(&dir).ok();
 }
 
