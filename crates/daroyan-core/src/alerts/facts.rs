@@ -325,11 +325,7 @@ impl FactSources<'_> {
             Condition::UptimeDown => {
                 let Some(check) = self.check else { return Ok(AlertFacts::None) };
 
-                let since = to_recent_start(
-                    Utc::now().timestamp_millis(),
-                    check.interval_secs,
-                    RECENT_RESULTS,
-                );
+                let since = to_recent_start(now_ms, check.interval_secs, RECENT_RESULTS);
                 let recent = list_recent_results(
                     self.analytics,
                     check.id.clone(),
