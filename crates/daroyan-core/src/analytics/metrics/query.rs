@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 use crate::analytics::Analytics;
 use crate::analytics::metrics::histogram::quantile_of;
 use crate::analytics::metrics::ingest::MetricKind;
-use crate::analytics::metrics::store::HOUR_MS;
+use crate::analytics::metrics::store::{HOUR_MS, to_rollup_select};
 use crate::error::{Error, ErrorName, Result};
 
 const RAW_RANGE_MS: i64 = 24 * HOUR_MS;
@@ -339,7 +339,7 @@ impl Selection {
 }
 
 struct Source {
-    table: &'static str,
+    table: String,
     time: &'static str,
     last: &'static str,
     avg: &'static str,
@@ -347,14 +347,36 @@ struct Source {
     max: &'static str,
 }
 
-const POINTS: Source = Source {
-    table: "metric_points",
-    time: "taken_at",
-    last: "arg_max(value, taken_at)",
-    avg: "avg(value)",
-    min: "min(coalesce(min, value))",
-    max: "max(coalesce(max, value))",
-};
+impl Source {
+    fn points() -> Self {
+        Self {
+            table: "metric_points".to_string(),
+            time: "taken_at",
+            last: "arg_max(value, taken_at)",
+            avg: "avg(value)",
+            min: "min(coalesce(min, value))",
+            max: "max(coalesce(max, value))",
+        }
+    }
+
+    fn rollups() -> Self {
+        let fresh = to_rollup_select(
+            &format!("(SELECT coalesce(max(hour) + {HOUR_MS}, 0) FROM metric_rollups)"),
+            &i64::MAX.to_string(),
+        );
+
+        Self {
+            table: format!(
+                "(SELECT * FROM metric_rollups UNION ALL BY NAME ({fresh})) AS rolled"
+            ),
+            time: "hour",
+            last: "arg_max(last, hour)",
+            avg: "avg(avg)",
+            min: "min(min)",
+            max: "max(max)",
+        }
+    }
+}
 
 struct Window<'a> {
     source: &'a Source,
@@ -373,15 +395,6 @@ impl Window<'_> {
         ]
     }
 }
-
-const ROLLUPS: Source = Source {
-    table: "metric_rollups",
-    time: "hour",
-    last: "arg_max(last, hour)",
-    avg: "avg(avg)",
-    min: "min(min)",
-    max: "max(max)",
-};
 
 pub async fn query_metric(
     analytics: &Analytics,
@@ -416,7 +429,7 @@ fn run_query(
     }
 
     let range = (query.until - query.since).max(MINUTE_MS);
-    let source = if range > RAW_RANGE_MS { &ROLLUPS } else { &POINTS };
+    let source = if range > RAW_RANGE_MS { Source::rollups() } else { Source::points() };
     let step_ms = pick_step(range, query.step_ms, source.time == "hour");
     let since = query.since / step_ms * step_ms;
     let times: Vec<i64> = (0..)
@@ -424,7 +437,12 @@ fn run_query(
         .take_while(|time| *time < query.until)
         .collect();
 
-    let window = Window { source, step_ms, since, until: query.until };
+    let window = Window {
+        source: &source,
+        step_ms,
+        since,
+        until: query.until,
+    };
     let cells = match aggregation.quantile() {
         Some(quantile) => read_quantiles(conn, query, &shape, &window, quantile)?,
         None => read_values(conn, query, &shape, aggregation, &window)?,
@@ -546,15 +564,25 @@ fn read_values(
 
     let mut statement = conn.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(params), |row| {
-        Ok((row.get::<_, Option<String>>(0)?, row.get(1)?, row.get::<_, Option<f64>>(2)?))
+        Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<f64>>(2)?,
+        ))
     })?;
 
+    let is_rate = matches!(
+        aggregation,
+        Aggregation::Rate | Aggregation::RatePerMinute | Aggregation::CountRate
+    );
     let mut cells = Vec::new();
     for row in rows {
         let (group, bucket, value) = row?;
-        if let Some(value) = value.filter(|value| value.is_finite()) {
-            cells.push(Cell { group, bucket, value });
-        }
+        let Some(value) = value.filter(|value| value.is_finite()) else { continue };
+        let covered = (window.until - bucket).clamp(1, window.step_ms);
+        let value =
+            if is_rate { value * window.step_ms as f64 / covered as f64 } else { value };
+        cells.push(Cell { group, bucket, value });
     }
 
     Ok(cells)
@@ -775,6 +803,26 @@ mod tests {
         assert_eq!(sent.series[0].group.as_deref(), Some("/b"));
         let busy: Vec<f64> = sent.series[0].values.iter().flatten().copied().collect();
         assert_eq!(busy, [120.0, 120.0]);
+
+        let quiet: Vec<f64> = sent.series[1].values.iter().flatten().copied().collect();
+        assert_eq!(quiet, [60.0, 60.0]);
+
+        let fresh = PointRow {
+            series_id: 1,
+            at: start + 3 * HOUR_MS + 5 * MINUTE_MS,
+            value: Some(1.0),
+            delta: Some(4.0),
+            ..PointRow::default()
+        };
+        analytics.run(|conn| append_metrics(conn, &[], &[fresh])).unwrap();
+        let sent = query_metric(
+            &analytics,
+            query("emails.sent", Aggregation::Increase, GroupBy::read("route")),
+        )
+        .await
+        .unwrap();
+        let quiet: Vec<f64> = sent.series[1].values.iter().flatten().copied().collect();
+        assert_eq!(quiet, [60.0, 60.0, 4.0]);
 
         let depth =
             query_metric(&analytics, query("queue.depth", Aggregation::Max, None))

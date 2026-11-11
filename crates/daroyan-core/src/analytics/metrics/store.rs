@@ -157,9 +157,21 @@ pub fn roll_up_metrics(conn: &Connection, now: i64) -> duckdb::Result<()> {
     let Some(start) = start.filter(|start| *start < end) else { return Ok(()) };
 
     conn.execute(
-        "INSERT INTO metric_rollups
-         WITH window_points AS (
-            SELECT *, taken_at // ?3 * ?3 AS hour FROM metric_points WHERE taken_at >= ?1 AND taken_at < ?2
+        &format!(
+            "INSERT INTO metric_rollups {}",
+            to_rollup_select(&start.to_string(), &end.to_string())
+        ),
+        [],
+    )?;
+
+    Ok(())
+}
+
+pub fn to_rollup_select(start: &str, end: &str) -> String {
+    format!(
+        "WITH window_points AS (
+            SELECT *, taken_at // {HOUR_MS} * {HOUR_MS} AS hour
+            FROM metric_points WHERE taken_at >= {start} AND taken_at < {end}
          ),
          buckets AS (
             SELECT series_id, hour, list(total ORDER BY slot) AS bucket_deltas
@@ -176,17 +188,19 @@ pub fn roll_up_metrics(conn: &Connection, now: i64) -> duckdb::Result<()> {
             )
             GROUP BY series_id, hour
          )
-         SELECT series_id, hour, count(*),
-                arg_max(value, taken_at), min(coalesce(min, value)), max(coalesce(max, value)),
-                avg(value), sum(delta), sum(count_delta), sum(sum_delta),
-                any_value(buckets.bucket_deltas)
+         SELECT series_id, hour, count(*) AS points,
+                arg_max(value, taken_at) AS last,
+                min(coalesce(min, value)) AS min,
+                max(coalesce(max, value)) AS max,
+                avg(value) AS avg,
+                sum(delta) AS delta,
+                sum(count_delta) AS count_delta,
+                sum(sum_delta) AS sum_delta,
+                any_value(buckets.bucket_deltas) AS bucket_deltas
          FROM window_points
          LEFT JOIN buckets USING (series_id, hour)
-         GROUP BY series_id, hour",
-        params![start, end, HOUR_MS],
-    )?;
-
-    Ok(())
+         GROUP BY series_id, hour"
+    )
 }
 
 pub fn purge_metrics(
