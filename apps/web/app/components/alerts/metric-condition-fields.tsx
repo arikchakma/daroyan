@@ -8,7 +8,7 @@ import { FieldRow } from '~/components/ui/field-row';
 import { Input } from '~/components/ui/input';
 import { metricQueries } from '~/queries/metrics';
 import { TRACE_WINDOW_OPTIONS } from '~/utils/alerts';
-import { getAggregations, getMetricUnitWord } from '~/utils/metrics';
+import { getAggregations, getDefaultAggregation, getMetricUnitWord } from '~/utils/metrics';
 import { getMetricLimitHint, isLimitValid, isOptionalNumber } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState } from '~/utils/rule-form';
 
@@ -60,7 +60,7 @@ export function MetricConditionFields(props: MetricConditionFieldsProps) {
         />
         <SelectField
           label="Read As"
-          value={form.metricAggregation || aggregations[0]?.value || null}
+          value={form.metricAggregation || (metric ? getDefaultAggregation(metric) : null)}
           onValueChange={(value) =>
             onChange({ metricAggregation: aggregations.find((item) => item.value === value)?.value ?? '' })
           }

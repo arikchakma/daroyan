@@ -14,14 +14,20 @@ export type MetricFilters = {
   server_id?: string;
   filter?: string;
   group_by?: string;
+  step_ms?: number;
 };
 
 export const metricQueries = {
   all: () => ['metrics'] as const,
-  list: () =>
+  list: (rangeMs?: number) =>
     queryOptions({
-      queryKey: [...metricQueries.all(), 'list'],
-      queryFn: () => request(apiClient.GET('/v1/metrics')),
+      queryKey: [...metricQueries.all(), 'list', rangeMs],
+      queryFn: () =>
+        request(
+          apiClient.GET('/v1/metrics', {
+            params: { query: { since: rangeMs ? Date.now() - rangeMs : undefined } },
+          })
+        ),
       refetchInterval: REFRESH_MS,
     }),
   attributes: (name: string) =>

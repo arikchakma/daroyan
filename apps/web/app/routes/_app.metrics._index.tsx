@@ -1,27 +1,31 @@
 import { useQuery } from '@tanstack/react-query';
+import type { ColumnVisibilityState } from '@tanstack/react-table';
 import { Link, useSearchParams } from 'react-router';
 
 import { AlertBanners } from '~/components/alerts/alert-banners';
 import { Icon } from '~/components/icons/icon';
-import { MetricCatalog } from '~/components/metrics/metric-catalog';
-import { MetricView } from '~/components/metrics/metric-view';
 import { Button } from '~/components/ui/button';
-import { EmptyState } from '~/components/ui/empty-state';
+import { ColumnMenu } from '~/components/ui/column-menu';
+import { DataTable } from '~/components/ui/data-table';
+import { EmptyState, NoResults } from '~/components/ui/empty-state';
 import { PageBar } from '~/components/ui/page-bar';
 import { RadioMenu } from '~/components/ui/radio-menu';
+import { ViewsToolbar } from '~/components/ui/views-toolbar';
+import { METRIC_COLUMN_LABELS, useMetricsTable } from '~/hooks/use-metrics-table';
+import { useStoredState } from '~/hooks/use-stored-state';
 import { metricQueries } from '~/queries/metrics';
-import { serverQueries } from '~/queries/servers';
-import { DAY_MS, HOUR_MS } from '~/utils/format';
-import { METRICS_TARGET_ID, readMetricFilters } from '~/utils/metrics';
-import type { MetricAggregation } from '~/utils/metrics';
+import { getKindLabel, METRIC_RANGES, METRICS_TARGET_ID, readMetricRange } from '~/utils/metrics';
 
-const RANGES = [
-  { value: '1h', label: 'Last Hour', ms: HOUR_MS },
-  { value: '6h', label: 'Last 6 Hours', ms: 6 * HOUR_MS },
-  { value: '24h', label: 'Last 24 Hours', ms: DAY_MS },
-  { value: '7d', label: 'Last 7 Days', ms: 7 * DAY_MS },
-  { value: '30d', label: 'Last 30 Days', ms: 30 * DAY_MS },
-] as const;
+const COLUMNS_KEY = 'daroyan.metrics.columns';
+
+type KindView = 'all' | 'Histogram' | 'Counter' | 'Gauge';
+
+const VIEWS: { value: KindView; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'Histogram', label: 'Histograms' },
+  { value: 'Counter', label: 'Counters' },
+  { value: 'Gauge', label: 'Gauges' },
+];
 
 export function meta() {
   return [{ title: 'Metrics · Daroyan' }];
@@ -29,16 +33,21 @@ export function meta() {
 
 export default function MetricsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const range = RANGES.find((item) => item.value === searchParams.get('range')) ?? RANGES[0];
-  const serverId = searchParams.get('server') ?? '';
-  const service = searchParams.get('service') ?? '';
+  const range = readMetricRange(searchParams.get('range'));
+  const view = VIEWS.find((item) => item.value === searchParams.get('view'))?.value ?? 'all';
+  const search = searchParams.get('q') ?? '';
 
-  const { data: metrics } = useQuery(metricQueries.list());
-  const { data: servers } = useQuery(serverQueries.list());
-  const server = servers?.find((item) => item.id === serverId);
-  const services = [...new Set((metrics ?? []).flatMap((metric) => metric.services))].sort();
-  const name = searchParams.get('metric') ?? metrics?.[0]?.name;
-  const metric = metrics?.find((item) => item.name === name);
+  const [hiddenColumns, setHiddenColumns] = useStoredState<ColumnVisibilityState>(COLUMNS_KEY, {});
+
+  const { data: metrics, isLoading } = useQuery(metricQueries.list(range.ms));
+  const text = search.trim().toLowerCase();
+  const shown = (metrics ?? []).filter(
+    (metric) =>
+      (view === 'all' || getKindLabel(metric) === view) &&
+      (metric.name.toLowerCase().includes(text) ||
+        metric.services.some((service) => service.toLowerCase().includes(text)))
+  );
+  const table = useMetricsTable({ metrics: shown, columnVisibility: hiddenColumns });
 
   const setParams = (changes: Record<string, string | null>) =>
     setSearchParams(
@@ -55,7 +64,7 @@ export default function MetricsPage() {
       { replace: true }
     );
 
-  if (metrics && metrics.length === 0) {
+  if (metrics && metrics.length === 0 && !searchParams.get('range')) {
     return (
       <div className="flex min-h-full flex-col bg-surface-default">
         <PageBar icon="chart-line" title="Metrics" />
@@ -77,59 +86,31 @@ export default function MetricsPage() {
   return (
     <div className="flex min-h-full flex-col bg-surface-default">
       <PageBar icon="chart-line" title="Metrics">
-        {servers && servers.length > 0 && (
-          <RadioMenu
-            icon="server"
-            label={server?.name ?? 'All Servers'}
-            value={serverId}
-            options={[{ value: '', label: 'All Servers' }, ...servers.map((item) => ({ value: item.id, label: item.name }))]}
-            onChange={(value) => setParams({ server: value || null })}
-          />
-        )}
-        {services.length > 0 && (
-          <RadioMenu
-            icon="layers"
-            label={service || 'All Services'}
-            value={service}
-            options={[{ value: '', label: 'All Services' }, ...services.map((item) => ({ value: item, label: item }))]}
-            onChange={(value) => setParams({ service: value || null })}
-          />
-        )}
         <RadioMenu
           icon="calendar"
           label={range.label}
           value={range.value}
-          options={[...RANGES]}
+          options={[...METRIC_RANGES]}
           onChange={(value) => setParams({ range: value === '1h' ? null : value })}
         />
-        <Button nativeButton={false} variant="secondary" render={<Link to="/traces/setup" />} className="w-fit">
-          <Icon name="terminal" />
-          Set Up
-        </Button>
       </PageBar>
 
-      <div className="px-3 pb-3 empty:hidden">
+      <div className="flex flex-1 flex-col gap-2 px-3 pb-3">
         <AlertBanners serverId={METRICS_TARGET_ID} />
-      </div>
-
-      <div className="flex flex-1 gap-4 px-3 pb-3 max-lg:flex-col">
-        <MetricCatalog
-          metrics={metrics}
-          selected={metric?.name}
-          onSelect={(next) => setParams({ metric: next, agg: null, group: null, filter: null })}
+        <ViewsToolbar
+          views={VIEWS}
+          view={view}
+          onViewChange={(next) => setParams({ view: next === 'all' ? null : next })}
+          searchLabel="Search by metric or service"
+          search={search}
+          onSearchChange={(next) => setParams({ q: next || null })}
+          isViewChanged={view !== 'all' || !!search}
+          onReset={() => setSearchParams({}, { replace: true })}
+          actions={<ColumnMenu labels={METRIC_COLUMN_LABELS} hidden={hiddenColumns} onChange={setHiddenColumns} />}
         />
-        {metric && (
-          <MetricView
-            key={metric.name}
-            metric={metric}
-            rangeMs={range.ms}
-            service={service || undefined}
-            serverId={serverId || undefined}
-            aggregation={(searchParams.get('agg') as MetricAggregation | null) ?? undefined}
-            groupBy={searchParams.get('group') || undefined}
-            filters={readMetricFilters(searchParams.get('filter') ?? '')}
-            onChange={setParams}
-          />
+        <DataTable table={table} label="Metrics" size="sm" isLoading={isLoading} />
+        {metrics && shown.length === 0 && (
+          <NoResults title="No metrics found" onReset={() => setSearchParams({}, { replace: true })} />
         )}
       </div>
     </div>

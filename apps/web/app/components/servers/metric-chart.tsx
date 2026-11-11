@@ -1,4 +1,4 @@
-import { defineChart, lineY, ruleY } from '@tanstack/charts';
+import { areaY, defineChart, lineY, ruleY, text } from '@tanstack/charts';
 import { crosshair } from '@tanstack/charts/crosshair';
 import { Chart } from '@tanstack/charts/react/tooltip';
 import { scaleLinear } from '@tanstack/charts/scales/linear';
@@ -6,6 +6,7 @@ import { tooltip } from '@tanstack/charts/tooltip';
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 
+import { SMOOTH_CURVE } from '~/utils/chart';
 import { cn } from '~/utils/classname';
 import { DAY_MS, formatClock, formatDate } from '~/utils/format';
 
@@ -38,9 +39,11 @@ type MetricChartProps = {
   maxLabel: string;
   formatValue: (value: number) => string;
   limit?: number;
+  limitLabel?: string;
   legend?: ReactNode;
   footer?: ReactNode;
   height?: number;
+  isArea?: boolean;
 };
 
 function formatTick(value: number, from: number, to: number) {
@@ -54,7 +57,10 @@ function formatTooltipTime(value: number, from: number, to: number) {
   return to - from > DAY_MS ? `${formatDate(value)}, ${formatClock(value)}` : formatClock(value);
 }
 
-function getLineColor(line: ChartSeries) {
+function getLineColor(line: Pick<ChartSeries, 'isSecondary' | 'color'>) {
+  if (line.color) {
+    return line.color;
+  }
   return line.isSecondary ? 'var(--color-chart-secondary)' : 'var(--color-chart-primary)';
 }
 
@@ -89,9 +95,11 @@ export function MetricChart(props: MetricChartProps) {
     maxLabel,
     formatValue,
     limit,
+    limitLabel,
     legend,
     footer,
     height = CHART_HEIGHT,
+    isArea = false,
   } = props;
 
   const { definition, rowsByTime } = useMemo(() => {
@@ -103,10 +111,40 @@ export function MetricChart(props: MetricChartProps) {
       }
     }
 
+    const hasLimit = limit !== undefined && limit <= max;
+    const lines = series.slice().reverse();
+
     const definition = defineChart({
+      gradients: isArea
+        ? series.map((line, index) => ({
+            id: `area-${index}`,
+            x1: 0,
+            y1: 0,
+            x2: 0,
+            y2: 1,
+            stops: [
+              { offset: 0, color: getLineColor(line), opacity: 0.16 },
+              { offset: 1, color: getLineColor(line), opacity: 0 },
+            ],
+          }))
+        : [],
       marks: [
         crosshair({ x: { stroke: 'var(--color-border-strong)' }, y: false }),
-        ...(limit !== undefined && limit <= max
+        ...(isArea
+          ? lines.map((line) =>
+              areaY(
+                rows.filter((row) => row.series === line.label),
+                {
+                  id: `${line.label}-area`,
+                  x: 'at',
+                  y: 'value',
+                  fill: `url(#area-${series.indexOf(line)})`,
+                  curve: SMOOTH_CURVE,
+                }
+              )
+            )
+          : []),
+        ...(hasLimit
           ? [
               ruleY([limit], {
                 stroke: 'var(--color-tone-critical-fg)',
@@ -115,21 +153,32 @@ export function MetricChart(props: MetricChartProps) {
               }),
             ]
           : []),
-        ...series
-          .slice()
-          .reverse()
-          .map((line) =>
-            lineY(
-              rows.filter((row) => row.series === line.label),
-              {
-                id: line.label,
+        ...(hasLimit && limitLabel
+          ? [
+              text([{ at: from, value: limit }], {
                 x: 'at',
                 y: 'value',
-                stroke: line.color ?? getLineColor(line),
-                strokeWidth: 1.5,
-              }
-            )
-          ),
+                text: () => limitLabel,
+                fill: 'var(--color-tone-critical-fg)',
+                fontSize: 11,
+                anchor: 'start',
+                dy: -6,
+              }),
+            ]
+          : []),
+        ...lines.map((line) =>
+          lineY(
+            rows.filter((row) => row.series === line.label),
+            {
+              id: line.label,
+              x: 'at',
+              y: 'value',
+              stroke: getLineColor(line),
+              strokeWidth: isArea ? 2 : 1.5,
+              ...(isArea && { curve: SMOOTH_CURVE }),
+            }
+          )
+        ),
       ],
       scales: {
         x: {
@@ -169,7 +218,7 @@ export function MetricChart(props: MetricChartProps) {
     });
 
     return { definition, rowsByTime };
-  }, [series, times, from, to, bucketMs, max, limit]);
+  }, [series, times, from, to, bucketMs, max, limit, limitLabel, isArea]);
 
   return (
     <div className="@container flex min-w-0 flex-col gap-2.5 rounded-2xl border border-border-ring bg-surface-default px-4 pt-3.5 pb-3 shadow-card">
@@ -213,11 +262,8 @@ export function MetricChart(props: MetricChartProps) {
                   return (
                     <div key={row.series} className="flex items-center gap-2 text-caption">
                       <span
-                        className={cn(
-                          'size-1.75 rounded-full bg-chart-primary',
-                          line?.isSecondary && 'bg-chart-secondary'
-                        )}
-                        style={line?.color ? { backgroundColor: line.color } : undefined}
+                        className="size-1.75 rounded-full"
+                        style={{ backgroundColor: line ? getLineColor(line) : undefined }}
                       />
                       <span className="flex-1 text-text-secondary">{row.series}</span>
                       <span className="pl-4 font-medium text-text-primary">{formatValue(row.value ?? 0)}</span>
@@ -235,7 +281,7 @@ export function MetricChart(props: MetricChartProps) {
 }
 
 type ChartLegendProps = {
-  items: { label: string; isSecondary?: boolean }[];
+  items: { label: string; isSecondary?: boolean; color?: string }[];
 };
 
 export function ChartLegend(props: ChartLegendProps) {
@@ -245,12 +291,7 @@ export function ChartLegend(props: ChartLegendProps) {
     <div className="flex shrink-0 flex-wrap gap-x-3 gap-y-0.5 @[13rem]:flex-col @[13rem]:items-end">
       {items.map((item) => (
         <div key={item.label} className="flex items-center gap-1.25">
-          <span
-            className={cn(
-              'size-1.5 rounded-full bg-chart-primary',
-              item.isSecondary && 'bg-chart-secondary'
-            )}
-          />
+          <span className="size-1.5 rounded-full" style={{ backgroundColor: getLineColor(item) }} />
           <span className="text-axis text-text-secondary">{item.label}</span>
         </div>
       ))}

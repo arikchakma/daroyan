@@ -11,7 +11,7 @@ export function MetricFilterChip(props: MetricFilterChipProps) {
   const { filter, onToggle, onRemove } = props;
 
   return (
-    <span className="flex h-7.5 items-center overflow-hidden rounded-lg border border-border-ring bg-surface-default text-caption shadow-card">
+    <span className="flex h-7 items-center overflow-hidden rounded-lg border border-border-ring bg-surface-default text-caption shadow-card">
       <span className="px-2 font-mono text-code-small text-text-secondary">{filter.key}</span>
       <button
         type="button"

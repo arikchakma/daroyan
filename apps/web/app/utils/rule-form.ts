@@ -19,7 +19,7 @@ import {
   WINDOW_OPTIONS,
 } from '~/utils/alerts';
 import { joinNames, pluralize } from '~/utils/format';
-import { getAggregations, getMetricUnitWord } from '~/utils/metrics';
+import { getAggregations, getDefaultAggregation, getMetricUnitWord } from '~/utils/metrics';
 import type { MetricAggregation, MetricSummary } from '~/utils/metrics';
 
 export type ScopeKind = 'all' | 'label' | 'picked';
@@ -82,6 +82,7 @@ export type RuleDraft = {
   condition: Schemas['Condition'];
   scope?: Scope;
   forSecs?: number;
+  critical?: string;
 };
 
 export type RuleTemplate = {
@@ -227,7 +228,7 @@ export function getTraceLimitHint(form: RuleFormState) {
 }
 
 export function getMetricLimitHint(form: RuleFormState, metric: MetricSummary) {
-  const aggregation = getAggregations(metric).find((item) => item.value === form.metricAggregation) ?? getAggregations(metric)[0];
+  const aggregation = getAggregations(metric).find((item) => item.value === (form.metricAggregation || getDefaultAggregation(metric)));
   const side = form.metricBelow ? 'below' : 'above';
   const group = form.metricGroupBy ? ` for each ${form.metricGroupBy}` : '';
   const unit = getMetricUnitWord(metric.unit);
@@ -325,7 +326,7 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
   return {
     name: rule?.name ?? draft?.name ?? '',
     kind: initial?.kind ?? 'cpu',
-    critical: initial ? (readThreshold(initial)?.toString() ?? '') : (DEFAULT_THRESHOLDS.cpu ?? ''),
+    critical: draft?.critical ?? (initial ? (readThreshold(initial)?.toString() ?? '') : (DEFAULT_THRESHOLDS.cpu ?? '')),
     warning: saved?.warning?.toString() ?? '',
     isWarningOpen: saved?.warning != null,
     recovery: saved?.resolve_at?.toString() ?? '',

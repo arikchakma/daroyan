@@ -180,16 +180,18 @@ export type AlertTarget = {
   serverId?: string;
   checkId?: string;
   cronId?: string;
+  ruleIds?: string[];
 };
 
 export function getAlertsForTarget(alerts: Schemas['Alert'][], target: AlertTarget) {
-  const { serverId, checkId, cronId } = target;
+  const { serverId, checkId, cronId, ruleIds } = target;
 
   return alerts.filter(
     (alert) =>
       (serverId && alert.server_id === serverId) ||
       (checkId && alert.check_id === checkId) ||
-      (cronId && alert.cron_id === cronId)
+      (cronId && alert.cron_id === cronId) ||
+      ruleIds?.includes(alert.rule_id)
   );
 }
 

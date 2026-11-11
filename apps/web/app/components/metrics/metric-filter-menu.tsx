@@ -17,7 +17,7 @@ export function MetricFilterMenu(props: MetricFilterMenuProps) {
   return (
     <Menu.Root>
       <Menu.Trigger
-        render={<Button variant="secondary" className="w-fit" disabled={available.length === 0} />}
+        render={<Button variant="secondary" size="xs" disabled={available.length === 0} />}
       >
         <Icon name="plus" />
         Filter

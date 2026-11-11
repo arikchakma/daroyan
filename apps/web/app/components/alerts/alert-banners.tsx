@@ -43,12 +43,13 @@ type AlertBannersProps = {
   serverId?: string;
   checkId?: string;
   cronId?: string;
+  ruleIds?: string[];
 };
 
 export function AlertBanners(props: AlertBannersProps) {
-  const { serverId, checkId, cronId } = props;
+  const { serverId, checkId, cronId, ruleIds } = props;
 
-  const { alerts, isLoaded: isFiringLoaded, getMute, getRule } = useFiringAlerts({ serverId, checkId, cronId });
+  const { alerts, isLoaded: isFiringLoaded, getMute, getRule } = useFiringAlerts({ serverId, checkId, cronId, ruleIds });
 
   const [muting, setMuting] = useState<{ alert: Schemas['Alert']; isWholeRule: boolean } | undefined>();
   const [declaring, setDeclaring] = useState<DeclareDefaults | undefined>();
@@ -252,14 +253,15 @@ function toDeclareDefaults(alert: Schemas['Alert']): DeclareDefaults {
 }
 
 type AlertBadgeProps = {
-  serverId: string;
+  serverId?: string;
+  ruleIds?: string[];
   fallback: ReactNode;
 };
 
 export function AlertBadge(props: AlertBadgeProps) {
-  const { serverId, fallback } = props;
+  const { serverId, ruleIds, fallback } = props;
 
-  const { alerts, active, getMute } = useFiringAlerts({ serverId });
+  const { alerts, active, getMute } = useFiringAlerts({ serverId, ruleIds });
 
   const alert = active[0] ?? alerts[0];
   if (!alert) {

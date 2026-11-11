@@ -9,14 +9,15 @@ type RadioMenuProps = {
   value: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
+  size?: 'default' | 'xs';
 };
 
 export function RadioMenu(props: RadioMenuProps) {
-  const { icon, label, value, options, onChange } = props;
+  const { icon, label, value, options, onChange, size } = props;
 
   return (
     <Menu.Root>
-      <Menu.Trigger render={<Button variant="secondary" className="w-fit" />}>
+      <Menu.Trigger render={<Button variant="secondary" size={size} className="w-fit" />}>
         <Icon name={icon} />
         {label}
         <Icon name="chevron-down" />
