@@ -31,6 +31,7 @@ const STEPS_MS: [i64; 8] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = MetricAggregation)]
 pub enum Aggregation {
     Rate,
     RatePerMinute,

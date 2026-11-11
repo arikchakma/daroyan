@@ -2090,6 +2090,8 @@ export interface components {
             role: string;
             user?: components["schemas"]["User"] | null;
         };
+        /** @enum {string} */
+        MetricAggregation: "rate" | "rate_per_minute" | "increase" | "last" | "avg" | "min" | "max" | "p50" | "p90" | "p95" | "p99" | "count_rate";
         MetricAttribute: {
             key: string;
             values: components["schemas"]["AttributeValueCount"][];
@@ -2132,7 +2134,7 @@ export interface components {
             udp_conn_count: number;
         };
         MetricResult: {
-            aggregation: components["schemas"]["Aggregation"];
+            aggregation: components["schemas"]["MetricAggregation"];
             exemplars: components["schemas"]["MetricExemplar"][];
             is_monotonic: boolean;
             is_truncated: boolean;
@@ -4433,7 +4435,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg or count_rate. Defaults to rate_per_minute, last or p95 */
-                agg?: components["schemas"]["Aggregation"];
+                agg?: components["schemas"]["MetricAggregation"];
                 service?: string;
                 server_id?: string;
                 /** @description Attribute filters separated by commas, like route=/checkout,status!=200 */

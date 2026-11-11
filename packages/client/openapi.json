@@ -2057,7 +2057,7 @@
             "description": "Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg or count_rate. Defaults to rate_per_minute, last or p95",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/Aggregation"
+              "$ref": "#/components/schemas/MetricAggregation"
             }
           },
           {
@@ -6158,6 +6158,23 @@
           }
         }
       },
+      "MetricAggregation": {
+        "type": "string",
+        "enum": [
+          "rate",
+          "rate_per_minute",
+          "increase",
+          "last",
+          "avg",
+          "min",
+          "max",
+          "p50",
+          "p90",
+          "p95",
+          "p99",
+          "count_rate"
+        ]
+      },
       "MetricAttribute": {
         "type": "object",
         "required": [
@@ -6314,7 +6331,7 @@
         ],
         "properties": {
           "aggregation": {
-            "$ref": "#/components/schemas/Aggregation"
+            "$ref": "#/components/schemas/MetricAggregation"
           },
           "exemplars": {
             "type": "array",
