@@ -140,7 +140,6 @@ export function MetricOverTime(props: MetricOverTimeProps) {
           limit={limit}
           limitLabel={limit === undefined ? undefined : formatValue(limit)}
           height={CHART_HEIGHT}
-          isArea
           legend={
             series.length > 0 && (
               <ChartLegend

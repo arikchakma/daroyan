@@ -43,7 +43,6 @@ type MetricChartProps = {
   legend?: ReactNode;
   footer?: ReactNode;
   height?: number;
-  isArea?: boolean;
 };
 
 function formatTick(value: number, from: number, to: number) {
@@ -99,7 +98,6 @@ export function MetricChart(props: MetricChartProps) {
     legend,
     footer,
     height = CHART_HEIGHT,
-    isArea = false,
   } = props;
 
   const { definition, rowsByTime } = useMemo(() => {
@@ -115,35 +113,31 @@ export function MetricChart(props: MetricChartProps) {
     const lines = series.slice().reverse();
 
     const definition = defineChart({
-      gradients: isArea
-        ? series.map((line, index) => ({
-            id: `area-${index}`,
-            x1: 0,
-            y1: 0,
-            x2: 0,
-            y2: 1,
-            stops: [
-              { offset: 0, color: getLineColor(line), opacity: 0.16 },
-              { offset: 1, color: getLineColor(line), opacity: 0 },
-            ],
-          }))
-        : [],
+      gradients: series.map((line, index) => ({
+        id: `area-${index}`,
+        x1: 0,
+        y1: 0,
+        x2: 0,
+        y2: 1,
+        stops: [
+          { offset: 0, color: getLineColor(line), opacity: 0.16 },
+          { offset: 1, color: getLineColor(line), opacity: 0 },
+        ],
+      })),
       marks: [
         crosshair({ x: { stroke: 'var(--color-border-strong)' }, y: false }),
-        ...(isArea
-          ? lines.map((line) =>
-              areaY(
-                rows.filter((row) => row.series === line.label),
-                {
-                  id: `${line.label}-area`,
-                  x: 'at',
-                  y: 'value',
-                  fill: `url(#area-${series.indexOf(line)})`,
-                  curve: SMOOTH_CURVE,
-                }
-              )
-            )
-          : []),
+        ...lines.map((line) =>
+          areaY(
+            rows.filter((row) => row.series === line.label),
+            {
+              id: `${line.label}-area`,
+              x: 'at',
+              y: 'value',
+              fill: `url(#area-${series.indexOf(line)})`,
+              curve: SMOOTH_CURVE,
+            }
+          )
+        ),
         ...(hasLimit
           ? [
               ruleY([limit], {
@@ -174,8 +168,8 @@ export function MetricChart(props: MetricChartProps) {
               x: 'at',
               y: 'value',
               stroke: getLineColor(line),
-              strokeWidth: isArea ? 2 : 1.5,
-              ...(isArea && { curve: SMOOTH_CURVE }),
+              strokeWidth: 2,
+              curve: SMOOTH_CURVE,
             }
           )
         ),
@@ -218,7 +212,7 @@ export function MetricChart(props: MetricChartProps) {
     });
 
     return { definition, rowsByTime };
-  }, [series, times, from, to, bucketMs, max, limit, limitLabel, isArea]);
+  }, [series, times, from, to, bucketMs, max, limit, limitLabel]);
 
   return (
     <div className="@container flex min-w-0 flex-col gap-2.5 rounded-2xl border border-border-ring bg-surface-default px-4 pt-3.5 pb-3 shadow-card">

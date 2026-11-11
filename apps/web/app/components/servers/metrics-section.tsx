@@ -192,7 +192,6 @@ export function MetricsSection(props: MetricsSectionProps) {
             formatValue={chart.formatValue}
             limit={chart.limit}
             legend={chart.legend && <ChartLegend items={chart.legend} />}
-            isArea
           />
         ))}
       </div>
