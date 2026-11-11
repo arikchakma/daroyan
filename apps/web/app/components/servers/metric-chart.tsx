@@ -13,8 +13,9 @@ const CHART_HEIGHT = 112;
 
 export type ChartSeries = {
   label: string;
-  values: number[];
+  values: (number | null)[];
   isSecondary?: boolean;
+  color?: string;
 };
 
 type ChartRow = {
@@ -38,6 +39,8 @@ type MetricChartProps = {
   formatValue: (value: number) => string;
   limit?: number;
   legend?: ReactNode;
+  footer?: ReactNode;
+  height?: number;
 };
 
 function formatTick(value: number, from: number, to: number) {
@@ -49,6 +52,10 @@ function formatTick(value: number, from: number, to: number) {
 
 function formatTooltipTime(value: number, from: number, to: number) {
   return to - from > DAY_MS ? `${formatDate(value)}, ${formatClock(value)}` : formatClock(value);
+}
+
+function getLineColor(line: ChartSeries) {
+  return line.isSecondary ? 'var(--color-chart-secondary)' : 'var(--color-chart-primary)';
 }
 
 function buildRows(series: ChartSeries[], times: number[], bucketMs: number) {
@@ -83,6 +90,8 @@ export function MetricChart(props: MetricChartProps) {
     formatValue,
     limit,
     legend,
+    footer,
+    height = CHART_HEIGHT,
   } = props;
 
   const { definition, rowsByTime } = useMemo(() => {
@@ -116,7 +125,7 @@ export function MetricChart(props: MetricChartProps) {
                 id: line.label,
                 x: 'at',
                 y: 'value',
-                stroke: line.isSecondary ? 'var(--color-chart-secondary)' : 'var(--color-chart-primary)',
+                stroke: line.color ?? getLineColor(line),
                 strokeWidth: 1.5,
               }
             )
@@ -187,7 +196,7 @@ export function MetricChart(props: MetricChartProps) {
         </span>
         <Chart
           definition={definition}
-          height={CHART_HEIGHT}
+          height={height}
           initialWidth={240}
           ariaLabel={`${title} over time`}
           className="ts-chart-host text-axis [&_svg]:outline-none"
@@ -208,6 +217,7 @@ export function MetricChart(props: MetricChartProps) {
                           'size-1.75 rounded-full bg-chart-primary',
                           line?.isSecondary && 'bg-chart-secondary'
                         )}
+                        style={line?.color ? { backgroundColor: line.color } : undefined}
                       />
                       <span className="flex-1 text-text-secondary">{row.series}</span>
                       <span className="pl-4 font-medium text-text-primary">{formatValue(row.value ?? 0)}</span>
@@ -219,6 +229,7 @@ export function MetricChart(props: MetricChartProps) {
           }}
         />
       </div>
+      {footer}
     </div>
   );
 }
