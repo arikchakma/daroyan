@@ -2112,8 +2112,11 @@ export interface components {
         MetricExemplar: {
             /** Format: int64 */
             at: number;
+            /** Format: int64 */
+            duration_us?: number | null;
             group?: string | null;
             span_id?: string | null;
+            span_name?: string | null;
             trace_id: string;
         };
         /** @enum {string} */
@@ -4447,7 +4450,7 @@ export interface operations {
     get_metric_query: {
         parameters: {
             query?: {
-                /** @description Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg or count_rate. Defaults to rate_per_minute, last or p95 */
+                /** @description Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg, min, max or count_rate. Defaults to rate_per_minute, last or p95 */
                 agg?: components["schemas"]["MetricAggregation"];
                 service?: string;
                 server_id?: string;
@@ -4459,7 +4462,7 @@ export interface operations {
                 since?: number;
                 /** @description Time in ms. Defaults to now */
                 until?: number;
-                /** @description Bucket size in ms. Defaults to about 120 buckets */
+                /** @description Bucket size in ms. Defaults to about 120 buckets. A step as long as the range returns one bucket */
                 step_ms?: number;
             };
             header?: never;

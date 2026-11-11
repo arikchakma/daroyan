@@ -68,6 +68,8 @@ impl Aggregation {
                     | Self::P95
                     | Self::P99
                     | Self::Avg
+                    | Self::Min
+                    | Self::Max
                     | Self::CountRate
             ),
             MetricKind::Sum | MetricKind::Gauge => {
@@ -220,6 +222,8 @@ pub struct MetricExemplar {
     pub group: Option<String>,
     pub trace_id: String,
     pub span_id: Option<String>,
+    pub span_name: Option<String>,
+    pub duration_us: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, ToSchema)]
@@ -492,8 +496,14 @@ fn run_query(
 
     let range = (query.until - query.since).max(MINUTE_MS);
     let source = if range > RAW_RANGE_MS { Source::rollups() } else { Source::points() };
-    let step_ms = pick_step(range, query.step_ms, source.time == "hour");
-    let since = query.since / step_ms * step_ms;
+    let is_single = query.step_ms.is_some_and(|wanted| wanted >= range);
+    let step_ms = if is_single {
+        range
+    } else {
+        pick_step(range, query.step_ms, source.time == "hour")
+    };
+    let origin = if is_single { query.since } else { 0 };
+    let since = if is_single { query.since } else { query.since / step_ms * step_ms };
     let times: Vec<i64> = (0..)
         .map(|index| since + index * step_ms)
         .take_while(|time| *time < query.until)
@@ -501,13 +511,13 @@ fn run_query(
 
     let window = Window {
         source: &source,
-        origin: 0,
+        origin,
         step_ms,
         since,
         until: query.until,
     };
     let cells = read_cells(conn, query, &shape, aggregation, &window)?;
-    let (series, is_truncated) = to_lines(cells, &times, step_ms);
+    let (series, is_truncated) = to_lines(cells, &times);
     let exemplars = read_exemplars(conn, query)?;
 
     Ok(Ok(MetricResult {
@@ -845,7 +855,7 @@ fn read_quantiles(
     Ok(cells)
 }
 
-fn to_lines(cells: Vec<Cell>, times: &[i64], step_ms: i64) -> (Vec<MetricLine>, bool) {
+fn to_lines(cells: Vec<Cell>, times: &[i64]) -> (Vec<MetricLine>, bool) {
     let mut groups: HashMap<Option<String>, BTreeMap<i64, f64>> = HashMap::new();
     for cell in cells {
         groups.entry(cell.group).or_default().insert(cell.bucket, cell.value);
@@ -866,10 +876,7 @@ fn to_lines(cells: Vec<Cell>, times: &[i64], step_ms: i64) -> (Vec<MetricLine>, 
         .take(MAX_GROUPS)
         .map(|(group, values, _)| MetricLine {
             group,
-            values: times
-                .iter()
-                .map(|time| values.get(&(time / step_ms * step_ms)).copied())
-                .collect(),
+            values: times.iter().map(|time| values.get(time).copied()).collect(),
         })
         .collect();
 
@@ -882,12 +889,20 @@ fn read_exemplars(
 ) -> duckdb::Result<Vec<MetricExemplar>> {
     let selection = Selection::new(query, None);
     let sql = format!(
-        "WITH {sel}
-         SELECT g, taken_at, trace_id, span_id
-         FROM metric_points JOIN sel USING (series_id)
-         WHERE taken_at >= ? AND taken_at < ? AND trace_id IS NOT NULL
-         ORDER BY taken_at DESC
-         LIMIT ?",
+        "WITH {sel},
+         picked AS (
+            SELECT g, taken_at, trace_id, span_id
+            FROM metric_points JOIN sel USING (series_id)
+            WHERE taken_at >= ? AND taken_at < ? AND trace_id IS NOT NULL
+            ORDER BY taken_at DESC
+            LIMIT ?
+         )
+         SELECT picked.g, picked.taken_at, picked.trace_id, picked.span_id,
+                any_value(spans.name), max(spans.duration_us)
+         FROM picked
+         LEFT JOIN spans ON spans.trace_id = picked.trace_id AND spans.span_id = picked.span_id
+         GROUP BY ALL
+         ORDER BY picked.taken_at DESC",
         sel = selection.sql
     );
 
@@ -905,6 +920,8 @@ fn read_exemplars(
             at: row.get(1)?,
             trace_id: row.get(2)?,
             span_id: row.get(3)?,
+            span_name: row.get(4)?,
+            duration_us: row.get(5)?,
         })
     })?;
 
@@ -1042,6 +1059,77 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[tokio::test]
+    async fn reads_histogram_extremes_and_exemplar_spans() {
+        let dir = std::env::temp_dir()
+            .join(format!("daroyan-metric-exemplars-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let analytics = Analytics::open(&dir.join("live.duckdb")).unwrap();
+        analytics.run(run_duckdb_migrations).unwrap();
+
+        let start = 10 * DAY_MS;
+        let point = |minute: i64, min: f64, max: f64, trace_id: &str| PointRow {
+            series_id: 1,
+            at: start + minute * MINUTE_MS,
+            count: Some(4),
+            count_delta: Some(4),
+            sum: Some(1.0),
+            sum_delta: Some(1.0),
+            min: Some(min),
+            max: Some(max),
+            trace_id: Some(trace_id.into()),
+            span_id: Some("s1".into()),
+            ..PointRow::default()
+        };
+        let rows =
+            [series(1, "http.server.request.duration", MetricKind::Histogram, "/a")];
+        let points = [point(1, 0.02, 0.4, "t1"), point(2, 0.01, 1.9, "t2")];
+        analytics
+            .run(|conn| {
+                append_metrics(conn, &rows, &points)?;
+                conn.execute(
+                    "INSERT INTO spans (trace_id, span_id, service, name, kind, started_at,
+                                        duration_us, status, received_at)
+                     VALUES ('t2', 's1', 'api', 'GET /a', 'server', 0, 1900000, 'ok', 0)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let query = |aggregation| MetricQuery {
+            name: "http.server.request.duration".into(),
+            aggregation: Some(aggregation),
+            since: start,
+            until: start + HOUR_MS,
+            step_ms: Some(HOUR_MS),
+            ..MetricQuery::default()
+        };
+
+        let whole = MetricQuery {
+            since: start + 30 * 1_000,
+            until: start + 3 * MINUTE_MS,
+            step_ms: Some(3 * MINUTE_MS),
+            ..query(Aggregation::CountRate)
+        };
+        let whole = query_metric(&analytics, whole).await.unwrap();
+        assert_eq!(whole.times, [start + 30 * 1_000]);
+        assert_eq!(whole.series[0].values, [Some(8.0 / 150.0)]);
+
+        let low = query_metric(&analytics, query(Aggregation::Min)).await.unwrap();
+        let high = query_metric(&analytics, query(Aggregation::Max)).await.unwrap();
+        assert_eq!(low.series[0].values, [Some(0.01)]);
+        assert_eq!(high.series[0].values, [Some(1.9)]);
+
+        let exemplars = &high.exemplars;
+        assert_eq!(exemplars.len(), 2);
+        assert_eq!(exemplars[0].span_name.as_deref(), Some("GET /a"));
+        assert_eq!(exemplars[0].duration_us, Some(1_900_000));
+        assert_eq!(exemplars[1].span_name, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn reads_filters() {
         assert_eq!(
@@ -1076,6 +1164,7 @@ mod tests {
         assert!(!Aggregation::Rate.fits(MetricKind::Gauge, false));
         assert!(!Aggregation::P95.fits(MetricKind::Sum, false));
         assert!(Aggregation::Avg.fits(MetricKind::Histogram, false));
+        assert!(Aggregation::Max.fits(MetricKind::Histogram, false));
         assert_eq!(
             Aggregation::default_for(MetricKind::Histogram, false),
             Aggregation::P95

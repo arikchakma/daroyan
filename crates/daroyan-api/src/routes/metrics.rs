@@ -77,14 +77,14 @@ struct MetricQueryParams {
     path = "/v1/metrics/{name}/query",
     params(
         ("name" = String, Path, description = "Metric name, like http.server.request.duration"),
-        ("agg" = Option<Aggregation>, Query, description = "Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg or count_rate. Defaults to rate_per_minute, last or p95"),
+        ("agg" = Option<Aggregation>, Query, description = "Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg, min, max or count_rate. Defaults to rate_per_minute, last or p95"),
         ("service" = Option<String>, Query),
         ("server_id" = Option<String>, Query),
         ("filter" = Option<String>, Query, description = "Attribute filters separated by commas, like route=/checkout,status!=200"),
         ("group_by" = Option<String>, Query, description = "service, server or an attribute key. At most 50 groups, largest first"),
         ("since" = Option<i64>, Query, description = "Time in ms. Defaults to the last hour"),
         ("until" = Option<i64>, Query, description = "Time in ms. Defaults to now"),
-        ("step_ms" = Option<i64>, Query, description = "Bucket size in ms. Defaults to about 120 buckets")
+        ("step_ms" = Option<i64>, Query, description = "Bucket size in ms. Defaults to about 120 buckets. A step as long as the range returns one bucket")
     ),
     responses((status = 200, body = MetricResult))
 )]

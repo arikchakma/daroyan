@@ -2054,7 +2054,7 @@
           {
             "name": "agg",
             "in": "query",
-            "description": "Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg or count_rate. Defaults to rate_per_minute, last or p95",
+            "description": "Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg, min, max or count_rate. Defaults to rate_per_minute, last or p95",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/MetricAggregation"
@@ -2117,7 +2117,7 @@
           {
             "name": "step_ms",
             "in": "query",
-            "description": "Bucket size in ms. Defaults to about 120 buckets",
+            "description": "Bucket size in ms. Defaults to about 120 buckets. A step as long as the range returns one bucket",
             "required": false,
             "schema": {
               "type": "integer",
@@ -6264,6 +6264,13 @@
             "type": "integer",
             "format": "int64"
           },
+          "duration_us": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
           "group": {
             "type": [
               "string",
@@ -6271,6 +6278,12 @@
             ]
           },
           "span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "span_name": {
             "type": [
               "string",
               "null"
