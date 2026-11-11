@@ -247,16 +247,24 @@ pub async fn list_metrics(
     analytics
         .read(move |conn| {
             let mut statement = conn.prepare(
-                "SELECT name, arg_max(kind, last_seen), bool_or(is_monotonic),
-                        arg_max(unit, last_seen), arg_max(description, last_seen),
+                "WITH seen AS (
+                    SELECT s.*, greatest(s.last_seen, coalesce(p.taken_at, 0)) AS seen
+                    FROM metric_series s
+                    LEFT JOIN (
+                        SELECT series_id, max(taken_at) AS taken_at FROM metric_points
+                        WHERE taken_at >= ? GROUP BY series_id
+                    ) p USING (series_id)
+                 )
+                 SELECT name, arg_max(kind, seen), bool_or(is_monotonic),
+                        arg_max(unit, seen), arg_max(description, seen),
                         CAST(to_json(list_sort(list(DISTINCT service))) AS VARCHAR),
-                        count(*), max(last_seen)
-                 FROM metric_series
-                 WHERE last_seen >= ?
+                        count(*), max(seen)
+                 FROM seen
+                 WHERE seen >= ?
                  GROUP BY name
                  ORDER BY name",
             )?;
-            let rows = statement.query_map([since], |row| {
+            let rows = statement.query_map([since, since], |row| {
                 let kind: String = row.get(1)?;
                 let services: String = row.get(5)?;
 
@@ -1115,6 +1123,10 @@ mod tests {
         let whole = query_metric(&analytics, whole).await.unwrap();
         assert_eq!(whole.times, [start + 30 * 1_000]);
         assert_eq!(whole.series[0].values, [Some(8.0 / 150.0)]);
+
+        let listed = list_metrics(&analytics, start + MINUTE_MS).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].last_seen_at, start + 2 * MINUTE_MS);
 
         let low = query_metric(&analytics, query(Aggregation::Min)).await.unwrap();
         let high = query_metric(&analytics, query(Aggregation::Max)).await.unwrap();
