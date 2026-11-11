@@ -3,6 +3,9 @@ import type { Schemas } from '@daroyan/client';
 import { formatBytes } from '~/utils/format';
 import { formatMicros } from '~/utils/traces';
 
+export const METRICS_TARGET_ID = 'metrics';
+export const METRICS_TARGET_NAME = 'Metrics';
+
 export type MetricSummary = Schemas['MetricSummary'];
 export type MetricResult = Schemas['MetricResult'];
 export type MetricAggregation = Schemas['MetricAggregation'];
@@ -64,7 +67,7 @@ export function getKindLabel(metric: Pick<MetricSummary, 'kind' | 'is_monotonic'
   return 'Gauge';
 }
 
-function getUnitWord(unit: string) {
+export function getMetricUnitWord(unit: string) {
   const word = unit.replace(/[{}]/g, '').trim();
   if (!word || word === '1') {
     return '';
@@ -96,7 +99,7 @@ function formatAmount(value: number, unit: string) {
     return `${formatNumber(value)}%`;
   }
 
-  const word = getUnitWord(unit);
+  const word = getMetricUnitWord(unit);
   return word ? `${formatNumber(value)} ${word}` : formatNumber(value);
 }
 

@@ -29,6 +29,7 @@ import {
 } from '~/utils/alerts';
 import { formatClock } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
+import { METRICS_TARGET_ID } from '~/utils/metrics';
 import { TRACES_TARGET_ID } from '~/utils/traces';
 
 const QUICK_LENGTHS: { value: Exclude<MuteLength, 'custom'>; label: string }[] = [
@@ -221,7 +222,7 @@ export function AlertBanners(props: AlertBannersProps) {
 }
 
 function isPseudoTarget(serverId: string) {
-  return serverId === OTLP_SERVER_ID || serverId === TRACES_TARGET_ID;
+  return serverId === OTLP_SERVER_ID || serverId === TRACES_TARGET_ID || serverId === METRICS_TARGET_ID;
 }
 
 function getDeclareTarget(alert: Schemas['Alert']) {

@@ -17,6 +17,7 @@ import { formatMinutesLong } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
 import { formatClock, HOUR_MS } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
+import { METRICS_TARGET_ID } from '~/utils/metrics';
 import { TRACES_TARGET_ID } from '~/utils/traces';
 
 export type MuteLength = '1h' | '4h' | 'tomorrow' | 'resolves' | 'custom';
@@ -42,6 +43,9 @@ function getTargetIcon(target: MuteTarget): IconName {
   if (target.serverId === TRACES_TARGET_ID) {
     return 'layers';
   }
+  if (target.serverId === METRICS_TARGET_ID) {
+    return 'chart-line';
+  }
   return target.serverId === OTLP_SERVER_ID ? 'terminal' : 'server';
 }
 
@@ -57,6 +61,9 @@ function getTargetDetail(target: MuteTarget) {
   }
   if (target.serverId === TRACES_TARGET_ID) {
     return 'The alert firing on this traced service now';
+  }
+  if (target.serverId === METRICS_TARGET_ID) {
+    return 'The alert firing on this metric group now';
   }
   return 'The alert firing on this server now';
 }

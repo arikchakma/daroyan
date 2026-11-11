@@ -8,8 +8,9 @@ import {
   hasThreshold,
   isCheckKind,
   isCronKind,
-  isTraceKind,
+  isServiceKind,
   readLogCondition,
+  readMetricCondition,
   readSubjectName,
   readThreshold,
   readTraceCondition,
@@ -18,6 +19,8 @@ import {
   WINDOW_OPTIONS,
 } from '~/utils/alerts';
 import { joinNames, pluralize } from '~/utils/format';
+import { getAggregations, getMetricUnitWord } from '~/utils/metrics';
+import type { MetricAggregation, MetricSummary } from '~/utils/metrics';
 
 export type ScopeKind = 'all' | 'label' | 'picked';
 
@@ -56,6 +59,13 @@ export type RuleFormState = {
   tracePercentile: Schemas['Percentile'];
   traceSpans: Schemas['TraceSpans'];
   traceGroupBy: Schemas['TraceGroup'];
+  metricName: string;
+  metricAggregation: MetricAggregation | '';
+  metricBelow: boolean;
+  metricWithin: number;
+  metricService: string;
+  metricFilter: string;
+  metricGroupBy: string;
   scopeKind: ScopeKind;
   label: string;
   pickedIds: string[];
@@ -140,6 +150,7 @@ export const CONDITION_LABELS: Record<ConditionKind, string> = {
   logs: 'Log lines match',
   trace_errors: 'Error rate above a limit',
   trace_latency: 'Latency above a limit',
+  metric: 'Metric past a limit',
 };
 
 export const DECLARE_SEVERITY_OPTIONS = [
@@ -194,7 +205,8 @@ export function readRecovery(form: RuleFormState) {
     return null;
   }
 
-  const isSafe = form.kind === 'cert_days' ? recovery >= limit : recovery <= limit;
+  const isBelow = form.kind === 'cert_days' || (form.kind === 'metric' && form.metricBelow);
+  const isSafe = isBelow ? recovery >= limit : recovery <= limit;
   return isSafe ? recovery : null;
 }
 
@@ -212,6 +224,23 @@ export function getTraceLimitHint(form: RuleFormState) {
     return `Fires when ${form.tracePercentile} latency is above ${form.critical} ms within ${window}, ${minimum}.`;
   }
   return `Fires when more than ${form.critical}% of ${requests} fail within ${window}, ${minimum}.`;
+}
+
+export function getMetricLimitHint(form: RuleFormState, metric: MetricSummary) {
+  const aggregation = getAggregations(metric).find((item) => item.value === form.metricAggregation) ?? getAggregations(metric)[0];
+  const side = form.metricBelow ? 'below' : 'above';
+  const group = form.metricGroupBy ? ` for each ${form.metricGroupBy}` : '';
+  const unit = getMetricUnitWord(metric.unit);
+  const limit = unit ? `${form.critical} ${unit}` : form.critical;
+
+  return `Fires when the ${aggregation?.label.toLowerCase() ?? 'value'} of ${metric.name} is ${side} ${limit} within ${formatSpan(form.metricWithin)}${group}.`;
+}
+
+export function getServiceScopeText(kind: ConditionKind) {
+  if (kind === 'metric') {
+    return 'Covers every service that sends this metric, with one alert per group. Pick a service, filter or grouping in the rule to narrow it.';
+  }
+  return 'Covers every service that sends traces, with one alert per service. Pick a service in the rule to watch only that one.';
 }
 
 export function readMinRequests(form: RuleFormState) {
@@ -243,7 +272,7 @@ export function readTargetNoun(kind: ConditionKind): TargetNoun {
   if (isCheckKind(kind)) {
     return 'check';
   }
-  if (isTraceKind(kind)) {
+  if (isServiceKind(kind)) {
     return 'service';
   }
   return isCronKind(kind) ? 'cron' : 'server';
@@ -290,6 +319,7 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
   const initial = rule?.condition ?? draft?.condition;
   const savedLog = readLogCondition(initial);
   const savedTrace = readTraceCondition(initial);
+  const savedMetric = readMetricCondition(initial);
   const scope = rule?.scope ?? draft?.scope;
 
   return {
@@ -321,6 +351,13 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
     tracePercentile: (savedTrace?.kind === 'trace_latency' ? savedTrace.percentile : undefined) ?? 'p95',
     traceSpans: savedTrace?.spans ?? 'entry',
     traceGroupBy: savedTrace?.group_by ?? 'service',
+    metricName: savedMetric?.name ?? '',
+    metricAggregation: savedMetric?.aggregation ?? '',
+    metricBelow: savedMetric?.below ?? false,
+    metricWithin: savedMetric?.within_secs ?? 300,
+    metricService: savedMetric?.service ?? '',
+    metricFilter: savedMetric?.filter ?? '',
+    metricGroupBy: savedMetric?.group_by ?? '',
     scopeKind: readScopeKind(scope),
     label: scope?.kind === 'label' ? scope.label : '',
     pickedIds: readPickedIds(scope),
@@ -424,6 +461,22 @@ export function readCondition(form: RuleFormState): Schemas['Condition'] | undef
 
       return kind === 'trace_errors' ? { kind, ...filters } : { kind, percentile: form.tracePercentile, ...filters };
     }
+    case 'metric':
+      if (!form.metricName) {
+        return undefined;
+      }
+
+      return {
+        kind,
+        name: form.metricName,
+        aggregation: form.metricAggregation || null,
+        threshold: limit,
+        below: form.metricBelow,
+        within_secs: form.metricWithin,
+        service: form.metricService || null,
+        filter: form.metricFilter.trim() || null,
+        group_by: form.metricGroupBy || null,
+      };
     case 'cert_days':
       return { kind, below: limit };
     case 'cpu':

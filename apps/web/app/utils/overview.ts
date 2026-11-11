@@ -4,10 +4,11 @@ import type { IconName } from '~/components/icons/icon-paths';
 import { getAlertTargetPath } from '~/utils/alerts';
 import { formatDate } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
+import { METRICS_TARGET_ID } from '~/utils/metrics';
 import { TRACES_TARGET_ID } from '~/utils/traces';
 
 export function getAlertHref(alert: Schemas['Alert']) {
-  if (alert.server_id === OTLP_SERVER_ID || alert.server_id === TRACES_TARGET_ID) {
+  if (alert.server_id === OTLP_SERVER_ID || alert.server_id === TRACES_TARGET_ID || alert.server_id === METRICS_TARGET_ID) {
     return getAlertTargetPath(alert);
   }
   if (alert.server_id) {

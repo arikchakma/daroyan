@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 
+import { AlertBanners } from '~/components/alerts/alert-banners';
 import { Icon } from '~/components/icons/icon';
 import { MetricCatalog } from '~/components/metrics/metric-catalog';
 import { MetricView } from '~/components/metrics/metric-view';
@@ -11,7 +12,7 @@ import { RadioMenu } from '~/components/ui/radio-menu';
 import { metricQueries } from '~/queries/metrics';
 import { serverQueries } from '~/queries/servers';
 import { DAY_MS, HOUR_MS } from '~/utils/format';
-import { readMetricFilters } from '~/utils/metrics';
+import { METRICS_TARGET_ID, readMetricFilters } from '~/utils/metrics';
 import type { MetricAggregation } from '~/utils/metrics';
 
 const RANGES = [
@@ -106,6 +107,10 @@ export default function MetricsPage() {
           Set Up
         </Button>
       </PageBar>
+
+      <div className="px-3 pb-3 empty:hidden">
+        <AlertBanners serverId={METRICS_TARGET_ID} />
+      </div>
 
       <div className="flex flex-1 gap-4 px-3 pb-3 max-lg:flex-col">
         <MetricCatalog
