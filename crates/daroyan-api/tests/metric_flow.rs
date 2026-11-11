@@ -660,7 +660,7 @@ async fn fires_metric_alerts_per_group() {
     assert_eq!(hook["event"], "alert.firing");
     assert_eq!(
         hook["url"],
-        "https://daroyan.example/metrics?metric=queue.depth&range=1h&agg=last&filter=queue%3Demail"
+        "https://daroyan.example/metrics/queue.depth?range=1h&agg=last&filter=queue%3Demail"
     );
 
     let backtest: Value = http

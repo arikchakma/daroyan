@@ -859,7 +859,7 @@ impl AlertMessage<'_> {
             _ => {}
         }
 
-        let mut params = vec![("metric", name.clone()), ("range", "1h".to_string())];
+        let mut params = vec![("range", "1h".to_string())];
         params.extend(
             aggregation.map(|aggregation| ("agg", aggregation.as_str().to_string())),
         );
@@ -869,8 +869,10 @@ impl AlertMessage<'_> {
             params.push(("filter", filters.join(",")));
         }
 
-        let url = Url::parse_with_params(&format!("{app_url}/metrics"), params).ok()?;
-        Some(Link::new("Open metrics", url.as_str()))
+        let mut url =
+            Url::parse_with_params(&format!("{app_url}/metrics"), params).ok()?;
+        url.path_segments_mut().ok()?.push(name);
+        Some(Link::new("Open metric", url.as_str()))
     }
 
     fn firing_links(&self) -> Vec<Link> {
