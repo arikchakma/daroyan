@@ -37,9 +37,13 @@ start. Put TLS in front of it with a reverse proxy.
 | `DATABASE_URL` | No | `sqlite://data/daroyan.db?mode=rwc` | SQLite app database. Point it at your persistent volume. |
 | `DUCKDB_PATH` | No | `data/daroyan.duckdb` | DuckDB metrics/logs/traces store. Put it on the same volume. |
 | `DUCKDB_BACKUP_DIR` | No | – | If set, periodic DuckDB backups are written here. |
-| `RETENTION_DAYS` | No | `30` | Days of metrics/traces kept. |
+| `RETENTION_DAYS` | No | `30` | Days of server metrics and traces kept. |
 | `LOG_RETENTION_DAYS` | No | `7` | Days of logs kept. |
 | `OTLP_LOG_BUDGET_KB` | No | `1024` | The most OpenTelemetry log data each ingest token can send per minute, in KB. Batches over it get `429` with `Retry-After`, so SDKs retry them. Settings → Telemetry counts them. |
+| `METRIC_RETENTION_DAYS` | No | `7` | Days of OpenTelemetry metric points kept as sent. |
+| `METRIC_ROLLUP_RETENTION_DAYS` | No | `30` | Days of hourly OpenTelemetry metric totals kept. Charts longer than a day read these. |
+| `METRIC_SERIES_LIMIT` | No | `10000` | The most metric series each ingest token can send in an hour. A series is one metric with one set of attribute values. New series over it are dropped, and Settings → Telemetry counts them. |
+| `METRIC_SERIES_PER_METRIC` | No | `2000` | The most series one metric can have per ingest token. It stops one attribute with many values, like a user ID, from filling the disk. |
 | `TRUSTED_PROXIES` | No | `127.0.0.1,::1` | CIDRs allowed to set the real-client-IP header. See the warning below. |
 | `CLIENT_IP_HEADER` | No | `cf-connecting-ip` | Header your proxy sets with the real client IP. Use `x-forwarded-for` for most proxies. |
 | `ALLOW_PRIVATE_TARGETS` | No | `false` | Allow uptime checks against private/localhost addresses. **Keep `false` in production** (it is the SSRF guard). Only enable if you monitor LAN hosts. |
