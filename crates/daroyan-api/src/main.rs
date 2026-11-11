@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use daroyan_api::app::{build_app, open_state};
 use daroyan_core::alerts::engine::spawn_alert_engine;
-use daroyan_core::analytics::spawn_analytics_tasks;
+use daroyan_core::analytics::{Retention, spawn_analytics_tasks};
 use daroyan_core::config::Config;
 use daroyan_core::crons::spawn_cron_runner;
 use daroyan_core::incidents::spawn_incident_scheduler;
@@ -28,8 +28,7 @@ async fn main() -> anyhow::Result<()> {
     let agents = state.agents.clone();
     let analytics_tasks = spawn_analytics_tasks(
         analytics.clone(),
-        state.config.retention_days,
-        state.config.log_retention_days,
+        Retention::from(&*state.config),
         state.config.backup_dir.clone(),
     );
     let alert_engine = spawn_alert_engine(

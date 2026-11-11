@@ -1,6 +1,7 @@
 pub mod cron_runs;
 pub mod log_lines;
 pub mod log_parse;
+pub mod metrics;
 pub mod server_events;
 pub mod server_states;
 pub mod spans;
@@ -20,6 +21,11 @@ use duckdb::Connection;
 use tokio::task::{JoinHandle, spawn_blocking};
 
 use crate::analytics::log_lines::{LogRow, OTLP_SERVER_ID, append_logs, to_log_rows};
+use crate::analytics::metrics::ingest::{MetricSample, SeriesRow};
+use crate::analytics::metrics::series::{Admission, PointRow, SeriesCache, SeriesLimits};
+use crate::analytics::metrics::store::{
+    append_metrics, list_known_series, purge_metrics, roll_up_metrics,
+};
 use crate::analytics::server_events::{
     EventRow, append_events, to_event_row, to_event_rows,
 };
@@ -27,6 +33,7 @@ use crate::analytics::server_states::{
     DiskRow, StateRow, append_disks, append_states, to_disk_rows,
 };
 use crate::analytics::spans::{ExceptionRow, SpanRow, append_spans};
+use crate::config::Config;
 use crate::error::{Error, ErrorName, Result};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
@@ -46,6 +53,7 @@ pub struct Analytics {
     conn: Arc<Mutex<Connection>>,
     reader: Arc<Mutex<Connection>>,
     pending: Arc<Mutex<Pending>>,
+    metric_series: Arc<Mutex<SeriesCache>>,
     last_backup: Arc<Mutex<Option<Backup>>>,
 }
 
@@ -70,6 +78,8 @@ struct Pending {
     logs: Vec<LogRow>,
     spans: Vec<SpanRow>,
     exceptions: Vec<ExceptionRow>,
+    metric_series: Vec<SeriesRow>,
+    metric_points: Vec<PointRow>,
     shares: HashMap<String, ServerShare>,
 }
 
@@ -82,6 +92,7 @@ impl Analytics {
             conn: Arc::new(Mutex::new(conn)),
             reader: Arc::new(Mutex::new(reader)),
             pending: Arc::default(),
+            metric_series: Arc::default(),
             last_backup: Arc::default(),
         })
     }
@@ -227,6 +238,32 @@ impl Analytics {
         Ok(())
     }
 
+    pub async fn accept_metrics(
+        &self,
+        samples: Vec<MetricSample>,
+        limits: SeriesLimits,
+    ) -> Result<Admission> {
+        if lock(&self.pending).metric_points.len() >= MAX_PENDING_ROWS {
+            return Err(Error::new(
+                ErrorName::RateLimitExceeded,
+                "Too many metric points at once. Retry in a few seconds",
+            ));
+        }
+
+        let now = Utc::now().timestamp_millis();
+        if !lock(&self.metric_series).is_loaded() {
+            let known = self.read(move |conn| list_known_series(conn, now)).await?;
+            lock(&self.metric_series).load(known);
+        }
+
+        let mut admission = lock(&self.metric_series).admit(samples, limits, now);
+        let mut pending = lock(&self.pending);
+        pending.metric_series.append(&mut admission.series);
+        pending.metric_points.append(&mut admission.points);
+
+        Ok(admission)
+    }
+
     pub async fn flush(&self) -> Result<()> {
         let pending = std::mem::take(&mut *lock(&self.pending));
         if pending.states.is_empty()
@@ -234,6 +271,8 @@ impl Analytics {
             && pending.logs.is_empty()
             && pending.spans.is_empty()
             && pending.exceptions.is_empty()
+            && pending.metric_series.is_empty()
+            && pending.metric_points.is_empty()
         {
             return Ok(());
         }
@@ -242,13 +281,22 @@ impl Analytics {
             append_disks(conn, &pending.disks)?;
             append_events(conn, &pending.events)?;
             append_logs(conn, &pending.logs)?;
-            append_spans(conn, &pending.spans, &pending.exceptions)
+            append_spans(conn, &pending.spans, &pending.exceptions)?;
+            append_metrics(conn, &pending.metric_series, &pending.metric_points)
         })
         .await
     }
 
-    pub async fn purge_before(&self, cutoff_ms: i64, log_cutoff_ms: i64) -> Result<()> {
+    pub async fn purge_before(&self, now: i64, retention: Retention) -> Result<()> {
+        let cutoff_ms = now - i64::from(retention.days) * DAY_MS;
+        let log_cutoff_ms = now - i64::from(retention.log_days) * DAY_MS;
+        let point_cutoff = now - i64::from(retention.metric_days) * DAY_MS;
+        let rollup_cutoff = now - i64::from(retention.metric_rollup_days) * DAY_MS;
+        lock(&self.metric_series).forget_before(rollup_cutoff);
+
         self.write(move |conn| {
+            roll_up_metrics(conn, now)?;
+            purge_metrics(conn, point_cutoff, rollup_cutoff)?;
             conn.execute("DELETE FROM server_states WHERE taken_at < ?", [cutoff_ms])?;
             conn.execute("DELETE FROM disk_states WHERE taken_at < ?", [cutoff_ms])?;
             conn.execute("DELETE FROM server_events WHERE occurred_at < ?", [cutoff_ms])?;
@@ -315,16 +363,38 @@ impl Analytics {
                 "UPDATE spans SET server_id = NULL WHERE server_id = ?",
                 [&server_id],
             )?;
+            conn.execute(
+                "UPDATE metric_series SET server_id = NULL WHERE server_id = ?",
+                [&server_id],
+            )?;
             Ok(())
         })
         .await
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Retention {
+    pub days: u32,
+    pub log_days: u32,
+    pub metric_days: u32,
+    pub metric_rollup_days: u32,
+}
+
+impl From<&Config> for Retention {
+    fn from(config: &Config) -> Self {
+        Self {
+            days: config.retention_days,
+            log_days: config.log_retention_days,
+            metric_days: config.metrics.retention_days,
+            metric_rollup_days: config.metrics.rollup_retention_days,
+        }
+    }
+}
+
 pub fn spawn_analytics_tasks(
     analytics: Analytics,
-    retention_days: u32,
-    log_retention_days: u32,
+    retention: Retention,
     backup_dir: Option<PathBuf>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -343,9 +413,7 @@ pub fn spawn_analytics_tasks(
                 }
                 _ = purge.tick() => {
                     let now = Utc::now().timestamp_millis();
-                    let cutoff = now - i64::from(retention_days) * DAY_MS;
-                    let log_cutoff = now - i64::from(log_retention_days) * DAY_MS;
-                    if let Err(error) = analytics.purge_before(cutoff, log_cutoff).await {
+                    if let Err(error) = analytics.purge_before(now, retention).await {
                         tracing::error!(error = %error, "purge analytics");
                     }
                 }

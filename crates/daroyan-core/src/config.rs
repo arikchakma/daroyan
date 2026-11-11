@@ -14,6 +14,7 @@ pub struct Config {
     pub retention_days: u32,
     pub log_retention_days: u32,
     pub otlp_log_budget: u64,
+    pub metrics: MetricSettings,
     pub backup_dir: Option<PathBuf>,
     pub trusted_proxies: Vec<IpNet>,
     pub client_ip_header: String,
@@ -42,6 +43,7 @@ impl Config {
             retention_days: read_number("RETENTION_DAYS", 30)?,
             log_retention_days: read_number("LOG_RETENTION_DAYS", 7)?,
             otlp_log_budget: read_number::<u64>("OTLP_LOG_BUDGET_KB", 1024)? * 1024,
+            metrics: MetricSettings::from_env()?,
             backup_dir: read_optional("DUCKDB_BACKUP_DIR").map(PathBuf::from),
             trusted_proxies: parse_trusted_proxies(
                 &env::var("TRUSTED_PROXIES")
@@ -68,6 +70,47 @@ impl Config {
             telegram_bot_token: read_optional("TELEGRAM_BOT_TOKEN"),
             allow_private_targets: read_optional("ALLOW_PRIVATE_TARGETS")
                 .is_some_and(|value| value == "true"),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MetricSettings {
+    pub retention_days: u32,
+    pub rollup_retention_days: u32,
+    pub series_limit: usize,
+    pub series_per_metric: usize,
+}
+
+impl Default for MetricSettings {
+    fn default() -> Self {
+        Self {
+            retention_days: 7,
+            rollup_retention_days: 30,
+            series_limit: 10_000,
+            series_per_metric: 2_000,
+        }
+    }
+}
+
+impl MetricSettings {
+    fn from_env() -> Result<Self> {
+        let defaults = Self::default();
+
+        Ok(Self {
+            retention_days: read_number(
+                "METRIC_RETENTION_DAYS",
+                defaults.retention_days,
+            )?,
+            rollup_retention_days: read_number(
+                "METRIC_ROLLUP_RETENTION_DAYS",
+                defaults.rollup_retention_days,
+            )?,
+            series_limit: read_number("METRIC_SERIES_LIMIT", defaults.series_limit)?,
+            series_per_metric: read_number(
+                "METRIC_SERIES_PER_METRIC",
+                defaults.series_per_metric,
+            )?,
         })
     }
 }

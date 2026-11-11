@@ -1857,6 +1857,8 @@ export interface components {
             last_used_at?: string | null;
             name: string;
             /** Format: int64 */
+            rejected_metric_points: number;
+            /** Format: int64 */
             throttled_log_records: number;
         };
         IngestTokenBody: {

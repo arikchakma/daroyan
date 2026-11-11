@@ -36,6 +36,7 @@ utoipa.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
+daroyan-migration.workspace = true
 futures-util.workspace = true
 
 [lints]

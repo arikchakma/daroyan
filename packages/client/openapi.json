@@ -5278,7 +5278,8 @@
           "name",
           "hint",
           "created_at",
-          "throttled_log_records"
+          "throttled_log_records",
+          "rejected_metric_points"
         ],
         "properties": {
           "created_at": {
@@ -5300,6 +5301,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "rejected_metric_points": {
+            "type": "integer",
+            "format": "int64"
           },
           "throttled_log_records": {
             "type": "integer",

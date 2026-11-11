@@ -35,6 +35,7 @@ struct IngestTokenView {
     #[serde(with = "daroyan_core::time::option")]
     last_used_at: Option<DateTime<Utc>>,
     throttled_log_records: i64,
+    rejected_metric_points: i64,
 }
 
 impl From<IngestToken> for IngestTokenView {
@@ -46,6 +47,7 @@ impl From<IngestToken> for IngestTokenView {
             created_at: token.created_at,
             last_used_at: token.last_used_at,
             throttled_log_records: token.throttled_log_records,
+            rejected_metric_points: token.rejected_metric_points,
         }
     }
 }
