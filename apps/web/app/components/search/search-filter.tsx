@@ -141,7 +141,7 @@ export function SearchFilter(props: SearchFilterProps) {
     editorProps: {
       attributes: {
         class:
-          'min-w-0 flex-1 scrollbar-none overflow-x-auto py-1 text-body leading-5 whitespace-pre! text-text-primary outline-none [&_.react-renderer]:whitespace-nowrap!',
+          'min-w-0 flex-1 scroll-fade-x scrollbar-none overflow-x-auto py-1 text-body leading-5 whitespace-pre! text-text-primary outline-none [&_.react-renderer]:whitespace-nowrap!',
         role: 'combobox',
         'aria-label': label,
         'aria-autocomplete': 'list',

@@ -450,30 +450,30 @@ html {
   }
 }
 
-@property --scroll-fade-top {
+@property --scroll-fade-start {
   syntax: '<length>';
   inherits: false;
   initial-value: 0px;
 }
 
-@property --scroll-fade-bottom {
+@property --scroll-fade-end {
   syntax: '<length>';
   inherits: false;
   initial-value: 0px;
 }
 
-@keyframes scroll-fade-top-in {
+@keyframes scroll-fade-start-in {
   to {
-    --scroll-fade-top: --spacing(12);
+    --scroll-fade-start: --spacing(12);
   }
 }
 
-@keyframes scroll-fade-bottom-out {
+@keyframes scroll-fade-end-out {
   from {
-    --scroll-fade-bottom: --spacing(12);
+    --scroll-fade-end: --spacing(12);
   }
   to {
-    --scroll-fade-bottom: 0px;
+    --scroll-fade-end: 0px;
   }
 }
 
@@ -481,22 +481,48 @@ html {
   mask-image: linear-gradient(
     to bottom,
     #0000,
-    #00000028 calc(var(--scroll-fade-top) * 0.25),
-    #00000080 calc(var(--scroll-fade-top) * 0.5),
-    #000000d7 calc(var(--scroll-fade-top) * 0.75),
-    #000 var(--scroll-fade-top),
-    #000 calc(100% - var(--scroll-fade-bottom)),
-    #000000d7 calc(100% - var(--scroll-fade-bottom) * 0.75),
-    #00000080 calc(100% - var(--scroll-fade-bottom) * 0.5),
-    #00000028 calc(100% - var(--scroll-fade-bottom) * 0.25),
+    #00000028 calc(var(--scroll-fade-start) * 0.25),
+    #00000080 calc(var(--scroll-fade-start) * 0.5),
+    #000000d7 calc(var(--scroll-fade-start) * 0.75),
+    #000 var(--scroll-fade-start),
+    #000 calc(100% - var(--scroll-fade-end)),
+    #000000d7 calc(100% - var(--scroll-fade-end) * 0.75),
+    #00000080 calc(100% - var(--scroll-fade-end) * 0.5),
+    #00000028 calc(100% - var(--scroll-fade-end) * 0.25),
     #0000
   );
 
   @supports (animation-timeline: scroll()) {
     animation:
-      scroll-fade-top-in linear both,
-      scroll-fade-bottom-out linear both;
-    animation-timeline: scroll(self), scroll(self);
+      scroll-fade-start-in linear both,
+      scroll-fade-end-out linear both;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 --spacing(12),
+      calc(100% - --spacing(12)) 100%;
+  }
+}
+
+@utility scroll-fade-x {
+  mask-image: linear-gradient(
+    to right,
+    #0000,
+    #00000028 calc(var(--scroll-fade-start) * 0.25),
+    #00000080 calc(var(--scroll-fade-start) * 0.5),
+    #000000d7 calc(var(--scroll-fade-start) * 0.75),
+    #000 var(--scroll-fade-start),
+    #000 calc(100% - var(--scroll-fade-end)),
+    #000000d7 calc(100% - var(--scroll-fade-end) * 0.75),
+    #00000080 calc(100% - var(--scroll-fade-end) * 0.5),
+    #00000028 calc(100% - var(--scroll-fade-end) * 0.25),
+    #0000
+  );
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-start-in linear both,
+      scroll-fade-end-out linear both;
+    animation-timeline: scroll(self x), scroll(self x);
     animation-range:
       0 --spacing(12),
       calc(100% - --spacing(12)) 100%;
