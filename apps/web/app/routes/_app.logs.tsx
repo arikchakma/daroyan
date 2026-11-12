@@ -8,6 +8,7 @@ import { Icon } from '~/components/icons/icon';
 import { LogSheet } from '~/components/logs/log-sheet';
 import { LogVolume } from '~/components/logs/log-volume';
 import { SaveViewDialog } from '~/components/logs/save-view-dialog';
+import { SearchSyntaxPopover } from '~/components/logs/search-syntax-popover';
 import { ViewMenu, VIEWS } from '~/components/logs/view-menu';
 import type { LevelView } from '~/components/logs/view-menu';
 import { ColumnMenu } from '~/components/ui/column-menu';
@@ -30,11 +31,12 @@ import { toast } from '~/lib/toast';
 import { logQueries } from '~/queries/logs';
 import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
-import { readListParam } from '~/utils/filter';
+import { getQuery, readListParam } from '~/utils/filter';
 import { joinNames } from '~/utils/format';
 import { getViewChips, getViewParams, isSameView } from '~/utils/log-views';
 import type { SavedLogView } from '~/utils/log-views';
 import type { SearchFilterField } from '~/utils/filter';
+import { formatTerm } from '~/utils/log-search';
 import { getZoomLabel, OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
 const PAGE_SIZE = 50;
@@ -431,6 +433,7 @@ export default function LogsPage() {
                 }}
               />
             )}
+            <SearchSyntaxPopover />
             <ColumnMenu
               labels={COLUMN_LABELS}
               hidden={hiddenColumns}
@@ -518,6 +521,10 @@ export default function LogsPage() {
         canGoNext={openIndex >= 0 && openIndex < lines.length - 1}
         onNavigate={(step) => setOpenLine(lines[openIndex + step])}
         onClose={() => setOpenLine(undefined)}
+        onFilter={(term) => {
+          setSearch(getQuery([search, formatTerm(term)]));
+          setOpenLine(undefined);
+        }}
       />
     </div>
   );

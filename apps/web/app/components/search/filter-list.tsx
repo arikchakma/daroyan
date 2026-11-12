@@ -2,15 +2,23 @@ import type { Ref } from 'react';
 
 import { DropdownStatus } from '~/components/ui/dropdown-status';
 import { cn } from '~/utils/classname';
-import { getConditionLabel } from '~/utils/filter';
+import {
+  getItemIndicator,
+  getItemLabel,
+  hasSeparatorBefore,
+  isItemChecked,
+} from '~/utils/filter';
 import type {
   EditPart,
   FilterItem,
   SearchFilterField,
   SearchFilterValue,
 } from '~/utils/filter';
+import type { SearchOperator } from '~/utils/log-search';
 
+import { FilterError } from './filter-error';
 import { FilterOption } from './filter-option';
+import { FilterTermsLabel } from './filter-terms-label';
 
 type FilterListProps = {
   ref: Ref<HTMLDivElement>;
@@ -20,6 +28,8 @@ type FilterListProps = {
   field: SearchFilterField | null;
   part: EditPart;
   value: SearchFilterValue;
+  operator: SearchOperator | null;
+  error: string | null;
   text: string;
   isEmpty: boolean;
   onHover: (key: string) => void;
@@ -37,6 +47,8 @@ export function FilterList(props: FilterListProps) {
     field,
     part,
     value,
+    operator,
+    error,
     text,
     isEmpty,
     onHover,
@@ -44,6 +56,8 @@ export function FilterList(props: FilterListProps) {
     onRetry,
     onLeave,
   } = props;
+
+  const hasText = !!error || items.some((item) => item.kind === 'terms');
 
   return (
     <div
@@ -61,7 +75,8 @@ export function FilterList(props: FilterListProps) {
       className={cn(
         'absolute top-full z-50 mt-2 flex w-44 flex-col rounded-lg bg-surface-default p-1 shadow-dropdown ring-1 ring-border-elevated ring-inset',
         field && part === 'values' && 'w-52',
-        field && part === 'condition' && 'w-40'
+        field && part === 'condition' && 'w-40',
+        hasText && 'w-max max-w-3xl min-w-52'
       )}
     >
       {field && part === 'values' && (
@@ -75,42 +90,28 @@ export function FilterList(props: FilterListProps) {
           onRetry={onRetry}
         />
       )}
+      {error && <FilterError message={error} />}
       {items.map((item, index) => {
         const isActive = item.key === activeKey;
-        const isChecked =
-          (item.kind === 'value' && value.values.includes(item.value)) ||
-          (item.kind === 'operator' && value.negate === item.negate);
-        const label =
-          item.kind !== 'field'
-            ? item.label
-            : item.negate
-              ? getConditionLabel({ field: item.field, negate: true })
-              : item.field.label;
-        const isFirstOperator =
-          item.kind === 'operator' &&
-          (items[index - 1]?.kind === 'value' || (index === 0 && isEmpty));
+        const isChecked = isItemChecked({ item, value, operator });
 
         return (
           <div key={item.key} className="flex flex-col">
-            {isFirstOperator && (
+            {hasSeparatorBefore(items, index, isEmpty) && (
               <div className="-mx-1 my-1 h-px shrink-0 bg-border-row" />
             )}
             <FilterOption
               id={`${id}-${index}`}
-              label={label}
-              indicator={
-                item.kind === 'field'
-                  ? 'none'
-                  : item.kind === 'value' && field?.multiple
-                    ? 'checkbox'
-                    : 'check'
-              }
+              label={getItemLabel(item)}
+              indicator={getItemIndicator(item, field)}
               isActive={isActive}
               isChecked={isChecked}
-              isSelected={item.kind === 'field' ? isActive : isChecked}
+              isSelected={item.kind === 'field' || item.kind === 'terms' ? isActive : isChecked}
               onHover={() => onHover(item.key)}
               onSelect={() => onSelect(item)}
-            />
+            >
+              {item.kind === 'terms' ? <FilterTermsLabel terms={item.terms} /> : null}
+            </FilterOption>
           </div>
         );
       })}
