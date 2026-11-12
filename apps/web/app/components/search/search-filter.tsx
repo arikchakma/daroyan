@@ -310,6 +310,7 @@ export function SearchFilter(props: SearchFilterProps) {
       ?.chain()
       .clearFilterSearch()
       .placeFilterCaret(options.key, 'after')
+      .scrollIntoView()
       .focus()
       .run();
   }
@@ -425,6 +426,7 @@ export function SearchFilter(props: SearchFilterProps) {
     editor
       ?.chain()
       .placeFilterCaret(key, step < 0 ? 'before' : 'after')
+      .scrollIntoView()
       .focus()
       .run();
     setIsOpen(true);
@@ -480,7 +482,7 @@ export function SearchFilter(props: SearchFilterProps) {
         // The editor moves the caret itself, so the next key sees where it is.
         if (editing) {
           if (isFilterSearch(node)) {
-            editor.commands.setTextSelection(from + step);
+            editor.chain().setTextSelection(from + step).scrollIntoView().run();
             return true;
           }
 
@@ -504,7 +506,7 @@ export function SearchFilter(props: SearchFilterProps) {
             part: 'values',
           });
         } else if (node) {
-          editor.commands.setTextSelection(from + step);
+          editor.chain().setTextSelection(from + step).scrollIntoView().run();
         }
         return true;
       }
