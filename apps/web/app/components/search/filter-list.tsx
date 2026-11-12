@@ -1,5 +1,6 @@
 import type { Ref } from 'react';
 
+import { DropdownNote } from '~/components/ui/dropdown-note';
 import { DropdownStatus } from '~/components/ui/dropdown-status';
 import { cn } from '~/utils/classname';
 import {
@@ -30,6 +31,7 @@ type FilterListProps = {
   value: SearchFilterValue;
   operator: SearchOperator | null;
   error: string | null;
+  hint: string | null;
   text: string;
   isEmpty: boolean;
   onHover: (key: string) => void;
@@ -49,6 +51,7 @@ export function FilterList(props: FilterListProps) {
     value,
     operator,
     error,
+    hint,
     text,
     isEmpty,
     onHover,
@@ -91,6 +94,7 @@ export function FilterList(props: FilterListProps) {
         />
       )}
       {error && <FilterError message={error} />}
+      {hint && <DropdownNote>{hint}</DropdownNote>}
       {items.map((item, index) => {
         const isActive = item.key === activeKey;
         const isChecked = isItemChecked({ item, value, operator });

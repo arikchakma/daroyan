@@ -6,6 +6,7 @@ import {
   formatTerm,
   getOperators,
   getRegexError,
+  isOpenRegex,
   getTermCondition,
   getTermValue,
   isPlainText,
@@ -114,6 +115,10 @@ function toTermsItem(term: QueryTerm, key: string): FilterItem {
 
 export function getTextError(text: string) {
   return parseQuery(text).map(getRegexError).find(Boolean) ?? null;
+}
+
+export function hasOpenRegex(text: string) {
+  return parseQuery(text).some(isOpenRegex);
 }
 
 export function getTextItems(text: string): FilterItem[] {

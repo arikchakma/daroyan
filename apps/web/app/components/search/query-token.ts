@@ -92,7 +92,7 @@ export const QueryToken = Node.create({
           const nodes = terms.map((term) => this.type.create({ key: createKey(), term }));
           tr.replaceWith(range.from, range.to, nodes);
 
-          tr.setSelection(TextSelection.create(tr.doc, range.from + nodes.length));
+          tr.setSelection(TextSelection.create(tr.doc, range.from + nodes.length)).scrollIntoView();
           return true;
         },
 
@@ -118,7 +118,7 @@ export const QueryToken = Node.create({
 
           const value = text ?? formatTerm(token.attrs.term);
           tr.replaceWith(token.pos, token.pos + token.size, tr.doc.type.schema.text(value));
-          tr.setSelection(TextSelection.create(tr.doc, token.pos + value.length));
+          tr.setSelection(TextSelection.create(tr.doc, token.pos + value.length)).scrollIntoView();
           return true;
         },
 
@@ -135,7 +135,7 @@ export const QueryToken = Node.create({
           );
           tr.insert(tr.doc.content.size, nodes);
 
-          markAsSync(tr);
+          markAsSync(tr).scrollIntoView();
           return true;
         },
     };

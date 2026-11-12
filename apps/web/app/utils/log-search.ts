@@ -265,6 +265,12 @@ export function isPlainText(text: string, terms: QueryTerm[]) {
   );
 }
 
+export function isOpenRegex(term: QueryTerm) {
+  const [value = ''] = term.values;
+
+  return term.kind === 'text' && /^\/.*[()[\]{}|*+?^$\\]/.test(value);
+}
+
 export function getRegexError(term: QueryTerm) {
   if (term.kind !== 'regex') {
     return null;

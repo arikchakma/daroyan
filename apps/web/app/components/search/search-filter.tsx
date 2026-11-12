@@ -11,6 +11,7 @@ import {
   getFilterItems,
   getQueryOperatorItems,
   getTextError,
+  hasOpenRegex,
   isFilterSearch,
   isFilterToken,
   readCaret,
@@ -63,6 +64,7 @@ export function SearchFilter(props: SearchFilterProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<number | undefined>(undefined);
+  const sentQueryRef = useRef<string | null>(null);
   const listId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [editing, setEditing] = useState<FilterEditing | null>(null);
@@ -87,7 +89,12 @@ export function SearchFilter(props: SearchFilterProps) {
     queryTokens.find((token) => token.key === editing?.key) ?? null;
   const operator = queryToken ? getOperator(queryToken.term) : null;
   const text = getListText();
-  const error = !editing && !isPicking ? getTextError(text) : null;
+  const isTextList = !editing && !isPicking;
+  const error = isTextList ? getTextError(text) : null;
+  const hint =
+    isTextList && hasOpenRegex(text)
+      ? 'Searching waits until the regex ends with /'
+      : null;
   const items = queryToken
     ? getQueryOperatorItems(queryToken.term)
     : getFilterItems({
@@ -101,7 +108,8 @@ export function SearchFilter(props: SearchFilterProps) {
           !((field?.isLoading || field?.isFailed) && item.kind === 'value')
       );
   const isEmpty = !!field && part === 'values' && items[0]?.kind !== 'value';
-  const isListVisible = isOpen && (items.length > 0 || isEmpty || !!error);
+  const isListVisible =
+    isOpen && (items.length > 0 || isEmpty || !!error || !!hint);
 
   // Typing in the field list highlights a search option when there is one, or nothing. Elsewhere the highlight moves to the first item, but a value that was just picked keeps it.
   const mode = editing ? `${editing.key}:${part}` : 'fields';
@@ -133,7 +141,7 @@ export function SearchFilter(props: SearchFilterProps) {
     editorProps: {
       attributes: {
         class:
-          'min-w-0 flex-1 overflow-hidden py-1 text-body leading-5 whitespace-pre text-text-primary outline-none',
+          'min-w-0 flex-1 scrollbar-none overflow-x-auto py-1 text-body leading-5 whitespace-pre! text-text-primary outline-none [&_.react-renderer]:whitespace-nowrap!',
         role: 'combobox',
         'aria-label': label,
         'aria-autocomplete': 'list',
@@ -191,7 +199,10 @@ export function SearchFilter(props: SearchFilterProps) {
         onFilterChange(changes);
       }
 
-      if (after.query !== before.query && !getTextError(after.query)) {
+      const isQueryReady =
+        !getTextError(after.query) && !hasOpenRegex(after.query);
+      if (after.query !== before.query && isQueryReady) {
+        sentQueryRef.current = after.query;
         onQueryChange(after.query);
       }
       if (transaction.before.textContent !== current.state.doc.textContent) {
@@ -222,8 +233,14 @@ export function SearchFilter(props: SearchFilterProps) {
     editor?.commands.syncFilterTokens(JSON.parse(filtersKey));
   }, [editor, filtersKey]);
 
+  // The bar sends its query up and gets it back a render later, while typing may have moved on. Only a query from outside the bar rebuilds the pills.
   useEffect(() => {
-    editor?.commands.setFilterQuery(query);
+    if (!editor || query === sentQueryRef.current) {
+      return;
+    }
+
+    sentQueryRef.current = query;
+    editor.commands.setFilterQuery(query);
   }, [editor, query]);
 
   useEffect(() => {
@@ -325,6 +342,7 @@ export function SearchFilter(props: SearchFilterProps) {
   function choose(item: FilterItem) {
     if (item.kind === 'terms') {
       editor?.chain().insertQueryTokens(item.terms, caret).focus().run();
+      requestAnimationFrame(() => editor?.commands.scrollIntoView());
       setIsOpen(false);
       return;
     }
@@ -624,6 +642,7 @@ export function SearchFilter(props: SearchFilterProps) {
             value={value}
             operator={operator}
             error={error}
+            hint={hint}
             text={text}
             isEmpty={isEmpty}
             onHover={setActiveKey}
