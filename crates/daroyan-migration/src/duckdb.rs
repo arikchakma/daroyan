@@ -78,12 +78,12 @@ fn upgrade_storage(path: &Path) -> anyhow::Result<()> {
     let conn = open(&packed)?;
     run_migrations(&conn, &MIGRATIONS)?;
     let source = path.to_string_lossy().replace('\'', "''");
-    conn.execute_batch(&format!("ATTACH '{source}' AS legacy (READ_ONLY)"))?;
+    conn.execute_batch(&format!("ATTACH '{source}' AS upgrade_source (READ_ONLY)"))?;
     for table in list_legacy_tables(&conn)? {
         let rows = conn.execute(&copy_sql(&table), [])?;
         tracing::info!(table, rows, "copied a table");
     }
-    conn.execute_batch("DETACH legacy; CHECKPOINT")?;
+    conn.execute_batch("DETACH upgrade_source; CHECKPOINT")?;
     conn.close().map_err(|(_, error)| error)?;
 
     let wal = suffixed(path, ".wal");
@@ -104,7 +104,7 @@ fn upgrade_storage(path: &Path) -> anyhow::Result<()> {
 fn list_legacy_tables(conn: &Connection) -> duckdb::Result<Vec<String>> {
     let mut statement = conn.prepare(
         "SELECT table_name FROM duckdb_tables() \
-         WHERE database_name = 'legacy' AND table_name <> '_migrations' ORDER BY table_name",
+         WHERE database_name = 'upgrade_source' AND table_name <> '_migrations' ORDER BY table_name",
     )?;
 
     statement.query_map([], |row| row.get(0))?.collect()
@@ -113,11 +113,11 @@ fn list_legacy_tables(conn: &Connection) -> duckdb::Result<Vec<String>> {
 fn copy_sql(table: &str) -> String {
     if table == "log_lines" {
         return format!(
-            "INSERT INTO log_lines BY NAME SELECT * REPLACE ({KEPT_RAW} AS raw) FROM legacy.log_lines"
+            "INSERT INTO log_lines BY NAME SELECT * REPLACE ({KEPT_RAW} AS raw) FROM upgrade_source.log_lines"
         );
     }
 
-    format!("INSERT INTO \"{table}\" BY NAME SELECT * FROM legacy.\"{table}\"")
+    format!("INSERT INTO \"{table}\" BY NAME SELECT * FROM upgrade_source.\"{table}\"")
 }
 
 fn suffixed(path: &Path, suffix: &str) -> PathBuf {
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn upgrades_a_legacy_file_once_and_keeps_its_rows() {
         let dir = scratch("legacy");
-        let path = dir.join("daroyan.duckdb");
+        let path = dir.join("legacy.duckdb");
         let legacy = Connection::open(&path).unwrap();
         assert!(is_legacy(&legacy).unwrap());
         run_migrations(&legacy, &MIGRATIONS[..LEGACY_MIGRATIONS - 1]).unwrap();
