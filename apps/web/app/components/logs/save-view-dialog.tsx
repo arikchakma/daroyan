@@ -68,8 +68,8 @@ export function SaveViewDialog(props: SaveViewDialogProps) {
               <div className="flex flex-col gap-1.5">
                 <span className="text-body font-medium">Saves</span>
                 <div className="flex flex-wrap gap-1">
-                  {chips.map((chip) => (
-                    <FilterChip key={chip.condition} condition={chip.condition} value={chip.value} />
+                  {chips.map((chip, index) => (
+                    <FilterChip key={index} condition={chip.condition} value={chip.value} />
                   ))}
                 </div>
               </div>

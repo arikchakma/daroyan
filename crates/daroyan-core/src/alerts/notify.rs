@@ -17,6 +17,7 @@ const SLACK_MAX_TEXT: usize = 3000;
 const SLACK_MAX_FIELD: usize = 2000;
 const SLACK_MAX_FIELDS: usize = 10;
 const SLACK_MAX_BUTTON: usize = 75;
+const SLACK_RESOLVED_REACTION: &str = "white_check_mark";
 const DISCORD_MAX_TITLE: usize = 256;
 const DISCORD_MAX_DESCRIPTION: usize = 4096;
 const DISCORD_MAX_FIELD: usize = 1024;
@@ -381,6 +382,25 @@ pub async fn update_parent(
     Ok(Some(body))
 }
 
+pub async fn add_resolved_reaction(
+    config: &IntegrationConfig,
+    parent: &ChatMessage,
+) -> Result<(), String> {
+    let IntegrationConfig::Slack { api_url, bot_token, .. } = config else {
+        return Ok(());
+    };
+
+    let request = CLIENT
+        .post(format!("{}/api/reactions.add", api_url.trim_end_matches('/')))
+        .bearer_auth(bot_token)
+        .json(&json!({
+            "channel": parent.channel_id,
+            "timestamp": parent.message_id,
+            "name": SLACK_RESOLVED_REACTION,
+        }));
+    execute(request).await.map(|_| ())
+}
+
 async fn execute(request: reqwest::RequestBuilder) -> Result<Option<Value>, String> {
     let request = request.build().map_err(|error| describe_error(&error))?;
     if let Some(ip) = request
@@ -463,24 +483,21 @@ fn build_slack_message(
 
 fn mark_resolved(original: &Value, notice: &Notice) -> Value {
     let mut body = original.clone();
-    let title = format!("*{}{}*", notice.tone.emoji(), escape_slack(&notice.title));
-    body["text"] = json!(build_slack_text(notice));
-    body["blocks"] = json!([slack_section(title)]);
+    let summary = notice.summary().render_within(escape_slack, "*", "*", SLACK_MAX_TEXT);
+    let resolved = json!({
+        "type": "context",
+        "elements": [{ "type": "mrkdwn", "text": format!("{}{summary}", notice.tone.emoji()) }],
+    });
 
-    if let Some(attachment) = body["attachments"].get_mut(0) {
-        attachment["color"] = json!(format!("#{:06X}", notice.tone.color()));
-        let summary =
-            notice.summary().render_within(escape_slack, "*", "*", SLACK_MAX_TEXT);
-
-        if let Some(blocks) = attachment["blocks"].as_array_mut() {
-            blocks
-                .retain(|block| block["type"] != "context" && block["type"] != "actions");
-            blocks.extend(slack_actions(notice));
-            blocks.push(json!({
-                "type": "context",
-                "elements": [{ "type": "mrkdwn", "text": summary }],
-            }));
-        }
+    let blocks = if body["attachments"].get(0).is_some() {
+        &mut body["attachments"][0]["blocks"]
+    } else {
+        &mut body["blocks"]
+    };
+    if let Some(blocks) = blocks.as_array_mut() {
+        blocks.retain(|block| block["type"] != "context");
+        blocks.truncate(SLACK_MAX_BLOCKS - 2);
+        blocks.push(resolved);
     }
 
     body
@@ -1066,25 +1083,23 @@ mod tests {
         };
 
         let updated = mark_resolved(&original, &resolved);
-        assert_eq!(
-            updated["text"],
-            "✅ Resolved: InboxJot error spike: Back to normal after 51 min."
-        );
-        assert_eq!(
-            updated["blocks"][0]["text"]["text"],
-            "*✅ Resolved: InboxJot error spike*"
-        );
+        assert_eq!(updated["text"], original["text"]);
+        assert_eq!(updated["blocks"], original["blocks"]);
 
         let attachment = &updated["attachments"][0];
-        assert_eq!(attachment["color"], "#1F8A4C");
+        assert_eq!(attachment["color"], "#D93025");
 
         let blocks = attachment["blocks"].as_array().unwrap();
-        assert_eq!(blocks[0], original["attachments"][0]["blocks"][0]);
+        let before = original["attachments"][0]["blocks"].as_array().unwrap();
+        assert_eq!(blocks[..blocks.len() - 1], before[..before.len() - 1]);
         assert_eq!(blocks.iter().filter(|block| block["type"] == "context").count(), 1);
         assert_eq!(
             blocks.last().unwrap()["elements"][0]["text"],
-            "Back to normal after *51 min*."
+            "✅ Back to normal after *51 min*."
         );
+
+        let twice = mark_resolved(&updated, &resolved);
+        assert_eq!(twice, updated);
     }
 
     #[test]

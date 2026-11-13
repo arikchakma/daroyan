@@ -5,14 +5,16 @@ import { LogDetails } from '~/components/logs/log-details';
 import { useFullLogLine } from '~/hooks/use-full-log-line';
 import { describeRequest, LevelBadge } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
+import type { QueryTerm } from '~/utils/log-search';
 import { getLogOrigin } from '~/utils/logs';
 
 type LogBodyProps = {
   line: LogRow;
+  onFilter?: (term: QueryTerm) => void;
 };
 
 export function LogBody(props: LogBodyProps) {
-  const { line: row } = props;
+  const { line: row, onFilter } = props;
 
   const { context, isLoading, full: line } = useFullLogLine(row);
   const request = describeRequest(line);
@@ -44,7 +46,7 @@ export function LogBody(props: LogBodyProps) {
         </LogSection>
       </div>
 
-      <LogDetails line={line} />
+      <LogDetails line={line} onFilter={onFilter} />
     </div>
   );
 }

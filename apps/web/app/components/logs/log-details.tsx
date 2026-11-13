@@ -1,15 +1,18 @@
 import { LogAttributeList } from '~/components/logs/log-attribute-list';
 import { LogDetailRow } from '~/components/logs/log-detail-row';
+import { LogFilterActions } from '~/components/logs/log-filter-actions';
 import { describeRequest, formatDuration, HTTP_KEYS } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
 import { formatLogStamp } from '~/utils/format';
+import type { QueryTerm } from '~/utils/log-search';
 
 type LogDetailsProps = {
   line: LogRow;
+  onFilter?: (term: QueryTerm) => void;
 };
 
 export function LogDetails(props: LogDetailsProps) {
-  const { line } = props;
+  const { line, onFilter } = props;
 
   const values = (line.attributes ?? {}) as Record<string, unknown>;
   const request = describeRequest(line);
@@ -32,7 +35,12 @@ export function LogDetails(props: LogDetailsProps) {
           )}
           {duration && <LogDetailRow label="Duration">{duration}</LogDetailRow>}
           <LogDetailRow label="Server">{line.serverName}</LogDetailRow>
-          <LogDetailRow label="Source">{line.service}</LogDetailRow>
+          <LogDetailRow
+            label="Source"
+            actions={onFilter && <LogFilterActions name="service" value={line.service} onFilter={onFilter} />}
+          >
+            {line.service}
+          </LogDetailRow>
           <LogDetailRow label="Stream">{line.stream}</LogDetailRow>
           {line.trace_id && (
             <LogDetailRow label="Trace" mono>
@@ -41,8 +49,8 @@ export function LogDetails(props: LogDetailsProps) {
           )}
         </dl>
       </div>
-      {attributes.length > 0 && <LogAttributeList title="Attributes" entries={attributes} />}
-      {resource.length > 0 && <LogAttributeList title="Resource" entries={resource} />}
+      {attributes.length > 0 && <LogAttributeList title="Attributes" entries={attributes} onFilter={onFilter} />}
+      {resource.length > 0 && <LogAttributeList title="Resource" entries={resource} onFilter={onFilter} />}
     </aside>
   );
 }

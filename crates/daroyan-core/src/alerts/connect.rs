@@ -19,7 +19,7 @@ use crate::id::{Prefix, new_id};
 const STATE_TTL: Duration = Duration::from_secs(600);
 const STATE_LENGTH: usize = 24;
 const TIMEOUT: Duration = Duration::from_secs(15);
-const SLACK_SCOPES: &str = "chat:write,chat:write.public,channels:read";
+const SLACK_SCOPES: &str = "chat:write,chat:write.public,channels:read,reactions:write";
 const SLACK_CHANNEL_LIMIT: &str = "500";
 const DISCORD_SCOPES: &str = "webhook.incoming";
 

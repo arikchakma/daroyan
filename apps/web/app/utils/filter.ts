@@ -1,7 +1,22 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { EditorState } from '@tiptap/pm/state';
 
+import {
+  ANY_KEY,
+  formatTerm,
+  getOperators,
+  getRegexError,
+  isOpenRegex,
+  getTermCondition,
+  getTermValue,
+  isPlainText,
+  OPERATOR_LABELS,
+  parseQuery,
+} from '~/utils/log-search';
+import type { QueryTerm, SearchOperator } from '~/utils/log-search';
+
 export const FILTER_TOKEN_NODE = 'filterToken';
+export const QUERY_TOKEN_NODE = 'queryToken';
 export const FILTER_SEARCH_MARK = 'filterSearch';
 
 export type SearchFilterField = {
@@ -43,10 +58,22 @@ export type FilterTokenAttrs = SearchFilterValue & {
   key: string;
 };
 
+export type QueryTokenAttrs = {
+  key: string;
+  term: QueryTerm;
+};
+
 export type FilterItem =
   | { kind: 'field'; key: string; field: SearchFilterField; negate: boolean }
   | { kind: 'value'; key: string; value: string; label: string }
-  | { kind: 'operator'; key: string; negate: boolean; label: string };
+  | { kind: 'operator'; key: string; negate: boolean; label: string }
+  | { kind: 'terms'; key: string; terms: QueryTerm[]; label: string }
+  | {
+      kind: 'query-operator';
+      key: string;
+      operator: SearchOperator;
+      label: string;
+    };
 
 type GetConditionLabelOptions = {
   field: SearchFilterField;
@@ -78,6 +105,117 @@ function includesText(label: string, text: string) {
   return label.toLowerCase().includes(text.trim().toLowerCase());
 }
 
+function getTermLabel(term: QueryTerm) {
+  return `${getTermCondition(term)} ${getTermValue(term)}`.trim();
+}
+
+function toTermsItem(term: QueryTerm, key: string): FilterItem {
+  return { kind: 'terms', key, terms: [term], label: getTermLabel(term) };
+}
+
+export function getTextError(text: string) {
+  return parseQuery(text).map(getRegexError).find(Boolean) ?? null;
+}
+
+export function hasOpenRegex(text: string) {
+  return parseQuery(text).some(isOpenRegex);
+}
+
+export function getTextItems(text: string): FilterItem[] {
+  const terms = parseQuery(text);
+  if (!terms.length || getTextError(text)) {
+    return [];
+  }
+
+  if (isPlainText(text, terms)) {
+    const value = terms.map((term) => term.values[0]).join(' ');
+    const term: QueryTerm = { key: null, kind: 'text', values: [value], negate: false };
+    return [
+      toTermsItem(term, 'terms:contains'),
+      toTermsItem({ ...term, negate: true }, 'terms:not-contains'),
+      toTermsItem({ ...term, key: ANY_KEY }, 'terms:any'),
+    ];
+  }
+
+  const raw = text.replace(/\s+/g, ' ').trim();
+  return [
+    {
+      kind: 'terms',
+      key: 'terms:parsed',
+      terms,
+      label: terms.length === 1 ? getTermLabel(terms[0]!) : `Add ${terms.length} filters`,
+    },
+    toTermsItem({ key: null, kind: 'text', values: [raw], negate: false }, 'terms:text'),
+  ];
+}
+
+export function getQueryOperatorItems(term: QueryTerm): FilterItem[] {
+  return getOperators(term).map((operator) => ({
+    kind: 'query-operator',
+    key: `query-operator:${operator}`,
+    operator,
+    label: OPERATOR_LABELS[operator],
+  }));
+}
+
+export function getItemLabel(item: FilterItem) {
+  if (item.kind !== 'field') {
+    return item.label;
+  }
+  if (item.negate) {
+    return getConditionLabel({ field: item.field, negate: true });
+  }
+
+  return item.field.label;
+}
+
+export function getItemIndicator(item: FilterItem, field: SearchFilterField | null) {
+  if (item.kind === 'field' || item.kind === 'terms') {
+    return 'none';
+  }
+  if (item.kind === 'value' && field?.multiple) {
+    return 'checkbox';
+  }
+
+  return 'check';
+}
+
+type IsItemCheckedOptions = {
+  item: FilterItem;
+  value: SearchFilterValue;
+  operator: SearchOperator | null;
+};
+
+export function isItemChecked(options: IsItemCheckedOptions) {
+  const { item, value, operator } = options;
+
+  if (item.kind === 'value') {
+    return value.values.includes(item.value);
+  }
+  if (item.kind === 'operator') {
+    return value.negate === item.negate;
+  }
+  if (item.kind === 'query-operator') {
+    return item.operator === operator;
+  }
+
+  return false;
+}
+
+export function hasSeparatorBefore(items: FilterItem[], index: number, isEmpty: boolean) {
+  const item = items[index]!;
+  const previous = items[index - 1];
+
+  if (item.kind === 'operator') {
+    return previous?.kind === 'value' || (index === 0 && isEmpty);
+  }
+  if (item.kind === 'field') {
+    return previous?.kind === 'terms';
+  }
+
+  return false;
+}
+
 type GetFilterItemsOptions = {
   fields: SearchFilterField[];
   usedKeys: string[];
@@ -90,11 +228,11 @@ export function getFilterItems(options: GetFilterItemsOptions): FilterItem[] {
   const { fields, usedKeys, field, part, text } = options;
 
   if (!field) {
-    return fields
+    const fieldItems = fields
       .filter(
         (item) => !usedKeys.includes(item.key) && includesText(item.label, text)
       )
-      .flatMap((item) => [
+      .flatMap((item): FilterItem[] => [
         { kind: 'field', key: `field:${item.key}`, field: item, negate: false },
         ...(item.negatable && text.trim()
           ? [
@@ -107,6 +245,7 @@ export function getFilterItems(options: GetFilterItemsOptions): FilterItem[] {
             ]
           : []),
       ]);
+    return [...getTextItems(text), ...fieldItems];
   }
   const operators: FilterItem[] = field.negatable
     ? [
@@ -134,6 +273,7 @@ export function getFilterItems(options: GetFilterItemsOptions): FilterItem[] {
 
 export type FilterDoc = {
   tokens: FilterTokenAttrs[];
+  queryTokens: QueryTokenAttrs[];
   query: string;
   search: string;
 };
@@ -149,6 +289,14 @@ export type FilterCaret = FilterRange & {
 
 export function isFilterToken(node: ProseMirrorNode | null | undefined) {
   return node?.type.name === FILTER_TOKEN_NODE;
+}
+
+export function isQueryToken(node: ProseMirrorNode | null | undefined) {
+  return node?.type.name === QUERY_TOKEN_NODE;
+}
+
+export function isToken(node: ProseMirrorNode | null | undefined) {
+  return isFilterToken(node) || isQueryToken(node);
 }
 
 export function isFilterSearch(node: ProseMirrorNode | null | undefined) {
@@ -167,6 +315,7 @@ export function getQuery(segments: string[]) {
 
 export function readDoc(doc: ProseMirrorNode): FilterDoc {
   const tokens: FilterTokenAttrs[] = [];
+  const queryTokens: QueryTokenAttrs[] = [];
   const segments = [''];
   let search = '';
 
@@ -174,6 +323,12 @@ export function readDoc(doc: ProseMirrorNode): FilterDoc {
     if (isFilterToken(node)) {
       tokens.push(node.attrs as FilterTokenAttrs);
       segments.push('');
+      return;
+    }
+    if (isQueryToken(node)) {
+      const attrs = node.attrs as QueryTokenAttrs;
+      queryTokens.push(attrs);
+      segments.push(formatTerm(attrs.term), '');
       return;
     }
     if (isFilterSearch(node)) {
@@ -185,7 +340,7 @@ export function readDoc(doc: ProseMirrorNode): FilterDoc {
     }
   });
 
-  return { tokens, query: getQuery(segments), search };
+  return { tokens, queryTokens, query: getQuery(segments), search };
 }
 
 export function readCaret(state: EditorState): FilterCaret {
@@ -194,7 +349,7 @@ export function readCaret(state: EditorState): FilterCaret {
   let end = state.doc.content.size;
 
   state.doc.forEach((node, pos) => {
-    if (!isFilterToken(node)) {
+    if (!isToken(node)) {
       return;
     }
     if (pos + node.nodeSize <= caret) {

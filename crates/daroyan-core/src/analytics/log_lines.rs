@@ -311,10 +311,45 @@ pub struct LogFilter {
     pub negate: bool,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum SearchField {
+    Message,
+    Any,
+    Key(String),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SearchMatch {
+    Text(String),
+    OneOf(Vec<String>),
+    Regex(String),
+    Above(f64),
+    Below(f64),
+}
+
+#[derive(Debug, PartialEq)]
 pub struct SearchTerm {
-    pub key: Option<String>,
-    pub value: String,
+    pub field: SearchField,
+    pub matches: SearchMatch,
     pub negate: bool,
+}
+
+impl SearchTerm {
+    pub fn message(text: &str, negate: bool) -> Self {
+        Self {
+            field: SearchField::Message,
+            matches: SearchMatch::Text(text.to_string()),
+            negate,
+        }
+    }
+
+    pub fn key(key: &str, text: &str, negate: bool) -> Self {
+        Self {
+            field: SearchField::Key(key.to_string()),
+            matches: SearchMatch::Text(text.to_string()),
+            negate,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -339,6 +374,10 @@ pub struct LogQuery {
 const METHOD_COLUMN: &str = "json_extract_string(attributes, '$.\"http.method\"')";
 const STATUS_CLASS_COLUMN: &str =
     "left(json_extract_string(attributes, '$.\"http.status\"'), 1)";
+const MESSAGE_COLUMN: &str = "CASE WHEN message = '' THEN concat_ws(' ', \
+     json_extract_string(attributes, '$.\"http.method\"'), \
+     json_extract_string(attributes, '$.\"url.path\"'), \
+     json_extract_string(attributes, '$.\"http.status\"')) ELSE message END";
 
 fn push_condition(sql: &mut String, condition: &str, negate: bool) {
     let not = if negate { "NOT " } else { "" };
@@ -359,40 +398,72 @@ fn push_filter(
     values.extend(filter.values.into_iter().map(SqlValue::Text));
 }
 
+fn push_column(values: &mut Vec<SqlValue>, field: SearchField) -> String {
+    match field {
+        SearchField::Message => format!("({MESSAGE_COLUMN})"),
+        SearchField::Any => {
+            format!(
+                "(({MESSAGE_COLUMN}) || ' ' || coalesce(CAST(attributes AS VARCHAR), ''))"
+            )
+        }
+        SearchField::Key(key) => match key.as_str() {
+            "service" | "source" => "service".to_string(),
+            "trace_id" | "trace" => "trace_id".to_string(),
+            _ => {
+                let path = format!("$.\"{}\"", key.replace('"', ""));
+                values.extend([SqlValue::Text(path.clone()), SqlValue::Text(path)]);
+                "coalesce(json_extract_string(attributes, ?), json_extract_string(resource, ?))"
+                    .to_string()
+            }
+        },
+    }
+}
+
+fn to_like_pattern(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+        .replace('*', "%")
+}
+
 fn push_term(sql: &mut String, values: &mut Vec<SqlValue>, term: SearchTerm) {
-    let Some(key) = term.key else {
-        push_condition(
-            sql,
-            "contains(lower(message), lower(?)) OR contains(lower(CAST(attributes AS VARCHAR)), lower(?))",
-            term.negate,
-        );
-        values.push(SqlValue::Text(term.value.clone()));
-        values.push(SqlValue::Text(term.value));
-        return;
-    };
-    let column = match key.as_str() {
-        "service" | "source" => "service".to_string(),
-        "trace_id" | "trace" => "trace_id".to_string(),
-        _ => {
-            let path = format!("$.\"{}\"", key.replace('"', ""));
-            values.extend([SqlValue::Text(path.clone()), SqlValue::Text(path)]);
-            "coalesce(json_extract_string(attributes, ?), json_extract_string(resource, ?))"
-                .to_string()
+    let is_free_text = matches!(term.field, SearchField::Message | SearchField::Any);
+    let column = push_column(values, term.field);
+
+    let condition = match term.matches {
+        SearchMatch::Text(text) if is_free_text => {
+            values.push(SqlValue::Text(text));
+            format!("contains(lower({column}), lower(?))")
+        }
+        SearchMatch::Text(text) if text.contains('*') => {
+            values.push(SqlValue::Text(to_like_pattern(&text)));
+            format!("{column} ILIKE ? ESCAPE '\\'")
+        }
+        SearchMatch::Text(text) => {
+            values.push(SqlValue::Text(text));
+            format!("lower({column}) = lower(?)")
+        }
+        SearchMatch::OneOf(items) => {
+            let marks = vec!["lower(?)"; items.len()].join(", ");
+            values.extend(items.into_iter().map(SqlValue::Text));
+            format!("lower({column}) IN ({marks})")
+        }
+        SearchMatch::Regex(pattern) => {
+            values.push(SqlValue::Text(pattern));
+            format!("regexp_matches({column}, ?, 'i')")
+        }
+        SearchMatch::Above(number) => {
+            values.push(SqlValue::Double(number));
+            format!("TRY_CAST({column} AS DOUBLE) > ?")
+        }
+        SearchMatch::Below(number) => {
+            values.push(SqlValue::Double(number));
+            format!("TRY_CAST({column} AS DOUBLE) < ?")
         }
     };
-    if term.value.contains('*') {
-        let pattern = term
-            .value
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
-            .replace('*', "%");
-        push_condition(sql, &format!("{column} LIKE ? ESCAPE '\\'"), term.negate);
-        values.push(SqlValue::Text(pattern));
-    } else {
-        push_condition(sql, &format!("{column} = ?"), term.negate);
-        values.push(SqlValue::Text(term.value));
-    }
+
+    push_condition(sql, &condition, term.negate);
 }
 
 fn push_search(sql: &mut String, values: &mut Vec<SqlValue>, search: LogSearch) {
@@ -760,8 +831,8 @@ mod tests {
     };
 
     use super::{
-        LogBucket, LogFilter, LogQuery, LogSearch, SearchTerm, count_log_buckets,
-        list_logs, read_level, to_log_rows,
+        LogBucket, LogFilter, LogQuery, LogSearch, SearchField, SearchMatch, SearchTerm,
+        count_log_buckets, list_logs, read_level, to_log_rows,
     };
     use crate::analytics::Analytics;
 
@@ -951,11 +1022,7 @@ mod tests {
             LogQuery {
                 search: LogSearch {
                     until: 10,
-                    terms: vec![SearchTerm {
-                        key: None,
-                        value: "sendemail".into(),
-                        negate: false,
-                    }],
+                    terms: vec![SearchTerm::message("sendemail", false)],
                     services: LogFilter { values: vec!["api".into()], negate: false },
                     ..Default::default()
                 },
@@ -973,12 +1040,8 @@ mod tests {
                 search: LogSearch {
                     until: 10,
                     terms: vec![
-                        SearchTerm { key: None, value: "/health".into(), negate: true },
-                        SearchTerm {
-                            key: Some("service".into()),
-                            value: "work*".into(),
-                            negate: true,
-                        },
+                        SearchTerm::message("/health", true),
+                        SearchTerm::key("service", "work*", true),
                     ],
                     ..Default::default()
                 },
@@ -989,6 +1052,59 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(excluded.iter().map(|item| item.at).collect::<Vec<_>>(), [4, 2]);
+
+        let find = |term: SearchTerm| {
+            let analytics = analytics.clone();
+            async move {
+                let search =
+                    LogSearch { until: 10, terms: vec![term], ..Default::default() };
+                list_logs(
+                    &analytics,
+                    LogQuery { search, limit: 50, ..Default::default() },
+                )
+                .await
+                .unwrap()
+                .iter()
+                .map(|item| item.at)
+                .collect::<Vec<_>>()
+            }
+        };
+        let term = |field: SearchField, matches: SearchMatch, negate: bool| SearchTerm {
+            field,
+            matches,
+            negate,
+        };
+        let status = || SearchField::Key("http.status".into());
+        let path = || SearchField::Key("url.path".into());
+
+        assert_eq!(find(SearchTerm::message("get /HEALTH", false)).await, [1]);
+        assert_eq!(
+            find(term(
+                SearchField::Message,
+                SearchMatch::Regex("send.*fail".into()),
+                false
+            ))
+            .await,
+            [2]
+        );
+        assert_eq!(
+            find(term(SearchField::Any, SearchMatch::Text("v1/servers".into()), false))
+                .await,
+            [4]
+        );
+        assert_eq!(find(term(status(), SearchMatch::Above(199.0), false)).await, [4, 1]);
+        assert_eq!(find(term(status(), SearchMatch::Below(200.0), false)).await, [0; 0]);
+        assert_eq!(
+            find(term(
+                SearchField::Key("service".into()),
+                SearchMatch::OneOf(vec!["Worker".into(), "web".into()]),
+                false,
+            ))
+            .await,
+            [3]
+        );
+        assert_eq!(find(SearchTerm::key("url.path", "*", false)).await, [4, 1]);
+        assert_eq!(find(term(path(), SearchMatch::Text("*".into()), true)).await, [3, 2]);
 
         let buckets = count_log_buckets(&analytics, search(10), 2).await.unwrap();
         assert_eq!(

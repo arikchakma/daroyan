@@ -2,8 +2,9 @@ use axum::Json;
 use axum::extract::{Query, State};
 use chrono::Utc;
 use daroyan_core::analytics::log_lines::{
-    LogBucket, LogFilter, LogItem, LogQuery, LogSearch, LogSource, SearchTerm,
-    count_log_buckets, list_log_context, list_log_sources, list_logs,
+    LogBucket, LogFilter, LogItem, LogQuery, LogSearch, LogSource, SearchField,
+    SearchMatch, SearchTerm, count_log_buckets, list_log_context, list_log_sources,
+    list_logs,
 };
 use daroyan_core::error::{Error, ErrorName, Result};
 use daroyan_protocol::log::{
@@ -109,53 +110,167 @@ fn read_key(key: &str) -> String {
     .to_string()
 }
 
-fn read_term(token: String, colon: Option<usize>, negate: bool) -> Option<SearchTerm> {
-    if token.is_empty() {
-        return None;
-    }
-    let split = colon.map(|index| token.split_at(index)).filter(|(key, value)| {
-        let key = key.strip_prefix('@').unwrap_or(key);
-        !key.is_empty()
-            && value.len() > 1
-            && !value.starts_with("://")
-            && key
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    });
-    Some(match split {
-        Some((key, value)) => SearchTerm {
-            key: Some(read_key(key)),
-            value: value[1..].to_string(),
-            negate,
-        },
-        None => SearchTerm { key: None, value: token, negate },
-    })
+struct SearchToken {
+    key: Option<String>,
+    value: String,
+    is_quoted: bool,
+    is_regex: bool,
 }
 
-fn split_search(q: &str) -> Vec<SearchTerm> {
-    let mut terms = Vec::new();
-    let mut chars = q.chars().peekable();
-    loop {
-        while chars.next_if(|c| c.is_whitespace()).is_some() {}
-        if chars.peek().is_none() {
-            return terms;
-        }
-        let negate = chars.next_if_eq(&'-').is_some();
-        let mut token = String::new();
-        let mut colon = None;
-        let mut is_quoted = false;
-        while let Some(c) = chars.next_if(|c| is_quoted || !c.is_whitespace()) {
-            match c {
-                '"' => is_quoted = !is_quoted,
-                ':' if !is_quoted && colon.is_none() => {
-                    colon = Some(token.len());
-                    token.push(c);
-                }
-                _ => token.push(c),
-            }
-        }
-        terms.extend(read_term(token, colon, negate));
+fn is_key_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '@' | '*')
+}
+
+fn read_key_end(chars: &[char], start: usize) -> Option<usize> {
+    let colon = (start..chars.len()).find(|&index| !is_key_char(chars[index]))?;
+    let key: String = chars[start..colon].iter().collect();
+    let key = key.strip_prefix('@').unwrap_or(&key);
+    let is_key = key == "*" || (!key.is_empty() && !key.contains('*'));
+    let value = chars.get(colon + 1..).unwrap_or_default();
+    let has_value = value.first().is_some_and(|c| !c.is_whitespace());
+    let is_url = value.starts_with(&['/', '/']);
+
+    (chars[colon] == ':' && is_key && has_value && !is_url).then_some(colon)
+}
+
+fn read_regex_end(chars: &[char], start: usize) -> Option<usize> {
+    if chars.get(start) != Some(&'/') {
+        return None;
     }
+
+    let mut index = start + 1;
+    while index < chars.len() {
+        match chars[index] {
+            '\\' => index += 2,
+            '/' if chars.get(index + 1).is_none_or(|c| c.is_whitespace()) => {
+                return (index > start + 1).then_some(index);
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+fn read_token(chars: &[char], start: usize) -> (SearchToken, usize) {
+    let colon = read_key_end(chars, start);
+    let key = colon.map(|end| chars[start..end].iter().collect::<String>());
+    let value_start = colon.map_or(start, |end| end + 1);
+
+    if let Some(end) = read_regex_end(chars, value_start) {
+        let value = chars[value_start + 1..end].iter().collect();
+        let token = SearchToken { key, value, is_quoted: false, is_regex: true };
+        return (token, end + 1);
+    }
+
+    let mut value = String::new();
+    let mut is_quoted = false;
+    let mut is_inside_quotes = false;
+    let mut is_inside_list = colon.is_some() && chars.get(value_start) == Some(&'[');
+    let mut index = value_start;
+    while let Some(&c) = chars.get(index) {
+        if c.is_whitespace() && !is_inside_quotes && !is_inside_list {
+            break;
+        }
+        if c == ']' {
+            is_inside_list = false;
+        }
+
+        match c {
+            '"' => {
+                is_quoted = true;
+                is_inside_quotes = !is_inside_quotes;
+            }
+            '\\' if is_inside_quotes
+                && matches!(chars.get(index + 1), Some('"' | '\\')) =>
+            {
+                index += 1;
+                value.push(chars[index]);
+            }
+            _ => value.push(c),
+        }
+        index += 1;
+    }
+
+    (SearchToken { key, value, is_quoted, is_regex: false }, index)
+}
+
+fn read_number(value: &str, sign: char) -> Option<f64> {
+    value.strip_prefix(sign)?.parse().ok()
+}
+
+fn read_match(token: SearchToken) -> Result<SearchMatch> {
+    let SearchToken { key, value, is_quoted, is_regex } = token;
+
+    if is_regex {
+        return regex::Regex::new(&value)
+            .map(|_| SearchMatch::Regex(value.clone()))
+            .map_err(|_| {
+                Error::new(
+                    ErrorName::ValidationError,
+                    format!("/{value}/ is not a valid regex"),
+                )
+            });
+    }
+    if is_quoted || key.is_none() {
+        return Ok(SearchMatch::Text(value));
+    }
+
+    if let Some(list) = value.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+        let items = list
+            .split(',')
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect();
+        return Ok(SearchMatch::OneOf(items));
+    }
+    if let Some(number) = read_number(&value, '>') {
+        return Ok(SearchMatch::Above(number));
+    }
+    if let Some(number) = read_number(&value, '<') {
+        return Ok(SearchMatch::Below(number));
+    }
+
+    Ok(SearchMatch::Text(value))
+}
+
+fn read_term(token: SearchToken, negate: bool) -> Result<Option<SearchTerm>> {
+    if token.value.is_empty() {
+        return Ok(None);
+    }
+
+    let field = match token.key.as_deref() {
+        None => SearchField::Message,
+        Some("*") => SearchField::Any,
+        Some(key) => SearchField::Key(read_key(key)),
+    };
+    let matches = read_match(token)?;
+    if matches == SearchMatch::OneOf(Vec::new()) {
+        return Ok(None);
+    }
+
+    Ok(Some(SearchTerm { field, matches, negate }))
+}
+
+fn split_search(q: &str) -> Result<Vec<SearchTerm>> {
+    let chars: Vec<char> = q.chars().collect();
+    let mut terms = Vec::new();
+    let mut index = 0;
+
+    while index < chars.len() {
+        if chars[index].is_whitespace() {
+            index += 1;
+            continue;
+        }
+
+        let negate = chars[index] == '-';
+        let start = if negate { index + 1 } else { index };
+        let (token, end) = read_token(&chars, start);
+        index = end;
+
+        terms.extend(read_term(token, negate)?);
+    }
+
+    Ok(terms)
 }
 
 fn read_list(value: Option<String>) -> Vec<String> {
@@ -187,7 +302,7 @@ fn read_filter(values: Option<String>, op: Option<String>) -> LogFilter {
         ("status" = Option<String>, Query, description = "HTTP status classes like 4xx, comma separated"),
         ("status_op" = Option<String>, Query, description = "`not` excludes the status classes"),
         ("level" = Option<String>, Query, description = "The lowest level shown: debug, info, warn or error"),
-        ("q" = Option<String>, Query, description = "Words match the message or the attributes. `key:value` matches an attribute, `*` is a wildcard, and a leading `-` excludes. Quote phrases with spaces"),
+        ("q" = Option<String>, Query, description = "Words match the message, and `*:word` matches any field. `key:value` matches an attribute, where `*` is a wildcard and `key:*` means the attribute exists. `key:[a,b]` matches either value, `key:>500` and `key:<100` compare numbers, and `/regex/` or `key:/regex/` match an RE2 regex. A leading `-` excludes. Quote text with spaces. Matching ignores case"),
         ("since" = Option<i64>, Query, description = "Only lines at or after this time in ms"),
         ("until" = Option<i64>, Query, description = "Only lines at or before this time in ms. Keep it the same while paging"),
         ("offset" = Option<u32>, Query),
@@ -264,7 +379,7 @@ fn read_search(query: LogsQuery) -> Result<LogSearch> {
         methods: read_filter(query.method, query.method_op),
         status_classes,
         min_severity: query.level.as_deref().map(read_min_severity).transpose()?,
-        terms: split_search(query.q.as_deref().unwrap_or_default()),
+        terms: split_search(query.q.as_deref().unwrap_or_default())?,
         since: query.since,
         until: query.until.unwrap_or_else(|| Utc::now().timestamp_millis()),
     })
@@ -336,37 +451,75 @@ async fn get_log_context(
 mod tests {
     use daroyan_core::analytics::log_lines::LogBucket;
 
+    use daroyan_core::analytics::log_lines::{SearchField, SearchMatch, SearchTerm};
+
     use super::{fill_buckets, pick_bucket_ms, split_search};
 
-    fn read(q: &str) -> Vec<(Option<String>, String, bool)> {
-        split_search(q)
-            .into_iter()
-            .map(|term| (term.key, term.value, term.negate))
-            .collect()
+    fn term(field: SearchField, matches: SearchMatch, negate: bool) -> SearchTerm {
+        SearchTerm { field, matches, negate }
+    }
+
+    fn key(name: &str) -> SearchField {
+        SearchField::Key(name.to_string())
+    }
+
+    fn text(value: &str) -> SearchMatch {
+        SearchMatch::Text(value.to_string())
     }
 
     #[test]
     fn splits_github_style_search() {
         assert_eq!(
-            read(
+            split_search(
                 r#"payment -path:/v1/health @userId:42 -"GET /v1" status:5* http://x.io"#
-            ),
+            )
+            .unwrap(),
             [
-                (None, "payment".to_string(), false),
-                (Some("url.path".to_string()), "/v1/health".to_string(), true),
-                (Some("userId".to_string()), "42".to_string(), false),
-                (None, "GET /v1".to_string(), true),
-                (Some("http.status".to_string()), "5*".to_string(), false),
-                (None, "http://x.io".to_string(), false),
+                SearchTerm::message("payment", false),
+                term(key("url.path"), text("/v1/health"), true),
+                term(key("userId"), text("42"), false),
+                SearchTerm::message("GET /v1", true),
+                term(key("http.status"), text("5*"), false),
+                SearchTerm::message("http://x.io", false),
             ]
         );
         assert_eq!(
-            read(r#"@broken msg:"two words" -"#),
+            split_search(r#"@broken msg:"two words" -"#).unwrap(),
             [
-                (None, "@broken".to_string(), false),
-                (Some("msg".to_string()), "two words".to_string(), false),
+                SearchTerm::message("@broken", false),
+                term(key("msg"), text("two words"), false),
             ]
         );
+    }
+
+    #[test]
+    fn splits_advanced_search() {
+        assert_eq!(
+            split_search(
+                "/time(d)? ?out/ -user_agent:/bot|crawler/ *:usr_42 service:[api, web] status:>499 duration_ms:<100 user_id:*"
+            )
+            .unwrap(),
+            [
+                term(SearchField::Message, SearchMatch::Regex("time(d)? ?out".into()), false),
+                term(key("user_agent"), SearchMatch::Regex("bot|crawler".into()), true),
+                term(SearchField::Any, text("usr_42"), false),
+                term(key("service"), SearchMatch::OneOf(vec!["api".into(), "web".into()]), false),
+                term(key("http.status"), SearchMatch::Above(499.0), false),
+                term(key("duration_ms"), SearchMatch::Below(100.0), false),
+                term(key("user_id"), text("*"), false),
+            ]
+        );
+        assert_eq!(
+            split_search(r#""user:42 failed" msg:">5" "say \"hi\"" path:/v1/ x:[]"#)
+                .unwrap(),
+            [
+                SearchTerm::message("user:42 failed", false),
+                term(key("msg"), text(">5"), false),
+                SearchTerm::message(r#"say "hi""#, false),
+                term(key("url.path"), SearchMatch::Regex("v1".into()), false),
+            ]
+        );
+        assert!(split_search("/(unclosed/").is_err());
     }
 
     #[test]

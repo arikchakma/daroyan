@@ -1104,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-agent"
-version = "0.0.28"
+version = "0.0.29"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1126,7 +1126,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-api"
-version = "0.0.28"
+version = "0.0.29"
 dependencies = [
  "anyhow",
  "axum",
@@ -1146,6 +1146,7 @@ dependencies = [
  "nix",
  "opentelemetry-proto",
  "prost",
+ "regex",
  "reqwest",
  "sea-orm",
  "serde",
@@ -1162,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-core"
-version = "0.0.28"
+version = "0.0.29"
 dependencies = [
  "anyhow",
  "axum",
@@ -1197,7 +1198,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-migration"
-version = "0.0.28"
+version = "0.0.29"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1213,7 +1214,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-protocol"
-version = "0.0.28"
+version = "0.0.29"
 dependencies = [
  "serde",
  "serde_json",

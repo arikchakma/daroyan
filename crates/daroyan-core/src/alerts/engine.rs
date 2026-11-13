@@ -17,7 +17,8 @@ use crate::alerts::facts::{AlertFacts, CheckCount, FactSources};
 use crate::alerts::integrations::IntegrationConfig;
 use crate::alerts::message::{AlertMessage, Moment};
 use crate::alerts::notify::{
-    ChatMessage, Details, Notice, Thread, Tone, send_notice, update_parent,
+    ChatMessage, Details, Notice, Thread, Tone, add_resolved_reaction, send_notice,
+    update_parent,
 };
 use crate::alerts::rules::{
     Condition, NoData, RuleOptions, Scope, Target, TraceRule, describe_rule,
@@ -1338,6 +1339,10 @@ impl Reply {
     fn updates_parent(self) -> bool {
         matches!(self, Self::Escalate | Self::Resolve)
     }
+
+    fn is_broadcast(self) -> bool {
+        matches!(self, Self::Broadcast | Self::Escalate)
+    }
 }
 
 pub fn notify_integrations(
@@ -1426,7 +1431,7 @@ async fn send_and_log(
     let thread = parent
         .as_ref()
         .zip(reply)
-        .map(|((_, parent), reply)| Thread { parent, broadcast: reply != Reply::Quiet });
+        .map(|((_, parent), reply)| Thread { parent, broadcast: reply.is_broadcast() });
 
     let config =
         serde_json::from_value::<IntegrationConfig>(integration.config.clone()).ok();
@@ -1504,6 +1509,12 @@ async fn refresh_parent(
 
     if let Err(error) = database.update_chat_payload(parent_id, body.to_string()).await {
         tracing::error!(integration_id = %integration.id, error = %error, "save the alert message");
+    }
+
+    if notice.tone == Tone::Resolved
+        && let Err(error) = add_resolved_reaction(config, parent).await
+    {
+        tracing::warn!(integration_id = %integration.id, error = %error, "react to the resolved alert");
     }
 }
 

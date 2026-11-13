@@ -1,3 +1,5 @@
+import { getTermCondition, getTermValue, parseQuery } from '~/utils/log-search';
+
 export const VIEW_PARAMS = [
   'level',
   'q',
@@ -72,8 +74,8 @@ export function getViewChips(input: ViewChipsInput) {
       });
     }
   }
-  if (q) {
-    chips.push({ condition: 'Search is', value: q });
+  for (const term of parseQuery(q)) {
+    chips.push({ condition: getTermCondition(term), value: getTermValue(term) });
   }
   if (rangeLabel) {
     chips.push({ condition: 'Range is', value: rangeLabel });

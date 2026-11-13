@@ -112,7 +112,7 @@ Slack, Discord and Telegram connect only by signing in, so nobody copies a webho
 
 | Kind | Env | How it connects |
 | --- | --- | --- |
-| Slack | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | OAuth with `chat:write`, `chat:write.public` and `channels:read`. Then the popup lists the public channels and you pick one. Alerts go out with `chat.postMessage` |
+| Slack | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | OAuth with `chat:write`, `chat:write.public`, `channels:read` and `reactions:write`. Then the popup lists the public channels and you pick one. Alerts go out with `chat.postMessage` |
 | Discord | `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` | OAuth with the `webhook.incoming` scope. Discord asks for the server and channel |
 | Telegram | `TELEGRAM_BOT_TOKEN` | `t.me/<bot>?startgroup=<code>`. The API reads the bot's updates until the code arrives, then saves that chat |
 

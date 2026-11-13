@@ -102,7 +102,7 @@ async fn enrolls_reports_and_runs_commands() {
         .await
         .unwrap();
     assert!(script.contains(&format!(
-        "/releases/download/v{}/daroyan-$ARCH-linux-musl",
+        "/releases/download/v{}/$name-$ARCH-linux-musl",
         env!("CARGO_PKG_VERSION")
     )));
 

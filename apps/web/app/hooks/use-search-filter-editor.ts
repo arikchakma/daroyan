@@ -5,6 +5,7 @@ import type { UseEditorOptions } from '@tiptap/react';
 import { FilterAddWidget } from '~/components/search/filter-add-widget';
 import { FilterSearchMark } from '~/components/search/filter-search-mark';
 import { FilterToken } from '~/components/search/filter-token';
+import { QueryToken } from '~/components/search/query-token';
 
 const FilterDocument = Node.create({
   name: 'doc',
@@ -21,6 +22,7 @@ const EXTENSIONS = [
   FilterDocument,
   FilterText,
   FilterToken,
+  QueryToken,
   FilterSearchMark,
   FilterAddWidget,
 ];
