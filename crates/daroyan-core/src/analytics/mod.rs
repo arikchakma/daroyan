@@ -40,6 +40,8 @@ const KEPT_BACKUPS: usize = 8;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const BACKUP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const SLOW_READ: Duration = Duration::from_millis(200);
+const TRIM_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const TRIM_TARGET_PERCENT: u64 = 90;
 
 #[derive(Clone)]
 pub struct Analytics {
@@ -54,6 +56,13 @@ pub struct Backup {
     pub name: String,
     pub size_bytes: u64,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Trim {
+    pub used_bytes: u64,
+    pub logs_until: Option<i64>,
+    pub spans_until: Option<i64>,
 }
 
 #[derive(Default)]
@@ -73,17 +82,26 @@ struct Pending {
     shares: HashMap<String, ServerShare>,
 }
 
-impl Analytics {
-    pub fn open(path: &Path) -> duckdb::Result<Self> {
-        let conn = Connection::open(path)?;
+impl TryFrom<Connection> for Analytics {
+    type Error = duckdb::Error;
+
+    fn try_from(conn: Connection) -> duckdb::Result<Self> {
         conn.execute_batch(MEMORY_SETTINGS)?;
         let reader = conn.try_clone()?;
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             reader: Arc::new(Mutex::new(reader)),
             pending: Arc::default(),
             last_backup: Arc::default(),
         })
+    }
+}
+
+impl Analytics {
+    #[cfg(test)]
+    pub fn open(path: &Path) -> duckdb::Result<Self> {
+        Self::try_from(Connection::open(path)?)
     }
 
     pub fn run<T>(
@@ -271,6 +289,44 @@ impl Analytics {
         .await
     }
 
+    pub async fn trim_to(&self, max_bytes: u64) -> Result<Option<Trim>> {
+        self.write(move |conn| {
+            conn.execute_batch("CHECKPOINT")?;
+            let used_bytes = read_used_bytes(conn)?;
+            if used_bytes <= max_bytes {
+                return Ok(None);
+            }
+
+            let target = max_bytes / 100 * TRIM_TARGET_PERCENT;
+            let share = 1.0 - target as f64 / used_bytes as f64;
+            let logs_until: Option<i64> = conn.query_row(
+                "SELECT quantile_disc(logged_at, ?) FROM log_lines",
+                [share],
+                |row| row.get(0),
+            )?;
+            let spans_until: Option<i64> = conn.query_row(
+                "SELECT quantile_disc(started_at, ?) FROM spans",
+                [share],
+                |row| row.get(0),
+            )?;
+
+            if let Some(until) = logs_until {
+                conn.execute("DELETE FROM log_lines WHERE logged_at <= ?", [until])?;
+            }
+            if let Some(until) = spans_until {
+                conn.execute("DELETE FROM spans WHERE started_at <= ?", [until])?;
+                conn.execute(
+                    "DELETE FROM span_exceptions WHERE occurred_at <= ?",
+                    [until],
+                )?;
+            }
+            conn.execute_batch("CHECKPOINT")?;
+
+            Ok(Some(Trim { used_bytes, logs_until, spans_until }))
+        })
+        .await
+    }
+
     pub fn read_last_backup(&self) -> Option<Backup> {
         lock(&self.last_backup).clone()
     }
@@ -285,8 +341,9 @@ impl Analytics {
             let source: String =
                 conn.query_row("SELECT current_database()", [], |row| row.get(0))?;
             let source = source.replace('"', "\"\"");
+            let version = read_storage_version(conn)?;
             conn.execute_batch(&format!(
-                "ATTACH '{target}' AS backup; COPY FROM DATABASE \"{source}\" TO backup; DETACH backup;"
+                "ATTACH '{target}' AS backup (STORAGE_VERSION '{version}'); COPY FROM DATABASE \"{source}\" TO backup; DETACH backup;"
             ))
         })
         .await?;
@@ -326,10 +383,12 @@ pub fn spawn_analytics_tasks(
     retention_days: u32,
     log_retention_days: u32,
     backup_dir: Option<PathBuf>,
+    max_bytes: Option<u64>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut flush = tokio::time::interval(FLUSH_INTERVAL);
         let mut purge = tokio::time::interval(PURGE_INTERVAL);
+        let mut trim = tokio::time::interval(TRIM_INTERVAL);
         let mut backup = tokio::time::interval_at(
             tokio::time::Instant::now() + BACKUP_INTERVAL,
             BACKUP_INTERVAL,
@@ -349,6 +408,20 @@ pub fn spawn_analytics_tasks(
                         tracing::error!(error = %error, "purge analytics");
                     }
                 }
+                _ = trim.tick(), if max_bytes.is_some() => {
+                    let Some(max_bytes) = max_bytes else { continue };
+                    match analytics.trim_to(max_bytes).await {
+                        Ok(Some(trim)) => tracing::warn!(
+                            used_mb = trim.used_bytes / 1_048_576,
+                            max_mb = max_bytes / 1_048_576,
+                            logs_until = ?trim.logs_until,
+                            spans_until = ?trim.spans_until,
+                            "deleted the oldest logs and spans, DuckDB was over its size cap"
+                        ),
+                        Ok(None) => {}
+                        Err(error) => tracing::error!(error = %error, "trim analytics"),
+                    }
+                }
                 _ = backup.tick(), if backup_dir.is_some() => {
                     let Some(dir) = backup_dir.clone() else { continue };
                     match analytics.back_up(dir).await {
@@ -359,6 +432,26 @@ pub fn spawn_analytics_tasks(
             }
         }
     })
+}
+
+fn read_used_bytes(conn: &Connection) -> duckdb::Result<u64> {
+    conn.query_row(
+        "SELECT used_blocks * block_size FROM pragma_database_size() \
+         WHERE database_name = current_database()",
+        [],
+        |row| row.get(0),
+    )
+}
+
+fn read_storage_version(conn: &Connection) -> duckdb::Result<String> {
+    let version: String = conn.query_row(
+        "SELECT tags['storage_version'] FROM duckdb_databases() \
+         WHERE database_name = current_database()",
+        [],
+        |row| row.get(0),
+    )?;
+
+    Ok(version.trim_end_matches('+').to_string())
 }
 
 fn prune_backups(dir: &Path) {
@@ -513,6 +606,64 @@ mod tests {
             .unwrap();
         assert_eq!(seen, 1);
         slow.await.unwrap();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn trims_the_oldest_rows_over_the_size_cap() {
+        let dir =
+            std::env::temp_dir().join(format!("daroyan-trim-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let analytics = Analytics::open(&dir.join("live.duckdb")).unwrap();
+        analytics
+            .run(|conn| {
+                conn.execute_batch(
+                    "CREATE TABLE log_lines (logged_at BIGINT, message VARCHAR); \
+                     CREATE TABLE spans (started_at BIGINT, name VARCHAR); \
+                     CREATE TABLE span_exceptions (occurred_at BIGINT); \
+                     INSERT INTO log_lines SELECT i, md5(i::VARCHAR) || md5((i * 7)::VARCHAR) FROM range(400000) AS r(i); \
+                     INSERT INTO spans SELECT i, md5(i::VARCHAR) FROM range(100000) AS r(i); \
+                     INSERT INTO span_exceptions SELECT i FROM range(1000) AS r(i); \
+                     CHECKPOINT;",
+                )
+            })
+            .unwrap();
+        let used = analytics.run(super::read_used_bytes).unwrap();
+        assert_eq!(analytics.trim_to(used).await.unwrap(), None);
+
+        let trim = analytics.trim_to(used / 2).await.unwrap().unwrap();
+        assert_eq!(trim.used_bytes, used);
+        let logs_until = trim.logs_until.unwrap();
+        assert!((200_000..260_000).contains(&logs_until), "{logs_until}");
+
+        let (oldest, kept): (i64, i64) = analytics
+            .run(|conn| {
+                conn.query_row(
+                    "SELECT min(logged_at), count(*) FROM log_lines",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(oldest, logs_until + 1);
+        assert_eq!(kept, 399_999 - logs_until);
+
+        let exceptions: i64 = analytics
+            .run(|conn| {
+                conn.query_row("SELECT count(*) FROM span_exceptions", [], |row| {
+                    row.get(0)
+                })
+            })
+            .unwrap();
+        assert_eq!(exceptions, 0);
+
+        let mut passes = 1;
+        while analytics.trim_to(used / 2).await.unwrap().is_some() {
+            passes += 1;
+            assert!(passes < 12, "still over the cap after {passes} passes");
+        }
+        assert!(analytics.run(super::read_used_bytes).unwrap() <= used / 2);
+
         std::fs::remove_dir_all(dir).ok();
     }
 

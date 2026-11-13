@@ -62,7 +62,9 @@ Put a reverse proxy with TLS in front (see Client IP Behind Cloudflare and Caddy
 | `daroyan-api` | `app.rs`, `layers/`, `extract/`, `routes/` (one file per resource), `views/` |
 | `daroyan-migration` | SQLite migrations on SeaORM's schema builder, and DuckDB SQL in `duckdb/NNNN_name.sql` |
 
-SQLite holds the rows people see: servers, install tokens, commands, each server's last report, integrations, alert rules and alerts. DuckDB holds every state sample and event. Reports are buffered and written every 5 seconds with the Appender. Rows older than `RETENTION_DAYS` are deleted every hour. Log lines are agent messages of type `logs`, stored in `log_lines` and deleted after `LOG_RETENTION_DAYS` (7).
+SQLite holds the rows people see: servers, install tokens, commands, each server's last report, integrations, alert rules and alerts. DuckDB holds every state sample and event. Reports are buffered and written every 5 seconds with the Appender. Rows older than `RETENTION_DAYS` are deleted every hour. Log lines are agent messages of type `logs`, stored in `log_lines` and deleted after `LOG_RETENTION_DAYS` (7). A JSON line is stored once, as its message and attributes. The `raw` column holds the original text only for a text line that parsing changed.
+
+The DuckDB file uses storage version v1.2.0, and the large text columns of `log_lines`, `spans` and `span_exceptions` use zstd. `open_duckdb` copies an older file into this format once, on start. If `DUCKDB_MAX_SIZE_GB` is set, the API checks the used size every 5 minutes and deletes the oldest logs and spans until the data is at 90% of the limit.
 
 ## Routes
 

@@ -83,13 +83,16 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
         .map(|mut line| {
             let mut at = i64::try_from(line.at).unwrap_or(now_ms);
             let is_json = line.raw.is_some() || !line.attributes.is_empty();
-            let original = line.raw.take().unwrap_or_else(|| line.message.clone());
+            let mut raw = None;
             if !is_json {
                 let parsed = parse_text_line(&line.message, line.format);
                 at = parsed.at.unwrap_or(at);
                 line.severity = parsed.severity.unwrap_or(line.severity);
-                line.message = parsed.message;
                 line.attributes = parsed.attributes;
+
+                let original = std::mem::replace(&mut line.message, parsed.message);
+                raw =
+                    (original != line.message).then(|| cut(&original, MAX_MESSAGE_BYTES));
             } else {
                 at = take_json_time(&mut line.attributes).unwrap_or(at);
                 let mut severity = Some(line.severity);
@@ -115,8 +118,7 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
                     .then(|| Value::Object(line.attributes).to_string()),
                 trace_id: line.trace_id.map(|id| cut(&id, 64)),
                 span_id: line.span_id.map(|id| cut(&id, 32)),
-                raw: (original != line.message)
-                    .then(|| cut(&original, MAX_MESSAGE_BYTES)),
+                raw,
                 resource: None,
             }
         })
@@ -242,9 +244,7 @@ fn to_otlp_log_row(
             .then(|| Value::Object(attributes).to_string()),
         trace_id: to_hex(&record.trace_id),
         span_id: to_hex(&record.span_id),
-        raw: serde_json::to_string(record)
-            .ok()
-            .map(|raw| cut(&raw, MAX_MESSAGE_BYTES)),
+        raw: None,
         resource: None,
     }
 }
@@ -897,6 +897,28 @@ mod tests {
         assert_eq!(rows[0].message, "209.71.83.120 · d9f7326e");
         assert_eq!(rows[0].raw.as_deref(), Some(raw));
         assert_eq!(rows[1].raw, None);
+    }
+
+    #[test]
+    fn stores_json_lines_once() {
+        let mut json = line(1, "api", 9, "request completed");
+        json.raw = Some(
+            r#"{"level":"info","msg":"request completed","route":"/v1/links"}"#
+                .to_string(),
+        );
+        json.attributes = serde_json::json!({ "route": "/v1/links" })
+            .as_object()
+            .cloned()
+            .unwrap();
+        let rows = to_log_rows(
+            "srv_1",
+            LogBatch { lines: vec![json], ..LogBatch::default() },
+            50,
+        );
+
+        assert_eq!(rows[0].message, "request completed");
+        assert!(rows[0].attributes.as_deref().unwrap().contains("/v1/links"));
+        assert_eq!(rows[0].raw, None);
     }
 
     #[test]
