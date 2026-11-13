@@ -1199,6 +1199,7 @@ dependencies = [
 name = "daroyan-migration"
 version = "0.0.28"
 dependencies = [
+ "anyhow",
  "async-trait",
  "clap",
  "dotenvy",
