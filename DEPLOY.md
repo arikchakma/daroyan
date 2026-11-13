@@ -235,7 +235,7 @@ The backup folder holds up to 8 full copies of the DuckDB file. On the same disk
 that is up to 8 times the size of `daroyan.duckdb`, so point `DUCKDB_BACKUP_DIR`
 at another disk, or move the files to a bucket and delete them from the folder.
 
-The first start after an upgrade from 0.0.28 or older rewrites `daroyan.duckdb` once into a
+The first start after an upgrade from 0.0.29 or older rewrites `daroyan.duckdb` once into a
 compressed file. It needs free disk space for the new file, which is smaller than
 the old one, and the API does not answer until it finishes. If it fails, the old
 file is left as it was.
