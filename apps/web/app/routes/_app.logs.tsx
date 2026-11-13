@@ -452,7 +452,7 @@ export default function LogsPage() {
           </div>
           <div className={cn('flex flex-col gap-2 transition-opacity', isShowingOldResults && 'opacity-60')}>
             <LogVolume volume={volume} onZoom={onZoom} />
-            <DataTable table={table} label="Logs" size="sm" isLoading={isLoading} />
+            <DataTable table={table} label="Logs" size="sm" verticalAlign="top" isLoading={isLoading} />
           </div>
           {data && lines.length === 0 && (
             <p className="py-10 text-center text-body text-text-secondary">
