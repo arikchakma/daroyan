@@ -109,6 +109,9 @@ impl AlertMessage<'_> {
         if self.target == Target::Traces {
             return self.traces_link().map(|link| link.url);
         }
+        if self.target == Target::Metrics {
+            return self.metrics_link().map(|link| link.url);
+        }
         self.target_url()
     }
 
@@ -127,7 +130,10 @@ impl AlertMessage<'_> {
                     describe_rule(self.condition, self.options, self.for_secs()),
                 ),
             ],
-            links: self.open_target(),
+            links: match self.metrics_link() {
+                Some(link) => vec![link.primary()],
+                None => self.open_target(),
+            },
             ..Details::default()
         }
     }
@@ -696,6 +702,10 @@ impl AlertMessage<'_> {
             Condition::TraceLatency { above, .. } => {
                 format!("{trigger} above {}{held}.", format_ms(warning.unwrap_or(*above)))
             }
+            Condition::Metric { threshold, below, .. } => {
+                let side = if *below { "below" } else { "above" };
+                format!("{trigger} {side} {}{held}.", warning.unwrap_or(*threshold))
+            }
             _ => format!(
                 "The rule fires on: {}.",
                 describe_rule(self.condition, self.options, self.for_secs())
@@ -773,6 +783,7 @@ impl AlertMessage<'_> {
                     | Condition::UptimeDown
                     | Condition::TraceErrors { .. }
                     | Condition::TraceLatency { .. }
+                    | Condition::Metric { .. }
             )
             && let Some(link) = self.target_link("Declare incident", "declare", id)
         {
@@ -824,6 +835,44 @@ impl AlertMessage<'_> {
 
         let url = Url::parse_with_params(&format!("{app_url}/traces"), params).ok()?;
         Some(Link::new("Open traces", url.as_str()))
+    }
+
+    fn metrics_link(&self) -> Option<Link> {
+        let app_url = self.app_url()?;
+        let Condition::Metric { name, aggregation, service, filter, group_by, .. } =
+            self.condition
+        else {
+            return None;
+        };
+
+        let subject = (self.alert.subject != *name && self.alert.subject != NO_DATA)
+            .then_some(self.alert.subject.as_str());
+        let mut filters: Vec<String> = filter.iter().cloned().collect();
+        let mut service = service.clone();
+        let mut server = None;
+        match (group_by.as_deref(), subject) {
+            (Some("service"), Some(subject)) => service = Some(subject.to_string()),
+            (Some("server" | "server_id"), Some(subject)) => {
+                server = Some(subject.to_string());
+            }
+            (Some(key), Some(subject)) => filters.push(format!("{key}={subject}")),
+            _ => {}
+        }
+
+        let mut params = vec![("range", "1h".to_string())];
+        params.extend(
+            aggregation.map(|aggregation| ("agg", aggregation.as_str().to_string())),
+        );
+        params.extend(service.map(|service| ("service", service)));
+        params.extend(server.map(|server| ("server", server)));
+        if !filters.is_empty() {
+            params.push(("filter", filters.join(",")));
+        }
+
+        let mut url =
+            Url::parse_with_params(&format!("{app_url}/metrics"), params).ok()?;
+        url.path_segments_mut().ok()?.push(name);
+        Some(Link::new("Open metric", url.as_str()))
     }
 
     fn firing_links(&self) -> Vec<Link> {

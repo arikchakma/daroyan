@@ -1,0 +1,685 @@
+mod common;
+
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use axum::routing::post;
+use axum::{Json, Router};
+use daroyan_api::AppState;
+use daroyan_api::app::{build_app, open_state};
+use daroyan_core::alerts::engine::AlertEngine;
+use daroyan_core::analytics::Analytics;
+use daroyan_core::config::{Config, MetricSettings};
+use daroyan_core::db::queries::servers::NewServer;
+use opentelemetry_proto::tonic::collector::metrics::v1::{
+    ExportMetricsServiceRequest, ExportMetricsServiceResponse,
+};
+use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValueKind;
+use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
+use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as NumberValue;
+use opentelemetry_proto::tonic::metrics::v1::{
+    AggregationTemporality, Exemplar, Gauge, Histogram, HistogramDataPoint, Metric,
+    NumberDataPoint, ResourceMetrics, ScopeMetrics, Sum, Summary, SummaryDataPoint,
+};
+use opentelemetry_proto::tonic::resource::v1::Resource;
+use prost::Message;
+use reqwest::{Client, StatusCode};
+use serde_json::{Value, json};
+use tokio::net::TcpListener;
+
+const MINUTE_NANOS: u64 = 60_000_000_000;
+
+async fn serve(app: Router) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+    });
+
+    format!("http://{address}")
+}
+
+fn text(key: &str, value: &str) -> KeyValue {
+    KeyValue {
+        key: key.to_string(),
+        value: Some(AnyValue {
+            value: Some(AnyValueKind::StringValue(value.to_string())),
+        }),
+        ..Default::default()
+    }
+}
+
+fn now_nanos() -> u64 {
+    u64::try_from(chrono::Utc::now().timestamp_nanos_opt().unwrap()).unwrap()
+}
+
+fn request(instance: &str, metrics: Vec<Metric>) -> ExportMetricsServiceRequest {
+    ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource {
+                attributes: vec![
+                    text("service.name", "inboxjot-api"),
+                    text("service.instance.id", instance),
+                    text("host.name", "inboxjot"),
+                ],
+                ..Default::default()
+            }),
+            scope_metrics: vec![ScopeMetrics { metrics, ..Default::default() }],
+            ..Default::default()
+        }],
+    }
+}
+
+fn counter(start: u64, at: u64, value: i64) -> Metric {
+    Metric {
+        name: "emails.sent".to_string(),
+        unit: "{email}".to_string(),
+        data: Some(Data::Sum(Sum {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![text("provider", "ses")],
+                start_time_unix_nano: start,
+                time_unix_nano: at,
+                value: Some(NumberValue::AsInt(value)),
+                ..Default::default()
+            }],
+            aggregation_temporality: AggregationTemporality::Cumulative as i32,
+            is_monotonic: true,
+        })),
+        ..Default::default()
+    }
+}
+
+fn gauge(name: &str, routes: &[&str], at: u64) -> Metric {
+    Metric {
+        name: name.to_string(),
+        data: Some(Data::Gauge(Gauge {
+            data_points: routes
+                .iter()
+                .map(|route| NumberDataPoint {
+                    attributes: vec![text("route", route)],
+                    time_unix_nano: at,
+                    value: Some(NumberValue::AsDouble(340.0)),
+                    ..Default::default()
+                })
+                .collect(),
+        })),
+        ..Default::default()
+    }
+}
+
+async fn open_test_state(dir: &Path, metrics: MetricSettings) -> AppState {
+    let state = open_state(Config {
+        host: "127.0.0.1".parse().unwrap(),
+        port: 0,
+        database_url: format!("sqlite://{}?mode=rwc", dir.join("daroyan.db").display()),
+        duckdb_path: dir.join("daroyan.duckdb"),
+        retention_days: 30,
+        log_retention_days: 7,
+        otlp_log_budget: 4 * 1024,
+        metrics,
+        backup_dir: None,
+        trusted_proxies: Vec::new(),
+        client_ip_header: "cf-connecting-ip".to_string(),
+        app_url: Some("https://daroyan.example".to_string()),
+        google_client_id: None,
+        google_client_secret: None,
+        allowed_emails: Vec::new(),
+        slack_api_url: "https://slack.com".to_string(),
+        slack_client_id: None,
+        slack_client_secret: None,
+        discord_client_id: None,
+        discord_client_secret: None,
+        telegram_bot_token: None,
+        allow_private_targets: true,
+    })
+    .await
+    .unwrap();
+    state
+        .database
+        .create_server(NewServer {
+            id: "srv_inboxjot".to_string(),
+            name: "Inboxjot Server".to_string(),
+            labels: json!([]),
+            host: json!({
+                "name": "Inboxjot Server", "labels": [], "hostname": "inboxjot",
+                "platform": "ubuntu", "platform_version": "24.04", "kernel": "6.8",
+                "arch": "x86_64", "cpu": "", "cpu_cores": 2, "mem_total": 0,
+                "swap_total": 0, "private_ip": null, "boot_time": 0, "version": "0.0.5",
+            }),
+            token_hash: "unused".to_string(),
+        })
+        .await
+        .unwrap();
+
+    state
+}
+
+async fn create_token(http: &Client, base: &str) -> String {
+    let created: Value = http
+        .post(format!("{base}/v1/ingest-tokens"))
+        .json(&json!({ "name": "inboxjot" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    created["token"].as_str().unwrap().to_string()
+}
+
+async fn send(
+    client: &Client,
+    endpoint: &str,
+    token: &str,
+    body: &ExportMetricsServiceRequest,
+) -> ExportMetricsServiceResponse {
+    let response = client
+        .post(endpoint)
+        .bearer_auth(token)
+        .body(body.encode_to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    ExportMetricsServiceResponse::decode(response.bytes().await.unwrap()).unwrap()
+}
+
+async fn read_deltas(
+    analytics: &Analytics,
+    name: &'static str,
+) -> Vec<(String, Option<f64>)> {
+    analytics
+        .read(move |conn| {
+            conn.prepare(
+                "SELECT s.instance, p.delta FROM metric_points p
+                 JOIN metric_series s USING (series_id)
+                 WHERE s.name = ? ORDER BY s.instance, p.taken_at",
+            )?
+            .query_map([name], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn stores_metrics_and_works_out_counter_changes() {
+    let dir =
+        std::env::temp_dir().join(format!("daroyan-metrics-{}", std::process::id()));
+    let state = open_test_state(&dir, MetricSettings::default()).await;
+    let analytics = state.analytics.clone();
+    let http = common::sign_in(&state.database).await;
+    let anonymous = Client::new();
+    let base = serve(build_app(state)).await;
+    let endpoint = format!("{base}/v1/otlp/v1/metrics");
+    let token = create_token(&http, &base).await;
+
+    let missing = anonymous.post(&endpoint).body(Vec::new()).send().await.unwrap();
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+    let start = now_nanos() - 3 * MINUTE_NANOS;
+    let response = send(
+        &anonymous,
+        &endpoint,
+        &token,
+        &request(
+            "worker-1",
+            vec![
+                counter(start, start + MINUTE_NANOS, 5),
+                gauge("queue.depth", &["/send"], start + MINUTE_NANOS),
+                Metric {
+                    name: "job.duration".to_string(),
+                    unit: "s".to_string(),
+                    data: Some(Data::Histogram(Histogram {
+                        data_points: vec![HistogramDataPoint {
+                            start_time_unix_nano: start,
+                            time_unix_nano: start + MINUTE_NANOS,
+                            count: 3,
+                            sum: Some(4.5),
+                            explicit_bounds: vec![1.0, 2.0],
+                            bucket_counts: vec![1, 1, 1],
+                            exemplars: vec![Exemplar {
+                                trace_id: vec![0xab; 16],
+                                span_id: vec![1; 8],
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }],
+                        aggregation_temporality: AggregationTemporality::Delta as i32,
+                    })),
+                    ..Default::default()
+                },
+                Metric {
+                    name: "legacy.latency".to_string(),
+                    data: Some(Data::Summary(Summary {
+                        data_points: vec![SummaryDataPoint::default()],
+                    })),
+                    ..Default::default()
+                },
+            ],
+        ),
+    )
+    .await;
+    let partial = response.partial_success.unwrap();
+    assert_eq!(partial.rejected_data_points, 1);
+    assert!(partial.error_message.contains("summaries"));
+
+    let later = send(
+        &anonymous,
+        &endpoint,
+        &token,
+        &request("worker-1", vec![counter(start, start + 2 * MINUTE_NANOS, 12)]),
+    )
+    .await;
+    assert_eq!(later.partial_success, None);
+
+    let restarted = start + 2 * MINUTE_NANOS + 1;
+    send(
+        &anonymous,
+        &endpoint,
+        &token,
+        &request("worker-1", vec![counter(restarted, start + 3 * MINUTE_NANOS, 2)]),
+    )
+    .await;
+    send(
+        &anonymous,
+        &endpoint,
+        &token,
+        &request("worker-2", vec![counter(start, start + 2 * MINUTE_NANOS, 40)]),
+    )
+    .await;
+
+    let json = anonymous
+        .post(&endpoint)
+        .bearer_auth(&token)
+        .json(&request("worker-2", vec![counter(start, start + 3 * MINUTE_NANOS, 46)]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(json.status(), StatusCode::OK);
+    assert_eq!(json.headers()["content-type"], "application/json");
+
+    analytics.flush().await.unwrap();
+
+    assert_eq!(
+        read_deltas(&analytics, "emails.sent").await,
+        [
+            ("worker-1".to_string(), Some(5.0)),
+            ("worker-1".to_string(), Some(7.0)),
+            ("worker-1".to_string(), Some(2.0)),
+            ("worker-2".to_string(), Some(40.0)),
+            ("worker-2".to_string(), Some(6.0)),
+        ]
+    );
+
+    let histogram: (String, String, String, Option<String>) = analytics
+        .read(|conn| {
+            conn.query_row(
+                "SELECT s.server_id, CAST(s.bounds AS VARCHAR), CAST(p.bucket_deltas AS VARCHAR), p.trace_id
+                 FROM metric_points p JOIN metric_series s USING (series_id)
+                 WHERE s.name = 'job.duration'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        histogram,
+        (
+            "srv_inboxjot".to_string(),
+            "[1.0, 2.0]".to_string(),
+            "[1, 1, 1]".to_string(),
+            Some("ab".repeat(16)),
+        )
+    );
+
+    let catalog: Value = http
+        .get(format!("{base}/v1/metrics"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let names: Vec<&str> = catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["emails.sent", "job.duration", "queue.depth"]);
+    assert_eq!(catalog[0]["kind"], "sum");
+    assert_eq!(catalog[0]["is_monotonic"], true);
+    assert_eq!(catalog[0]["series"], 2);
+    assert_eq!(catalog[0]["services"], json!(["inboxjot-api"]));
+
+    let attributes: Value = http
+        .get(format!("{base}/v1/metrics/emails.sent/attributes"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        attributes,
+        json!([{ "key": "provider", "values": [{ "value": "ses", "series": 2 }] }])
+    );
+
+    let since = (start / 1_000_000) as i64;
+    let until = since + 4 * 60_000;
+    let query = |name: &str, extra: &str| {
+        format!(
+            "{base}/v1/metrics/{name}/query?since={since}&until={until}&step_ms=60000{extra}"
+        )
+    };
+
+    let sent: Value = http
+        .get(query("emails.sent", "&group_by=service"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sent["aggregation"], "rate_per_minute");
+    assert_eq!(sent["series"].as_array().unwrap().len(), 1);
+    assert_eq!(sent["series"][0]["group"], "inboxjot-api");
+    let values: Vec<f64> = sent["series"][0]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    assert_eq!(values, [5.0, 47.0, 8.0]);
+
+    let filtered: Value = http
+        .get(query("emails.sent", "&agg=increase&filter=provider!=ses"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(filtered["series"], json!([]));
+
+    let median: Value = http
+        .get(query("job.duration", "&agg=p50"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let median: Vec<f64> = median["series"][0]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    assert_eq!(median, [1.5]);
+
+    let slowest: Value = http
+        .get(query("job.duration", ""))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(slowest["aggregation"], "p95");
+    assert_eq!(slowest["exemplars"][0]["trace_id"], "ab".repeat(16));
+
+    let depth: Value = http
+        .get(query("queue.depth", ""))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(depth["aggregation"], "last");
+    assert!(
+        depth["series"][0]["values"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(340.0))
+    );
+
+    let wrong = http.get(query("emails.sent", "&agg=p95")).send().await.unwrap();
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+    let missing = http.get(query("nope", "")).send().await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn drops_new_series_past_the_limit_and_counts_them() {
+    let dir = std::env::temp_dir()
+        .join(format!("daroyan-metric-limits-{}", std::process::id()));
+    let limits = MetricSettings {
+        series_limit: 3,
+        series_per_metric: 2,
+        ..MetricSettings::default()
+    };
+    let state = open_test_state(&dir, limits).await;
+    let analytics = state.analytics.clone();
+    let http = common::sign_in(&state.database).await;
+    let anonymous = Client::new();
+    let base = serve(build_app(state)).await;
+    let endpoint = format!("{base}/v1/otlp/v1/metrics");
+    let token = create_token(&http, &base).await;
+
+    let at = now_nanos();
+    let response = send(
+        &anonymous,
+        &endpoint,
+        &token,
+        &request(
+            "worker-1",
+            vec![
+                gauge("queue.depth", &["/a", "/b", "/c"], at),
+                gauge("pool.in_use", &["/a", "/b"], at),
+            ],
+        ),
+    )
+    .await;
+    let partial = response.partial_success.unwrap();
+    assert_eq!(partial.rejected_data_points, 2);
+    assert!(partial.error_message.contains("queue.depth"), "{}", partial.error_message);
+
+    let again = send(
+        &anonymous,
+        &endpoint,
+        &token,
+        &request(
+            "worker-1",
+            vec![gauge("queue.depth", &["/a", "/b"], at + MINUTE_NANOS)],
+        ),
+    )
+    .await;
+    assert_eq!(again.partial_success, None);
+
+    analytics.flush().await.unwrap();
+    let points: i64 = analytics
+        .read(|conn| {
+            conn.query_row("SELECT count(*) FROM metric_points", [], |row| row.get(0))
+        })
+        .await
+        .unwrap();
+    assert_eq!(points, 5);
+
+    let tokens: Value = http
+        .get(format!("{base}/v1/ingest-tokens"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(tokens[0]["rejected_metric_points"], 2);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn fires_metric_alerts_per_group() {
+    let dir = std::env::temp_dir()
+        .join(format!("daroyan-metric-alerts-{}", std::process::id()));
+    let state = open_test_state(&dir, MetricSettings::default()).await;
+    let analytics = state.analytics.clone();
+    let mut engine = AlertEngine::new(
+        state.database.clone(),
+        state.agents.clone(),
+        state.analytics.clone(),
+        state.config.app_url.clone(),
+    );
+    let http = common::sign_in(&state.database).await;
+    let anonymous = Client::new();
+    let base = serve(build_app(state)).await;
+    let token = create_token(&http, &base).await;
+
+    let received = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let hook_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let hook_url = format!("http://{}/hook", hook_listener.local_addr().unwrap());
+    let hook_store = Arc::clone(&received);
+    tokio::spawn(async move {
+        let app = Router::new().route(
+            "/hook",
+            post(move |Json(body): Json<Value>| async move {
+                hook_store.lock().unwrap().push(body);
+            }),
+        );
+        axum::serve(hook_listener, app).await
+    });
+    let integration: Value = http
+        .post(format!("{base}/v1/integrations"))
+        .json(&json!({ "name": "Ops hook", "config": { "kind": "webhook", "url": hook_url } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let at = now_nanos() - MINUTE_NANOS;
+    let depth = |queue: &str, value: f64| NumberDataPoint {
+        attributes: vec![text("queue", queue)],
+        time_unix_nano: at,
+        value: Some(NumberValue::AsDouble(value)),
+        ..Default::default()
+    };
+    let body = request(
+        "worker-1",
+        vec![Metric {
+            name: "queue.depth".to_string(),
+            unit: "{job}".to_string(),
+            data: Some(Data::Gauge(Gauge {
+                data_points: vec![depth("email", 1200.0), depth("webhook", 40.0)],
+            })),
+            ..Default::default()
+        }],
+    );
+    send(&anonymous, &format!("{base}/v1/otlp/v1/metrics"), &token, &body).await;
+    analytics.flush().await.unwrap();
+
+    let condition = json!({
+        "kind": "metric",
+        "name": "queue.depth",
+        "aggregation": "last",
+        "threshold": 1000,
+        "within_secs": 300,
+        "group_by": "queue"
+    });
+    let narrowed = http
+        .post(format!("{base}/v1/alert-rules"))
+        .json(&json!({
+            "name": "Queue Backed Up",
+            "condition": condition,
+            "scope": { "kind": "servers", "server_ids": ["srv_inboxjot"] },
+            "integration_ids": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(narrowed.status(), StatusCode::BAD_REQUEST);
+
+    let rule: Value = http
+        .post(format!("{base}/v1/alert-rules"))
+        .json(&json!({
+            "name": "Queue Backed Up",
+            "condition": condition,
+            "scope": { "kind": "all" },
+            "integration_ids": [integration["id"]]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(rule["id"].is_string(), "{rule}");
+
+    engine.check_alerts(chrono::Utc::now()).await.unwrap();
+
+    let firing: Vec<Value> = http
+        .get(format!("{base}/v1/alerts?status=firing"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let summary: Vec<(&str, &str, &str, &str)> = firing
+        .iter()
+        .map(|alert| {
+            (
+                alert["server_id"].as_str().unwrap(),
+                alert["target_name"].as_str().unwrap(),
+                alert["subject"].as_str().unwrap(),
+                alert["value"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(summary, [("metrics", "Metrics", "email", "1200 jobs")]);
+
+    for _ in 0..50 {
+        if !received.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let hook = received.lock().unwrap()[0].clone();
+    assert_eq!(hook["event"], "alert.firing");
+    assert_eq!(
+        hook["url"],
+        "https://daroyan.example/metrics/queue.depth?range=1h&agg=last&filter=queue%3Demail"
+    );
+
+    let backtest: Value = http
+        .post(format!("{base}/v1/alert-rules/backtest"))
+        .json(&json!({ "condition": condition, "scope": { "kind": "all" } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(backtest["is_supported"], true);
+    let hits: Vec<(&str, &str)> = backtest["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|hit| (hit["subject"].as_str().unwrap(), hit["value"].as_str().unwrap()))
+        .collect();
+    assert_eq!(hits, [("email", "1200 jobs")]);
+
+    std::fs::remove_dir_all(&dir).ok();
+}

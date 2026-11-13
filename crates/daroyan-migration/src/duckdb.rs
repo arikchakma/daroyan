@@ -2,7 +2,7 @@ use std::path::Path;
 
 use duckdb::Connection;
 
-const MIGRATIONS: [(&str, &str); 11] = [
+const MIGRATIONS: [(&str, &str); 12] = [
     ("0001_server_states.sql", include_str!("../duckdb/0001_server_states.sql")),
     ("0002_log_lines.sql", include_str!("../duckdb/0002_log_lines.sql")),
     ("0003_log_raw.sql", include_str!("../duckdb/0003_log_raw.sql")),
@@ -14,6 +14,7 @@ const MIGRATIONS: [(&str, &str); 11] = [
     ("0009_disk_states.sql", include_str!("../duckdb/0009_disk_states.sql")),
     ("0010_span_servers.sql", include_str!("../duckdb/0010_span_servers.sql")),
     ("0011_log_resource.sql", include_str!("../duckdb/0011_log_resource.sql")),
+    ("0012_metrics.sql", include_str!("../duckdb/0012_metrics.sql")),
 ];
 
 pub fn migrate_duckdb(path: &Path) -> duckdb::Result<()> {

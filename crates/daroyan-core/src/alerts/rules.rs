@@ -5,6 +5,9 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::analytics::metrics::query::{
+    Aggregation as MetricAggregation, GroupBy, MetricFilter, MetricQuery,
+};
 use crate::analytics::spans::SpanMatch;
 use crate::error::{Error, ErrorName, Result};
 
@@ -82,7 +85,21 @@ pub enum Condition {
         #[serde(default)]
         group_by: TraceGroup,
     },
+    Metric {
+        name: String,
+        #[serde(default)]
+        aggregation: Option<MetricAggregation>,
+        threshold: f64,
+        #[serde(default)]
+        below: bool,
+        within_secs: u32,
+        service: Option<String>,
+        filter: Option<String>,
+        group_by: Option<String>,
+    },
 }
+
+pub const MAX_METRIC_WINDOW_SECS: u32 = 3600;
 
 pub const DEFAULT_MIN_REQUESTS: u32 = 10;
 pub const MAX_TRACE_WINDOW_SECS: u32 = 3600;
@@ -240,6 +257,7 @@ pub enum Target {
     Cron,
     Telemetry,
     Traces,
+    Metrics,
 }
 
 impl Target {
@@ -248,7 +266,7 @@ impl Target {
             Self::Server => "Server",
             Self::Check => "Check",
             Self::Cron => "Cron",
-            Self::Telemetry | Self::Traces => "Source",
+            Self::Telemetry | Self::Traces | Self::Metrics => "Source",
         }
     }
 
@@ -259,6 +277,7 @@ impl Target {
             Self::Cron => "cron",
             Self::Telemetry => "telemetry",
             Self::Traces => "traces",
+            Self::Metrics => "metrics",
         }
     }
 
@@ -270,6 +289,7 @@ impl Target {
             Self::Cron => format!("{app_url}/crons/{id}"),
             Self::Telemetry => format!("{app_url}/logs?server_id={id}"),
             Self::Traces => format!("{app_url}/traces"),
+            Self::Metrics => format!("{app_url}/metrics"),
         }
     }
 }
@@ -283,6 +303,7 @@ impl Condition {
             | Self::CertDays { .. } => Target::Check,
             Self::CronMissed | Self::CronFailed => Target::Cron,
             Self::TraceErrors { .. } | Self::TraceLatency { .. } => Target::Traces,
+            Self::Metric { .. } => Target::Metrics,
             _ => Target::Server,
         }
     }
@@ -298,6 +319,7 @@ impl Condition {
             | Self::TraceErrors { above, .. }
             | Self::TraceLatency { above, .. } => Some(*above),
             Self::CertDays { below } => Some(*below),
+            Self::Metric { threshold, .. } => Some(*threshold),
             Self::Logs { count, .. } => Some(f64::from(*count)),
             _ => None,
         }
@@ -367,7 +389,33 @@ impl Condition {
     }
 
     pub fn is_below(&self) -> bool {
-        matches!(self, Self::CertDays { .. })
+        matches!(self, Self::CertDays { .. } | Self::Metric { below: true, .. })
+    }
+
+    pub fn metric_query(&self, now_ms: i64) -> Option<MetricQuery> {
+        let Self::Metric {
+            name,
+            aggregation,
+            within_secs,
+            service,
+            filter,
+            group_by,
+            ..
+        } = self
+        else {
+            return None;
+        };
+
+        Some(MetricQuery {
+            name: name.clone(),
+            aggregation: *aggregation,
+            service: service.clone(),
+            filters: filter.as_deref().map(MetricFilter::read_all).unwrap_or_default(),
+            group_by: group_by.as_deref().and_then(GroupBy::read),
+            since: now_ms - i64::from(*within_secs) * 1000,
+            until: now_ms,
+            ..MetricQuery::default()
+        })
     }
 
     pub fn has_aggregation(&self) -> bool {
@@ -656,6 +704,27 @@ pub fn validate_options(
         Condition::TraceLatency { above, .. } if !(1.0..=600_000.0).contains(above) => {
             return invalid("The latency must be between 1 ms and 10 minutes");
         }
+        Condition::Metric { name, .. } if name.trim().is_empty() || name.len() > 255 => {
+            return invalid("Pick a metric");
+        }
+        Condition::Metric { threshold, .. } if !threshold.is_finite() => {
+            return invalid("The threshold must be a number");
+        }
+        Condition::Metric { within_secs, .. }
+            if !(60..=MAX_METRIC_WINDOW_SECS).contains(within_secs) =>
+        {
+            return invalid("The window must be between 1 minute and 1 hour");
+        }
+        Condition::Metric { service, filter, group_by, .. }
+            if [service, filter, group_by]
+                .into_iter()
+                .flatten()
+                .any(|text| text.trim().is_empty() || text.len() > MAX_TRACE_FILTER) =>
+        {
+            return invalid(
+                "Leave the service, filter and grouping out to match any, or give up to 200 characters",
+            );
+        }
         _ => {}
     }
 
@@ -681,6 +750,11 @@ pub fn validate_options(
         (Target::Traces, scope) if *scope != Scope::All => {
             return invalid(
                 "Trace rules cover all services. Pick a service in the rule to narrow it",
+            );
+        }
+        (Target::Metrics, scope) if *scope != Scope::All => {
+            return invalid(
+                "Metric rules cover all services. Pick a service or filter in the rule to narrow it",
             );
         }
         (_, Scope::Label { label }) if label.trim().is_empty() => {
@@ -845,6 +919,26 @@ pub fn describe_condition(condition: &Condition, for_secs: u32) -> String {
             .trace_rule()
             .map(|trace| trace.to_string())
             .unwrap_or_default(),
+        Condition::Metric {
+            name,
+            aggregation,
+            threshold,
+            below,
+            within_secs,
+            group_by,
+            ..
+        } => {
+            let measure = aggregation.map(MetricAggregation::label).unwrap_or("value");
+            let side = if *below { "below" } else { "above" };
+            let mut what = format!(
+                "{name} {measure} {side} {threshold} over {}",
+                format_duration(*within_secs)
+            );
+            if let Some(group_by) = group_by {
+                what.push_str(&format!(" per {group_by}"));
+            }
+            what
+        }
     };
     if for_secs == 0 { what } else { format!("{what} for {}", format_duration(for_secs)) }
 }

@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::{Query, State};
 use daroyan_core::analytics::log_lines::{OTLP_SERVER_ID, OTLP_SERVER_NAME};
+use daroyan_core::analytics::metrics::{METRICS_TARGET_ID, METRICS_TARGET_NAME};
 use daroyan_core::analytics::spans::{TRACES_TARGET_ID, TRACES_TARGET_NAME};
 use daroyan_core::db::ids::AlertRuleId;
 use daroyan_core::db::queries::alerts::{STATUS_FIRING, STATUS_RESOLVED};
@@ -67,6 +68,7 @@ async fn list_alerts(
                 .or_else(|| match alert.server_id.as_deref() {
                     Some(OTLP_SERVER_ID) => Some(OTLP_SERVER_NAME.to_string()),
                     Some(TRACES_TARGET_ID) => Some(TRACES_TARGET_NAME.to_string()),
+                    Some(METRICS_TARGET_ID) => Some(METRICS_TARGET_NAME.to_string()),
                     _ => None,
                 })
                 .or_else(|| {

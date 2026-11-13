@@ -15,6 +15,7 @@ mod integrations;
 mod logs;
 mod mcp_tokens;
 mod members;
+mod metrics;
 pub mod otlp;
 mod overview;
 mod servers;
@@ -51,5 +52,6 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .merge(mcp_tokens::router())
         .merge(members::router())
         .merge(traces::router())
+        .merge(metrics::router())
         .merge(overview::router())
 }

@@ -27,6 +27,7 @@ mod m20261105_000001_ingest_throttled_logs;
 mod m20261106_000001_uptime_confirmation;
 mod m20261107_000001_alert_mute_subjects;
 mod m20261108_000001_server_stars;
+mod m20261111_000001_ingest_rejected_metrics;
 mod parts;
 
 pub struct Migrator;
@@ -61,6 +62,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261106_000001_uptime_confirmation::Migration),
             Box::new(m20261107_000001_alert_mute_subjects::Migration),
             Box::new(m20261108_000001_server_stars::Migration),
+            Box::new(m20261111_000001_ingest_rejected_metrics::Migration),
         ]
     }
 }

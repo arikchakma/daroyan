@@ -837,6 +837,54 @@ export interface paths {
         patch: operations["update_member"];
         trace?: never;
     };
+    "/v1/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_metrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/metrics/{name}/attributes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_metric_attributes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/metrics/{name}/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_metric_query"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/overview/events": {
         parameters: {
             query?: never;
@@ -1314,6 +1362,11 @@ export interface components {
             value: string;
         };
         AlertRuleId: string;
+        AttributeValueCount: {
+            /** Format: int64 */
+            series: number;
+            value: string;
+        };
         BacktestAlertRuleBody: {
             condition: components["schemas"]["Condition"];
             /** Format: int32 */
@@ -1444,6 +1497,19 @@ export interface components {
             route?: string | null;
             service?: string | null;
             spans?: components["schemas"]["TraceSpans"];
+            /** Format: int32 */
+            within_secs: number;
+        } | {
+            aggregation?: components["schemas"]["MetricAggregation"] | null;
+            below?: boolean;
+            filter?: string | null;
+            group_by?: string | null;
+            /** @enum {string} */
+            kind: "metric";
+            name: string;
+            service?: string | null;
+            /** Format: double */
+            threshold: number;
             /** Format: int32 */
             within_secs: number;
         };
@@ -1857,6 +1923,8 @@ export interface components {
             last_used_at?: string | null;
             name: string;
             /** Format: int64 */
+            rejected_metric_points: number;
+            /** Format: int64 */
             throttled_log_records: number;
         };
         IngestTokenBody: {
@@ -2035,6 +2103,28 @@ export interface components {
             role: string;
             user?: components["schemas"]["User"] | null;
         };
+        /** @enum {string} */
+        MetricAggregation: "rate" | "rate_per_minute" | "increase" | "last" | "avg" | "min" | "max" | "p50" | "p90" | "p95" | "p99" | "count_rate";
+        MetricAttribute: {
+            key: string;
+            values: components["schemas"]["AttributeValueCount"][];
+        };
+        MetricExemplar: {
+            /** Format: int64 */
+            at: number;
+            /** Format: int64 */
+            duration_us?: number | null;
+            group?: string | null;
+            span_id?: string | null;
+            span_name?: string | null;
+            trace_id: string;
+        };
+        /** @enum {string} */
+        MetricKind: "sum" | "gauge" | "histogram";
+        MetricLine: {
+            group?: string | null;
+            values: (number | null)[];
+        };
         MetricPoint: {
             /** Format: int64 */
             at: number;
@@ -2058,6 +2148,31 @@ export interface components {
             tcp_conn_count: number;
             /** Format: double */
             udp_conn_count: number;
+        };
+        MetricResult: {
+            aggregation: components["schemas"]["MetricAggregation"];
+            exemplars: components["schemas"]["MetricExemplar"][];
+            is_monotonic: boolean;
+            is_truncated: boolean;
+            kind: components["schemas"]["MetricKind"];
+            name: string;
+            series: components["schemas"]["MetricLine"][];
+            /** Format: int64 */
+            step_ms: number;
+            times: number[];
+            unit: string;
+        };
+        MetricSummary: {
+            description: string;
+            is_monotonic: boolean;
+            kind: components["schemas"]["MetricKind"];
+            /** Format: int64 */
+            last_seen_at: number;
+            name: string;
+            /** Format: int64 */
+            series: number;
+            services: string[];
+            unit: string;
         };
         NewIncidentBody: components["schemas"]["IncidentBody"] & {
             alert_id?: string | null;
@@ -4285,6 +4400,87 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_metrics: {
+        parameters: {
+            query?: {
+                /** @description Only metrics seen at or after this time in ms. Defaults to the last 30 days */
+                since?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricSummary"][];
+                };
+            };
+        };
+    };
+    get_metric_attributes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Metric name, like http.server.request.duration */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricAttribute"][];
+                };
+            };
+        };
+    };
+    get_metric_query: {
+        parameters: {
+            query?: {
+                /** @description Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg, min, max or count_rate. Defaults to rate_per_minute, last or p95 */
+                agg?: components["schemas"]["MetricAggregation"];
+                service?: string;
+                server_id?: string;
+                /** @description Attribute filters separated by commas, like route=/checkout,status!=200 */
+                filter?: string;
+                /** @description service, server or an attribute key. At most 50 groups, largest first */
+                group_by?: string;
+                /** @description Time in ms. Defaults to the last hour */
+                since?: number;
+                /** @description Time in ms. Defaults to now */
+                until?: number;
+                /** @description Bucket size in ms. Defaults to about 120 buckets. A step as long as the range returns one bucket */
+                step_ms?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Metric name, like http.server.request.duration */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricResult"];
+                };
             };
         };
     };

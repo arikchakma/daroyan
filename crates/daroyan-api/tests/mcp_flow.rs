@@ -70,6 +70,7 @@ async fn serves_tools_over_mcp_with_a_bearer_token() {
         retention_days: 30,
         log_retention_days: 7,
         otlp_log_budget: 1024 * 1024,
+        metrics: daroyan_core::config::MetricSettings::default(),
         backup_dir: None,
         trusted_proxies: Vec::new(),
         client_ip_header: "cf-connecting-ip".to_string(),
@@ -152,7 +153,7 @@ async fn serves_tools_over_mcp_with_a_bearer_token() {
 
     let listed = rpc(&anonymous, &url, &token, "tools/list", json!({})).await;
     let tools = listed["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 53);
+    assert_eq!(tools.len(), 56);
     let find =
         |name: &str| tools.iter().find(|tool| tool["name"] == name).unwrap().clone();
     assert!(

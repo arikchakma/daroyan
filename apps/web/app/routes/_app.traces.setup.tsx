@@ -101,7 +101,7 @@ OTEL_RESOURCE_ATTRIBUTES=host.name=<server hostname>`;
           <div className="flex flex-col gap-1">
             <h1 className="text-title-page font-semibold text-text-primary">Set Up Traces</h1>
             <p className="text-body text-text-secondary">
-              Send traces and logs from your services with OpenTelemetry. Errors inside them show up in Issues, and
+              Send traces, logs and metrics from your services with OpenTelemetry. Errors inside them show up in Issues, and
               each log line links to its trace.
             </p>
           </div>
@@ -126,7 +126,7 @@ OTEL_RESOURCE_ATTRIBUTES=host.name=<server hostname>`;
 
           <Step
             title="2. Point the Exporter at Daroyan"
-            description="Set these on the service. The same endpoint takes traces and logs. The token is shown once, so copy it before you leave."
+            description="Set these on the service. The same endpoint takes traces, logs and metrics. The token is shown once, so copy it before you leave."
           >
             <CodeBlock label="Exporter variables" code={env} language="shellscript" />
             {!token &&
@@ -160,6 +160,7 @@ OTEL_RESOURCE_ATTRIBUTES=host.name=<server hostname>`;
             <RailRow label="Issues">Errors grouped by cause</RailRow>
             <RailRow label="Slow endpoints">p95 per route</RailRow>
             <RailRow label="Logs">Linked to their trace</RailRow>
+            <RailRow label="Metrics">Counters, gauges and histograms</RailRow>
           </RailSection>
           <RailSection title="Works With">
             <RailRow label="SDK">Any OpenTelemetry SDK</RailRow>

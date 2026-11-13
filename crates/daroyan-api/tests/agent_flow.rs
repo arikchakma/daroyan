@@ -54,6 +54,7 @@ async fn enrolls_reports_and_runs_commands() {
         retention_days: 30,
         log_retention_days: 7,
         otlp_log_budget: 1024 * 1024,
+        metrics: daroyan_core::config::MetricSettings::default(),
         backup_dir: None,
         trusted_proxies: Vec::new(),
         client_ip_header: "cf-connecting-ip".to_string(),

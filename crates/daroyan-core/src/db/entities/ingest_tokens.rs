@@ -17,6 +17,7 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub last_used_at: Option<DateTimeUtc>,
     pub throttled_log_records: i64,
+    pub rejected_metric_points: i64,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

@@ -1977,6 +1977,167 @@
         }
       }
     },
+    "/v1/metrics": {
+      "get": {
+        "operationId": "get_metrics",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only metrics seen at or after this time in ms. Defaults to the last 30 days",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MetricSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/metrics/{name}/attributes": {
+      "get": {
+        "operationId": "get_metric_attributes",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Metric name, like http.server.request.duration",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MetricAttribute"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/metrics/{name}/query": {
+      "get": {
+        "operationId": "get_metric_query",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Metric name, like http.server.request.duration",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agg",
+            "in": "query",
+            "description": "Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg, min, max or count_rate. Defaults to rate_per_minute, last or p95",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MetricAggregation"
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "server_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Attribute filters separated by commas, like route=/checkout,status!=200",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "description": "service, server or an attribute key. At most 50 groups, largest first",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Time in ms. Defaults to the last hour",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Time in ms. Defaults to now",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "step_ms",
+            "in": "query",
+            "description": "Bucket size in ms. Defaults to about 120 buckets. A step as long as the range returns one bucket",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/overview/events": {
       "get": {
         "description": "What happened across the fleet in the last 24 hours: alerts firing and resolving, uptime checks going down and up, crons failing and recovering, processes exiting and restarting, and agents going offline and online. Counts come in 30 minute buckets. Times are in ms",
@@ -3234,6 +3395,23 @@
       "AlertRuleId": {
         "type": "string"
       },
+      "AttributeValueCount": {
+        "type": "object",
+        "required": [
+          "value",
+          "series"
+        ],
+        "properties": {
+          "series": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "BacktestAlertRuleBody": {
         "type": "object",
         "required": [
@@ -3744,6 +3922,66 @@
               },
               "spans": {
                 "$ref": "#/components/schemas/TraceSpans"
+              },
+              "within_secs": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "threshold",
+              "within_secs",
+              "kind"
+            ],
+            "properties": {
+              "aggregation": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MetricAggregation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "below": {
+                "type": "boolean"
+              },
+              "filter": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "group_by": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "metric"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "service": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "threshold": {
+                "type": "number",
+                "format": "double"
               },
               "within_secs": {
                 "type": "integer",
@@ -5278,7 +5516,8 @@
           "name",
           "hint",
           "created_at",
-          "throttled_log_records"
+          "throttled_log_records",
+          "rejected_metric_points"
         ],
         "properties": {
           "created_at": {
@@ -5300,6 +5539,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "rejected_metric_points": {
+            "type": "integer",
+            "format": "int64"
           },
           "throttled_log_records": {
             "type": "integer",
@@ -5975,6 +6218,114 @@
           }
         }
       },
+      "MetricAggregation": {
+        "type": "string",
+        "enum": [
+          "rate",
+          "rate_per_minute",
+          "increase",
+          "last",
+          "avg",
+          "min",
+          "max",
+          "p50",
+          "p90",
+          "p95",
+          "p99",
+          "count_rate"
+        ]
+      },
+      "MetricAttribute": {
+        "type": "object",
+        "required": [
+          "key",
+          "values"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttributeValueCount"
+            }
+          }
+        }
+      },
+      "MetricExemplar": {
+        "type": "object",
+        "required": [
+          "at",
+          "trace_id"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "duration_us": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "span_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "MetricKind": {
+        "type": "string",
+        "enum": [
+          "sum",
+          "gauge",
+          "histogram"
+        ]
+      },
+      "MetricLine": {
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          }
+        }
+      },
       "MetricPoint": {
         "type": "object",
         "required": [
@@ -6034,6 +6385,109 @@
           "udp_conn_count": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "MetricResult": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "is_monotonic",
+          "unit",
+          "aggregation",
+          "step_ms",
+          "times",
+          "series",
+          "is_truncated",
+          "exemplars"
+        ],
+        "properties": {
+          "aggregation": {
+            "$ref": "#/components/schemas/MetricAggregation"
+          },
+          "exemplars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricExemplar"
+            }
+          },
+          "is_monotonic": {
+            "type": "boolean"
+          },
+          "is_truncated": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MetricKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricLine"
+            }
+          },
+          "step_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "times": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
+      "MetricSummary": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "is_monotonic",
+          "unit",
+          "description",
+          "services",
+          "series",
+          "last_seen_at"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "is_monotonic": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MetricKind"
+          },
+          "last_seen_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "series": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unit": {
+            "type": "string"
           }
         }
       },

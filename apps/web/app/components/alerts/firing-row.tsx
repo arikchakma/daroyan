@@ -8,6 +8,7 @@ import { describeFiring, describeMuteEnd, getAlertTargetPath } from '~/utils/ale
 import { cn } from '~/utils/classname';
 import { formatClock, joinNames } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
+import { METRICS_TARGET_ID } from '~/utils/metrics';
 import { TRACES_TARGET_ID } from '~/utils/traces';
 
 function getOpenAction(alert: Schemas['Alert']): { icon: IconName; label: string } {
@@ -22,6 +23,9 @@ function getOpenAction(alert: Schemas['Alert']): { icon: IconName; label: string
   }
   if (alert.server_id === TRACES_TARGET_ID) {
     return { icon: 'layers', label: 'Open Traces' };
+  }
+  if (alert.server_id === METRICS_TARGET_ID) {
+    return { icon: 'chart-line', label: 'Open Metrics' };
   }
   return { icon: 'server', label: 'Open Server' };
 }
