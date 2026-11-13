@@ -9,6 +9,7 @@ import { Sheet } from '~/components/ui/sheet';
 import type { LogRow } from '~/hooks/use-logs-table';
 import { cn } from '~/utils/classname';
 import { formatLogClock } from '~/utils/format';
+import type { QueryTerm } from '~/utils/log-search';
 
 type LogSheetProps = {
   line?: LogRow;
@@ -16,10 +17,11 @@ type LogSheetProps = {
   canGoNext: boolean;
   onNavigate: (step: -1 | 1) => void;
   onClose: () => void;
+  onFilter?: (term: QueryTerm) => void;
 };
 
 export function LogSheet(props: LogSheetProps) {
-  const { line, canGoPrevious, canGoNext, onNavigate, onClose } = props;
+  const { line, canGoPrevious, canGoNext, onNavigate, onClose, onFilter } = props;
 
   const panel = useContext(PanelContext);
 
@@ -65,7 +67,7 @@ export function LogSheet(props: LogSheetProps) {
                 </Sheet.Close>
               </div>
             </div>
-            {line && <LogBody key={line.id} line={line} />}
+            {line && <LogBody key={line.id} line={line} onFilter={onFilter} />}
           </Sheet.Popup>
         </Sheet.Viewport>
       </Sheet.Portal>

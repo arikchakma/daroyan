@@ -6,10 +6,9 @@ import { ReactNodeViewRenderer } from '@tiptap/react';
 
 import {
   FILTER_TOKEN_NODE,
-  getQuery,
   isFilterSearch,
   isFilterToken,
-  readDoc,
+  isToken,
 } from '~/utils/filter';
 import type {
   FilterRange,
@@ -31,7 +30,6 @@ declare module '@tiptap/core' {
       syncFilterTokens: (
         filters: Record<string, SearchFilterValue | undefined>
       ) => ReturnType;
-      setFilterQuery: (query: string) => ReturnType;
       clearFilterSearch: () => ReturnType;
       placeFilterCaret: (key: string, side: 'before' | 'after') => ReturnType;
     };
@@ -49,7 +47,13 @@ function getTokens(doc: ProseMirrorNode) {
 }
 
 function findToken(doc: ProseMirrorNode, key: string) {
-  return getTokens(doc).find(({ node }) => node.attrs.key === key);
+  let token: { node: ProseMirrorNode; pos: number } | undefined;
+  doc.forEach((node, pos) => {
+    if (isToken(node) && node.attrs.key === key) {
+      token = { node, pos };
+    }
+  });
+  return token;
 }
 
 function deleteText(tr: Transaction, isSearch: boolean) {
@@ -69,7 +73,7 @@ function moveCaretToEnd(tr: Transaction) {
   return tr.setSelection(TextSelection.create(tr.doc, tr.doc.content.size));
 }
 
-function markAsSync(tr: Transaction) {
+export function markAsSync(tr: Transaction) {
   return moveCaretToEnd(tr)
     .setMeta('preventUpdate', true)
     .setMeta('addToHistory', false);
@@ -174,22 +178,6 @@ export const FilterToken = Node.create({
           tr.insert(tr.doc.content.size, missing);
           if (!tr.docChanged) {
             return false;
-          }
-
-          markAsSync(tr);
-          return true;
-        },
-
-      setFilterQuery:
-        (query) =>
-        ({ tr }) => {
-          if (readDoc(tr.doc).query === getQuery([query])) {
-            return false;
-          }
-
-          deleteText(tr, false);
-          if (query) {
-            tr.insert(tr.doc.content.size, tr.doc.type.schema.text(query));
           }
 
           markAsSync(tr);

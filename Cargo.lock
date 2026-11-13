@@ -1146,6 +1146,7 @@ dependencies = [
  "nix",
  "opentelemetry-proto",
  "prost",
+ "regex",
  "reqwest",
  "sea-orm",
  "serde",

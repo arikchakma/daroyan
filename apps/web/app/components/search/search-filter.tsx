@@ -9,6 +9,9 @@ import {
   FILTER_SEARCH_MARK,
   getFilterChanges,
   getFilterItems,
+  getQueryOperatorItems,
+  getTextError,
+  hasOpenRegex,
   isFilterSearch,
   isFilterToken,
   readCaret,
@@ -25,6 +28,12 @@ import type {
   SearchFilterField,
   SearchFilterValue,
 } from '~/utils/filter';
+import {
+  canSetOperator,
+  getEmptyText,
+  getOperator,
+  setOperator,
+} from '~/utils/log-search';
 
 import { FilterList } from './filter-list';
 import { TokenContext } from './filter-token-context';
@@ -55,15 +64,18 @@ export function SearchFilter(props: SearchFilterProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<number | undefined>(undefined);
+  const sentQueryRef = useRef<string | null>(null);
   const listId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [editing, setEditing] = useState<FilterEditing | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [isPicking, setIsPicking] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [{ tokens, query: docQuery, search }, setDoc] = useState<FilterDoc>({
-    tokens: [],
-    query: '',
+  const [{ tokens, queryTokens, query: docQuery, search }, setDoc] =
+    useState<FilterDoc>({
+      tokens: [],
+      queryTokens: [],
+      query: '',
     search: '',
   });
   const [caret, setCaret] = useState<FilterCaret>({ text: '', from: 0, to: 0 });
@@ -73,20 +85,33 @@ export function SearchFilter(props: SearchFilterProps) {
   const value: SearchFilterValue = tokens.find(
     (token) => token.key === editing?.key
   ) ?? { values: [], negate: false };
+  const queryToken =
+    queryTokens.find((token) => token.key === editing?.key) ?? null;
+  const operator = queryToken ? getOperator(queryToken.term) : null;
   const text = getListText();
-  const items = getFilterItems({
-    fields,
-    usedKeys: tokens.map((token) => token.key),
-    field,
-    part,
-    text,
-  }).filter(
-    (item) => !((field?.isLoading || field?.isFailed) && item.kind === 'value')
-  );
+  const isTextList = !editing && !isPicking;
+  const error = isTextList ? getTextError(text) : null;
+  const hint =
+    isTextList && hasOpenRegex(text)
+      ? 'Searching waits until the regex ends with /'
+      : null;
+  const items = queryToken
+    ? getQueryOperatorItems(queryToken.term)
+    : getFilterItems({
+        fields,
+        usedKeys: tokens.map((token) => token.key),
+        field,
+        part,
+        text,
+      }).filter(
+        (item) =>
+          !((field?.isLoading || field?.isFailed) && item.kind === 'value')
+      );
   const isEmpty = !!field && part === 'values' && items[0]?.kind !== 'value';
-  const isListVisible = isOpen && (items.length > 0 || isEmpty);
+  const isListVisible =
+    isOpen && (items.length > 0 || isEmpty || !!error || !!hint);
 
-  // Typing in the field list clears the highlight. Elsewhere it moves to the first item, but a value that was just picked keeps it.
+  // Typing in the field list highlights a search option when there is one, or nothing. Elsewhere the highlight moves to the first item, but a value that was just picked keeps it.
   const mode = editing ? `${editing.key}:${part}` : 'fields';
   const [previous, setPrevious] = useState({ mode, text });
   if (previous.mode !== mode || previous.text !== text) {
@@ -95,7 +120,14 @@ export function SearchFilter(props: SearchFilterProps) {
       previous.mode === mode &&
       !text &&
       items.some((item) => item.key === activeKey);
-    setActiveKey(!field ? null : keep ? activeKey : (items[0]?.key ?? null));
+    const firstTerms = items[0]?.kind === 'terms' ? items[0].key : null;
+    const checkedOperator = operator ? `query-operator:${operator}` : null;
+    const isPicker = !field && !queryToken;
+    setActiveKey(
+      isPicker
+        ? firstTerms
+        : (checkedOperator ?? (keep ? activeKey : (items[0]?.key ?? null)))
+    );
   }
   const activeIndex = items.findIndex((item) => item.key === activeKey);
   const isAddVisible =
@@ -109,7 +141,7 @@ export function SearchFilter(props: SearchFilterProps) {
     editorProps: {
       attributes: {
         class:
-          'min-w-0 flex-1 overflow-hidden py-1 text-body leading-5 whitespace-pre text-text-primary outline-none',
+          'min-w-0 flex-1 scroll-fade-x scrollbar-none overflow-x-auto py-1 text-body leading-5 whitespace-pre! text-text-primary outline-none [&_.react-renderer]:whitespace-nowrap!',
         role: 'combobox',
         'aria-label': label,
         'aria-autocomplete': 'list',
@@ -136,7 +168,7 @@ export function SearchFilter(props: SearchFilterProps) {
       },
       handleClick: (_view, _pos, event) => {
         const target = event.target as Element | null;
-        if (!target?.closest('[data-filter-token]')) {
+        if (!target?.closest('[data-token-key]')) {
           stopEditing();
         }
         setIsOpen(true);
@@ -167,7 +199,10 @@ export function SearchFilter(props: SearchFilterProps) {
         onFilterChange(changes);
       }
 
-      if (after.query !== before.query) {
+      const isQueryReady =
+        !getTextError(after.query) && !hasOpenRegex(after.query);
+      if (after.query !== before.query && isQueryReady) {
+        sentQueryRef.current = after.query;
         onQueryChange(after.query);
       }
       if (transaction.before.textContent !== current.state.doc.textContent) {
@@ -183,7 +218,10 @@ export function SearchFilter(props: SearchFilterProps) {
           .find((item) => item.key === editing.key)
           ?.onSearchChange?.(after.search);
       }
-      if (!after.tokens.some((token) => token.key === editing.key)) {
+      const isEditedTokenGone = ![...after.tokens, ...after.queryTokens].some(
+        (token) => token.key === editing.key
+      );
+      if (isEditedTokenGone) {
         setEditing(null);
       }
     },
@@ -195,8 +233,14 @@ export function SearchFilter(props: SearchFilterProps) {
     editor?.commands.syncFilterTokens(JSON.parse(filtersKey));
   }, [editor, filtersKey]);
 
+  // The bar sends its query up and gets it back a render later, while typing may have moved on. Only a query from outside the bar rebuilds the pills.
   useEffect(() => {
-    editor?.commands.setFilterQuery(query);
+    if (!editor || query === sentQueryRef.current) {
+      return;
+    }
+
+    sentQueryRef.current = query;
+    editor.commands.setFilterQuery(query);
   }, [editor, query]);
 
   useEffect(() => {
@@ -223,14 +267,15 @@ export function SearchFilter(props: SearchFilterProps) {
       return;
     }
 
-    const index = tokens.findIndex((token) => token.key === editing?.key);
-    const token = root.querySelectorAll('[data-filter-token]')[index];
+    const token = editing
+      ? root.querySelector(`[data-token-key="${CSS.escape(editing.key)}"]`)
+      : null;
     const pos = isPicking ? editor.state.doc.content.size : caret.from;
     const left = token
       ? token.getBoundingClientRect().left
       : editor.view.coordsAtPos(pos).left;
     list.style.left = `${left - root.getBoundingClientRect().left - 4}px`;
-  }, [editor, isListVisible, editing?.key, tokens, isPicking, caret.from]);
+  }, [editor, isListVisible, editing, tokens, queryTokens, isPicking, caret.from]);
 
   function getListText() {
     if (editing) {
@@ -252,7 +297,7 @@ export function SearchFilter(props: SearchFilterProps) {
   }
 
   function startEditing(options: EditOptions) {
-    if (editing && editing.key !== options.key && !value.values.length) {
+    if (editing && editing.key !== options.key && field && !value.values.length) {
       editor?.commands.removeFilterToken(editing.key);
     }
 
@@ -265,6 +310,7 @@ export function SearchFilter(props: SearchFilterProps) {
       ?.chain()
       .clearFilterSearch()
       .placeFilterCaret(options.key, 'after')
+      .scrollIntoView()
       .focus()
       .run();
   }
@@ -275,7 +321,7 @@ export function SearchFilter(props: SearchFilterProps) {
     }
 
     const chain = editor?.chain().clearFilterSearch();
-    if (!value.values.length) {
+    if (field && !value.values.length) {
       chain?.removeFilterToken(editing.key);
     }
     chain?.run();
@@ -288,7 +334,37 @@ export function SearchFilter(props: SearchFilterProps) {
     setIsOpen(options.isOpen);
   }
 
+  function editAsText(key: string, text?: string) {
+    setEditing(null);
+    setIsOpen(true);
+    editor?.chain().clearFilterSearch().editQueryToken(key, text).focus().run();
+  }
+
   function choose(item: FilterItem) {
+    if (item.kind === 'terms') {
+      editor?.chain().insertQueryTokens(item.terms, caret).focus().run();
+      requestAnimationFrame(() => editor?.commands.scrollIntoView());
+      setIsOpen(false);
+      return;
+    }
+    if (item.kind === 'query-operator') {
+      if (!queryToken) {
+        return;
+      }
+
+      const { key, term } = queryToken;
+      if (!canSetOperator(term, item.operator)) {
+        editAsText(key, getEmptyText(term, item.operator));
+        return;
+      }
+
+      editor?.commands.updateQueryToken({
+        key,
+        term: setOperator(term, item.operator),
+      });
+      setEditing(null);
+      return;
+    }
     if (item.kind === 'field') {
       const range = isPicking ? undefined : caret;
       editor?.commands.insertFilterToken(
@@ -350,6 +426,7 @@ export function SearchFilter(props: SearchFilterProps) {
     editor
       ?.chain()
       .placeFilterCaret(key, step < 0 ? 'before' : 'after')
+      .scrollIntoView()
       .focus()
       .run();
     setIsOpen(true);
@@ -394,6 +471,10 @@ export function SearchFilter(props: SearchFilterProps) {
         if (!editor || !empty || event.altKey || event.metaKey) {
           return false;
         }
+        if (queryToken) {
+          setEditing(null);
+          return false;
+        }
 
         const step = event.key === 'ArrowLeft' ? -1 : 1;
         const node = step < 0 ? $from.nodeBefore : $from.nodeAfter;
@@ -401,7 +482,7 @@ export function SearchFilter(props: SearchFilterProps) {
         // The editor moves the caret itself, so the next key sees where it is.
         if (editing) {
           if (isFilterSearch(node)) {
-            editor.commands.setTextSelection(from + step);
+            editor.chain().setTextSelection(from + step).scrollIntoView().run();
             return true;
           }
 
@@ -425,7 +506,7 @@ export function SearchFilter(props: SearchFilterProps) {
             part: 'values',
           });
         } else if (node) {
-          editor.commands.setTextSelection(from + step);
+          editor.chain().setTextSelection(from + step).scrollIntoView().run();
         }
         return true;
       }
@@ -440,6 +521,10 @@ export function SearchFilter(props: SearchFilterProps) {
         if (!editing) {
           setIsOpen(false);
           setIsPicking(false);
+          return true;
+        }
+        if (queryToken) {
+          setEditing(null);
           return true;
         }
 
@@ -510,6 +595,7 @@ export function SearchFilter(props: SearchFilterProps) {
         fields,
         editing,
         onEdit: startEditing,
+        onEditText: editAsText,
         onRemove: (key) => {
           editor?.commands.removeFilterToken(key);
           if (key === editing?.key) {
@@ -556,6 +642,9 @@ export function SearchFilter(props: SearchFilterProps) {
             field={field}
             part={part}
             value={value}
+            operator={operator}
+            error={error}
+            hint={hint}
             text={text}
             isEmpty={isEmpty}
             onHover={setActiveKey}

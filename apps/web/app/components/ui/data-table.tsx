@@ -13,6 +13,7 @@ type DataTableProps<TData extends object> = {
   label: string;
   variant?: 'page' | 'card';
   size?: 'sm' | 'md' | 'lg';
+  verticalAlign?: 'middle' | 'top';
   isLoading?: boolean;
   isAllSelected?: boolean;
   bulkBar?: ReactNode;
@@ -24,6 +25,7 @@ export function DataTable<TData extends object>(props: DataTableProps<TData>) {
     label,
     variant = 'page',
     size = 'md',
+    verticalAlign = 'middle',
     isLoading = false,
     isAllSelected = false,
     bulkBar,
@@ -102,6 +104,7 @@ export function DataTable<TData extends object>(props: DataTableProps<TData>) {
                     column={column}
                     variant={variant}
                     size={size}
+                    verticalAlign={verticalAlign}
                   >
                     <CellSkeleton
                       shape={column.columnDef.meta?.skeleton ?? 'text'}
@@ -146,6 +149,7 @@ export function DataTable<TData extends object>(props: DataTableProps<TData>) {
                       column={cell.column}
                       variant={variant}
                       size={size}
+                      verticalAlign={verticalAlign}
                     >
                       <table.FlexRender cell={cell} />
                     </DataTableCell>

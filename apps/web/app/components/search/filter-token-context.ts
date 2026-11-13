@@ -10,6 +10,7 @@ export type TokenContextValue = {
   fields: SearchFilterField[];
   editing: FilterEditing | null;
   onEdit: (options: EditOptions) => void;
+  onEditText: (key: string) => void;
   onRemove: (key: string) => void;
 };
 

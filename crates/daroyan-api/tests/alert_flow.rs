@@ -104,8 +104,10 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     let slack_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let slack_url = format!("http://{}", slack_listener.local_addr().unwrap());
     let slack_updates = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let slack_reactions = Arc::new(Mutex::new(Vec::<Value>::new()));
     let slack_store = Arc::clone(&slack_posts);
     let update_store = Arc::clone(&slack_updates);
+    let reaction_store = Arc::clone(&slack_reactions);
 
     tokio::spawn(async move {
         let app = Router::new()
@@ -122,6 +124,13 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
                 "/api/chat.update",
                 post(move |Json(body): Json<Value>| async move {
                     update_store.lock().unwrap().push(body);
+                    Json(json!({ "ok": true }))
+                }),
+            )
+            .route(
+                "/api/reactions.add",
+                post(move |Json(body): Json<Value>| async move {
+                    reaction_store.lock().unwrap().push(body);
                     Json(json!({ "ok": true }))
                 }),
             );
@@ -326,6 +335,7 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
         events().len() == 3
             && slack_count() == 2
             && slack_updates.lock().unwrap().len() == 1
+            && slack_reactions.lock().unwrap().len() == 1
     })
     .await;
     assert_eq!(events(), ["test", "alert.firing", "alert.resolved"]);
@@ -340,17 +350,30 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     );
     assert_eq!(posts[0]["blocks"][0]["text"]["text"], "*🔴 Critical: High CPU*");
     assert_eq!(posts[1]["thread_ts"], "1730000000.000001");
-    assert_eq!(posts[1]["reply_broadcast"], true);
+    assert_eq!(posts[1].get("reply_broadcast"), None);
     assert_eq!(posts[1]["blocks"][0]["text"]["text"], "*✅ Resolved: High CPU*");
 
     let update = slack_updates.lock().unwrap()[0].clone();
     assert_eq!(update["ts"], "1730000000.000001");
-    assert_eq!(update["blocks"][0]["text"]["text"], "*✅ Resolved: High CPU*");
-    assert_eq!(update["attachments"][0]["color"], "#1F8A4C");
+    assert_eq!(update["blocks"][0]["text"]["text"], "*🔴 Critical: High CPU*");
+    assert_eq!(update["attachments"][0]["color"], "#D93025");
     assert_eq!(
         update["attachments"][0]["blocks"][0],
         posts[0]["attachments"][0]["blocks"][0]
     );
+    let resolved_line = update["attachments"][0]["blocks"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["elements"][0]["text"]
+        .clone();
+    assert!(resolved_line.as_str().unwrap().starts_with("✅ "));
+    assert!(resolved_line.as_str().unwrap().contains("is back to normal after"));
+
+    let reaction = slack_reactions.lock().unwrap()[0].clone();
+    assert_eq!(reaction["channel"], "C1");
+    assert_eq!(reaction["timestamp"], "1730000000.000001");
+    assert_eq!(reaction["name"], "white_check_mark");
 
     let log_rule: Value = http
         .post(format!("{base}/v1/alert-rules"))

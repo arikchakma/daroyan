@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import { Icon } from '~/components/icons/icon';
 import { cn } from '~/utils/classname';
 
@@ -10,6 +12,7 @@ type FilterOptionProps = {
   isSelected: boolean;
   onHover: () => void;
   onSelect: () => void;
+  children?: ReactNode;
 };
 
 export function FilterOption(props: FilterOptionProps) {
@@ -22,6 +25,7 @@ export function FilterOption(props: FilterOptionProps) {
     isSelected,
     onHover,
     onSelect,
+    children,
   } = props;
 
   return (
@@ -53,7 +57,7 @@ export function FilterOption(props: FilterOptionProps) {
           {isChecked && <Icon name="check" />}
         </span>
       )}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate">{children ?? label}</span>
       {isActive && (
         <span
           aria-hidden="true"
