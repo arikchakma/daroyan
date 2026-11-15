@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use duckdb::{Config, Connection};
+use nix::sys::statvfs::statvfs;
 
 const STORAGE_VERSION: &str = "v1.2.0";
 const LEGACY_MIGRATIONS: usize = 11;
+const UPGRADE_SETTINGS: &str = "SET memory_limit = '512MB'; SET threads = 2;";
 const KEPT_RAW: &str =
     "CASE WHEN json_valid(raw) AND starts_with(ltrim(raw), '{') THEN NULL ELSE raw END";
 
@@ -61,22 +63,50 @@ fn is_legacy(conn: &Connection) -> duckdb::Result<bool> {
 }
 
 fn upgrade_storage(path: &Path) -> anyhow::Result<()> {
-    let packed = suffixed(path, ".upgrade");
+    let path = fs::canonicalize(path).context("resolve the DuckDB file path")?;
+    let packed = suffixed(&path, ".upgrade");
     let packed_wal = suffixed(&packed, ".wal");
-    for stale in [&packed, &packed_wal] {
-        if stale.exists() {
-            fs::remove_file(stale).context("remove an unfinished storage upgrade")?;
-        }
-    }
+    remove_unfinished(&packed, &packed_wal)?;
 
-    let before = fs::metadata(path).context("read the DuckDB file size")?.len();
+    let before = fs::metadata(&path).context("read the DuckDB file size")?.len();
+    let free = read_free_bytes(&path)?;
+    anyhow::ensure!(
+        free >= before,
+        "the one-time DuckDB storage upgrade needs {} MB of free disk space next to {}, and only {} MB is free",
+        before / 1_048_576,
+        path.display(),
+        free / 1_048_576
+    );
+
     tracing::info!(
         size_mb = before / 1_048_576,
         "upgrading the DuckDB file to compressed storage, this runs once"
     );
+    if let Err(error) = copy_into(&path, &packed) {
+        remove_unfinished(&packed, &packed_wal).ok();
+        return Err(error);
+    }
 
-    let conn = open(&packed)?;
+    let wal = suffixed(&path, ".wal");
+    if wal.exists() {
+        fs::remove_file(&wal).context("remove the old DuckDB write-ahead log")?;
+    }
+    fs::rename(&packed, &path).context("replace the DuckDB file")?;
+
+    let after = fs::metadata(&path).context("read the DuckDB file size")?.len();
+    tracing::info!(
+        before_mb = before / 1_048_576,
+        after_mb = after / 1_048_576,
+        "upgraded the DuckDB file"
+    );
+    Ok(())
+}
+
+fn copy_into(path: &Path, packed: &Path) -> anyhow::Result<()> {
+    let conn = open(packed)?;
+    conn.execute_batch(UPGRADE_SETTINGS)?;
     run_migrations(&conn, &MIGRATIONS)?;
+
     let source = path.to_string_lossy().replace('\'', "''");
     conn.execute_batch(&format!("ATTACH '{source}' AS upgrade_source (READ_ONLY)"))?;
     for table in list_legacy_tables(&conn)? {
@@ -86,19 +116,25 @@ fn upgrade_storage(path: &Path) -> anyhow::Result<()> {
     conn.execute_batch("DETACH upgrade_source; CHECKPOINT")?;
     conn.close().map_err(|(_, error)| error)?;
 
-    let wal = suffixed(path, ".wal");
-    if wal.exists() {
-        fs::remove_file(&wal).context("remove the old DuckDB write-ahead log")?;
-    }
-    fs::rename(&packed, path).context("replace the DuckDB file")?;
-
-    let after = fs::metadata(path).context("read the DuckDB file size")?.len();
-    tracing::info!(
-        before_mb = before / 1_048_576,
-        after_mb = after / 1_048_576,
-        "upgraded the DuckDB file"
-    );
     Ok(())
+}
+
+fn remove_unfinished(packed: &Path, packed_wal: &Path) -> anyhow::Result<()> {
+    for stale in [packed, packed_wal] {
+        if stale.exists() {
+            fs::remove_file(stale).context("remove an unfinished storage upgrade")?;
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::useless_conversion)]
+fn read_free_bytes(path: &Path) -> anyhow::Result<u64> {
+    let dir = path.parent().context("find the DuckDB file's folder")?;
+    let stats = statvfs(dir).context("read the free disk space")?;
+
+    Ok(u64::from(stats.blocks_available()) * u64::from(stats.fragment_size()))
 }
 
 fn list_legacy_tables(conn: &Connection) -> duckdb::Result<Vec<String>> {
@@ -231,12 +267,13 @@ mod tests {
         fill_logs(&legacy);
         drop(legacy);
         let before = fs::metadata(&path).unwrap().len();
+        fs::write(dir.join("legacy.duckdb.upgrade"), "unfinished").unwrap();
 
         let conn = open_duckdb(&path).unwrap();
         assert!(!is_legacy(&conn).unwrap());
         let after = fs::metadata(&path).unwrap().len();
         assert!(after < before, "{after} >= {before}");
-        assert!(!dir.join("daroyan.duckdb.upgrade").exists());
+        assert!(!dir.join("legacy.duckdb.upgrade").exists());
 
         let (lines, with_raw): (i64, i64) = conn
             .query_row("SELECT count(*), count(raw) FROM log_lines", [], |row| {
@@ -265,6 +302,33 @@ mod tests {
             .unwrap();
         assert_eq!(lines, 40_101);
         assert_eq!(fs::metadata(&path).unwrap().len(), size);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn leaves_the_old_file_when_the_upgrade_fails() {
+        let dir = scratch("failed");
+        let path = dir.join("daroyan.duckdb");
+        let legacy = Connection::open(&path).unwrap();
+        run_migrations(&legacy, &MIGRATIONS[..LEGACY_MIGRATIONS]).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE stray (value INTEGER); \
+                 INSERT INTO server_events VALUES ('srv_1', 5, 'agent_started', '{}');",
+            )
+            .unwrap();
+        drop(legacy);
+
+        assert!(open_duckdb(&path).is_err());
+        assert!(!dir.join("daroyan.duckdb.upgrade").exists());
+
+        let legacy = Connection::open(&path).unwrap();
+        assert!(is_legacy(&legacy).unwrap());
+        let events: i64 = legacy
+            .query_row("SELECT count(*) FROM server_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events, 1);
 
         fs::remove_dir_all(dir).ok();
     }

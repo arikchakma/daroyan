@@ -48,6 +48,7 @@ impl Config {
                 .map(|value| value.parse::<u64>())
                 .transpose()
                 .map_err(|_| anyhow::anyhow!("DUCKDB_MAX_SIZE_GB must be a number"))?
+                .filter(|gigabytes| *gigabytes > 0)
                 .map(|gigabytes| gigabytes * 1024 * 1024 * 1024),
             trusted_proxies: parse_trusted_proxies(
                 &env::var("TRUSTED_PROXIES")

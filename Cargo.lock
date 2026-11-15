@@ -1205,6 +1205,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "duckdb",
+ "nix",
  "sea-orm-migration",
  "serde_json",
  "tokio",

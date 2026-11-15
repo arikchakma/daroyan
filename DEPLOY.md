@@ -37,7 +37,7 @@ start. Put TLS in front of it with a reverse proxy.
 | `DATABASE_URL` | No | `sqlite://data/daroyan.db?mode=rwc` | SQLite app database. Point it at your persistent volume. |
 | `DUCKDB_PATH` | No | `data/daroyan.duckdb` | DuckDB metrics/logs/traces store. Put it on the same volume. |
 | `DUCKDB_BACKUP_DIR` | No | – | If set, a DuckDB backup is written here every 6 hours and the newest 8 are kept. Use a different disk from `DUCKDB_PATH`, see [Data and backups](#8-data-and-backups). |
-| `DUCKDB_MAX_SIZE_GB` | No | – | The most data DuckDB keeps, in GB. When the data passes it, the API deletes the oldest logs and traces, even if they are newer than the retention days. Leave it empty for no limit. |
+| `DUCKDB_MAX_SIZE_GB` | No | – | The most data DuckDB keeps, in GB. When the data passes it, the API deletes the oldest logs and traces, even if they are newer than the retention days, but it keeps the newest hour. Leave it empty or `0` for no limit. |
 | `RETENTION_DAYS` | No | `30` | Days of metrics/traces kept. |
 | `LOG_RETENTION_DAYS` | No | `7` | Days of logs kept. |
 | `OTLP_LOG_BUDGET_KB` | No | `1024` | The most OpenTelemetry log data each ingest token can send per minute, in KB. Batches over it get `429` with `Retry-After`, so SDKs retry them. Settings → Telemetry counts them. |
@@ -236,14 +236,25 @@ that is up to 8 times the size of `daroyan.duckdb`, so point `DUCKDB_BACKUP_DIR`
 at another disk, or move the files to a bucket and delete them from the folder.
 
 The first start after an upgrade from 0.0.29 or older rewrites `daroyan.duckdb` once into a
-compressed file. It needs free disk space for the new file, which is smaller than
-the old one, and the API does not answer until it finishes. If it fails, the old
-file is left as it was.
+compressed file. The API does not answer until it finishes. The disk must have as
+much free space as the size of the old file. If it has less, or the rewrite fails,
+the API stops with an error and does not start. The old file is left as it was, so
+free some space and start the API again.
 
-Set `DUCKDB_MAX_SIZE_GB` to keep DuckDB under a fixed size. The API checks every
-5 minutes. The limit counts the data inside the file. The file itself can be a
-little larger, because DuckDB reuses freed space but does not give it back to the
-disk.
+JSON log lines and OpenTelemetry logs are stored as their message and attributes
+only. Daroyan no longer keeps a second copy of the original line for them, and the
+rewrite removes that copy from old rows. Details that the parser does not keep,
+such as the order of the keys, are not stored.
+
+Set `DUCKDB_MAX_SIZE_GB` to limit the data DuckDB keeps. The API checks every
+5 minutes and deletes the oldest logs and traces when the data is over the limit.
+It always keeps the newest hour. Metrics, uptime results and cron runs are not
+deleted, so if they fill the limit by themselves the API logs an error and you
+must raise the limit or lower `RETENTION_DAYS`.
+
+The limit counts the data inside the file. DuckDB reuses freed space but does not
+give it back to the disk, so the file never gets smaller. A file that is already
+larger than the limit stays at its size and stops growing.
 
 ---
 

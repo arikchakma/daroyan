@@ -42,6 +42,7 @@ const BACKUP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const SLOW_READ: Duration = Duration::from_millis(200);
 const TRIM_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TRIM_TARGET_PERCENT: u64 = 90;
+const TRIM_KEPT_MS: i64 = 60 * 60 * 1000;
 
 #[derive(Clone)]
 pub struct Analytics {
@@ -61,6 +62,7 @@ pub struct Backup {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Trim {
     pub used_bytes: u64,
+    pub deleted_rows: usize,
     pub logs_until: Option<i64>,
     pub spans_until: Option<i64>,
 }
@@ -299,30 +301,40 @@ impl Analytics {
 
             let target = max_bytes / 100 * TRIM_TARGET_PERCENT;
             let share = 1.0 - target as f64 / used_bytes as f64;
+            let newest = Utc::now().timestamp_millis() - TRIM_KEPT_MS;
             let logs_until: Option<i64> = conn.query_row(
-                "SELECT quantile_disc(logged_at, ?) FROM log_lines",
-                [share],
+                &format!(
+                    "SELECT least(approx_quantile(logged_at, {share:.4}::FLOAT), ?) FROM log_lines"
+                ),
+                [newest],
                 |row| row.get(0),
             )?;
             let spans_until: Option<i64> = conn.query_row(
-                "SELECT quantile_disc(started_at, ?) FROM spans",
-                [share],
+                &format!(
+                    "SELECT least(approx_quantile(started_at, {share:.4}::FLOAT), ?) FROM spans"
+                ),
+                [newest * 1000],
                 |row| row.get(0),
             )?;
 
+            let mut deleted_rows = 0;
             if let Some(until) = logs_until {
-                conn.execute("DELETE FROM log_lines WHERE logged_at <= ?", [until])?;
+                deleted_rows +=
+                    conn.execute("DELETE FROM log_lines WHERE logged_at <= ?", [until])?;
             }
             if let Some(until) = spans_until {
-                conn.execute("DELETE FROM spans WHERE started_at <= ?", [until])?;
+                deleted_rows +=
+                    conn.execute("DELETE FROM spans WHERE started_at <= ?", [until])?;
                 conn.execute(
                     "DELETE FROM span_exceptions WHERE occurred_at <= ?",
                     [until],
                 )?;
             }
-            conn.execute_batch("CHECKPOINT")?;
+            if deleted_rows > 0 {
+                conn.execute_batch("CHECKPOINT")?;
+            }
 
-            Ok(Some(Trim { used_bytes, logs_until, spans_until }))
+            Ok(Some(Trim { used_bytes, deleted_rows, logs_until, spans_until }))
         })
         .await
     }
@@ -411,9 +423,15 @@ pub fn spawn_analytics_tasks(
                 _ = trim.tick(), if max_bytes.is_some() => {
                     let Some(max_bytes) = max_bytes else { continue };
                     match analytics.trim_to(max_bytes).await {
+                        Ok(Some(trim)) if trim.deleted_rows == 0 => tracing::error!(
+                            used_mb = trim.used_bytes / 1_048_576,
+                            max_mb = max_bytes / 1_048_576,
+                            "DuckDB is over its size cap and has no logs or spans older than an hour to delete, raise DUCKDB_MAX_SIZE_GB or lower RETENTION_DAYS"
+                        ),
                         Ok(Some(trim)) => tracing::warn!(
                             used_mb = trim.used_bytes / 1_048_576,
                             max_mb = max_bytes / 1_048_576,
+                            deleted_rows = trim.deleted_rows,
                             logs_until = ?trim.logs_until,
                             spans_until = ?trim.spans_until,
                             "deleted the oldest logs and spans, DuckDB was over its size cap"
@@ -663,6 +681,48 @@ mod tests {
             assert!(passes < 12, "still over the cap after {passes} passes");
         }
         assert!(analytics.run(super::read_used_bytes).unwrap() <= used / 2);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn keeps_the_newest_hour_when_other_data_fills_the_cap() {
+        let dir = std::env::temp_dir()
+            .join(format!("daroyan-trim-floor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let analytics = Analytics::open(&dir.join("live.duckdb")).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        analytics
+            .run(move |conn| {
+                conn.execute_batch(&format!(
+                    "CREATE TABLE log_lines (logged_at BIGINT, message VARCHAR); \
+                     CREATE TABLE spans (started_at BIGINT, name VARCHAR); \
+                     CREATE TABLE span_exceptions (occurred_at BIGINT); \
+                     CREATE TABLE server_states (value VARCHAR); \
+                     INSERT INTO log_lines SELECT {now} - i, md5(i::VARCHAR) FROM range(20000) AS r(i); \
+                     INSERT INTO spans SELECT ({now} - i) * 1000, md5(i::VARCHAR) FROM range(20000) AS r(i); \
+                     INSERT INTO server_states SELECT md5(i::VARCHAR) || md5((i * 7)::VARCHAR) FROM range(400000) AS r(i); \
+                     CHECKPOINT;"
+                ))
+            })
+            .unwrap();
+        let used = analytics.run(super::read_used_bytes).unwrap();
+
+        for _ in 0..3 {
+            let trim = analytics.trim_to(used / 2).await.unwrap().unwrap();
+            assert_eq!(trim.deleted_rows, 0);
+        }
+
+        let kept: (i64, i64) = analytics
+            .run(|conn| {
+                conn.query_row(
+                    "SELECT (SELECT count(*) FROM log_lines), (SELECT count(*) FROM spans)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(kept, (20_000, 20_000));
 
         std::fs::remove_dir_all(dir).ok();
     }
