@@ -36,7 +36,8 @@ start. Put TLS in front of it with a reverse proxy.
 | `PORT` | No | `8900` | Listen port. |
 | `DATABASE_URL` | No | `sqlite://data/daroyan.db?mode=rwc` | SQLite app database. Point it at your persistent volume. |
 | `DUCKDB_PATH` | No | `data/daroyan.duckdb` | DuckDB metrics/logs/traces store. Put it on the same volume. |
-| `DUCKDB_BACKUP_DIR` | No | – | If set, periodic DuckDB backups are written here. |
+| `DUCKDB_BACKUP_DIR` | No | – | If set, a DuckDB backup is written here every 6 hours and the newest 8 are kept. Use a different disk from `DUCKDB_PATH`, see [Data and backups](#8-data-and-backups). |
+| `DUCKDB_MAX_SIZE_GB` | No | – | The most data DuckDB keeps, in GB. When the data passes it, the API deletes the oldest logs and traces, even if they are newer than the retention days, but it keeps the newest hour. Leave it empty or `0` for no limit. |
 | `RETENTION_DAYS` | No | `30` | Days of metrics/traces kept. |
 | `LOG_RETENTION_DAYS` | No | `7` | Days of logs kept. |
 | `OTLP_LOG_BUDGET_KB` | No | `1024` | The most OpenTelemetry log data each ingest token can send per minute, in KB. Batches over it get `429` with `Retry-After`, so SDKs retry them. Settings → Telemetry counts them. |
@@ -229,6 +230,18 @@ Everything lives under your data volume/dir:
 
 Back up the whole data directory. For the Docker setup, back up the mounted
 `./data` volume.
+
+The backup folder holds up to 8 full copies of the DuckDB file, so put
+`DUCKDB_BACKUP_DIR` on another disk.
+
+A `daroyan.duckdb` file made by 0.0.29 or older is not compressed. To get a
+compressed file, stop the API, delete `daroyan.duckdb` and `daroyan.duckdb.wal`,
+and start the API again. You lose logs, traces, metrics, uptime results and cron
+runs. Servers, alerts and settings are kept.
+
+Set `DUCKDB_MAX_SIZE_GB` to limit the data DuckDB keeps. Over the limit, the API
+deletes the oldest logs and traces, but keeps the newest hour. The file does not
+get smaller, it only stops growing.
 
 ---
 

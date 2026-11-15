@@ -32,7 +32,7 @@ export function getLogRecord(line: LogRow) {
     level: line.level,
     message: line.message,
     attributes: line.attributes ?? {},
-    raw: line.raw ?? line.message,
+    ...(line.raw && { raw: line.raw }),
     ...(line.trace_id && { traceId: line.trace_id }),
   };
 }

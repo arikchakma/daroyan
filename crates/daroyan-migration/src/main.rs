@@ -2,7 +2,7 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use daroyan_migration::duckdb::migrate_duckdb;
+use daroyan_migration::duckdb::open_duckdb;
 use daroyan_migration::{Migrator, MigratorTrait};
 use sea_orm_migration::sea_orm::Database;
 
@@ -46,7 +46,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
     let args = Args::parse();
     if let Command::Duckdb = args.command {
-        return Ok(migrate_duckdb(&args.duckdb_path)?);
+        open_duckdb(&args.duckdb_path)?;
+        return Ok(());
     }
 
     let db = Database::connect(&args.database_url).await?;

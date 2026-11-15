@@ -31,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
         state.config.retention_days,
         state.config.log_retention_days,
         state.config.backup_dir.clone(),
+        state.config.duckdb_max_bytes,
     );
     let alert_engine = spawn_alert_engine(
         state.database.clone(),

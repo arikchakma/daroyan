@@ -20,7 +20,7 @@ use daroyan_core::limits::{Limits, LogBudgets};
 use daroyan_core::net::allow_private_targets;
 use daroyan_core::servers::hosts::HostCache;
 use daroyan_core::uptime::Uptime;
-use daroyan_migration::duckdb::run_duckdb_migrations;
+use daroyan_migration::duckdb::open_duckdb;
 use daroyan_migration::{Migrator, MigratorTrait};
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
@@ -41,8 +41,7 @@ pub async fn open_state(config: Config) -> anyhow::Result<AppState> {
     }
     let database = connect_database(&config).await?;
     Migrator::up(&database.conn, None).await?;
-    let analytics = Analytics::open(&config.duckdb_path)?;
-    analytics.run(run_duckdb_migrations)?;
+    let analytics = Analytics::try_from(open_duckdb(&config.duckdb_path)?)?;
     restrict_data_files(&config);
     let uptime = Uptime::new(database.clone(), analytics.clone());
     let crons = Crons::new(database.clone(), analytics.clone());

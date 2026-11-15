@@ -5,7 +5,7 @@ CREATE TABLE log_lines (
     stream VARCHAR NOT NULL,
     severity UTINYINT NOT NULL,
     message VARCHAR NOT NULL,
-    attributes JSON,
+    attributes JSON USING COMPRESSION zstd,
     trace_id VARCHAR,
     span_id VARCHAR
 );

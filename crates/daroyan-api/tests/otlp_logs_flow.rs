@@ -93,6 +93,7 @@ async fn open_test_state(dir: &Path) -> AppState {
         log_retention_days: 7,
         otlp_log_budget: 4 * 1024,
         backup_dir: None,
+        duckdb_max_bytes: None,
         trusted_proxies: Vec::new(),
         client_ip_header: "cf-connecting-ip".to_string(),
         app_url: Some("https://daroyan.example".to_string()),
@@ -336,7 +337,7 @@ async fn ingests_otlp_logs_and_links_them_to_traces() {
         .unwrap();
     assert_eq!(full["resource"]["host.name"], "inboxjot");
     assert_eq!(full["resource"]["service.name"], "inboxjot-api");
-    assert!(full["raw"].as_str().unwrap().contains("SES SendEmail failed"));
+    assert_eq!(full.get("raw"), None);
 
     let traced: Value = http
         .get(format!("{base}/v1/logs?q=trace_id:{}", "ab".repeat(16)))
