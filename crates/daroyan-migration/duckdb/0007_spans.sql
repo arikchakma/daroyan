@@ -12,9 +12,9 @@ CREATE TABLE spans (
     http_method VARCHAR,
     http_route VARCHAR,
     http_status INTEGER,
-    attributes JSON,
+    attributes JSON USING COMPRESSION zstd,
     resource JSON,
-    events JSON,
+    events JSON USING COMPRESSION zstd,
     received_at BIGINT NOT NULL
 );
 
@@ -25,6 +25,6 @@ CREATE TABLE span_exceptions (
     fingerprint VARCHAR NOT NULL,
     type VARCHAR NOT NULL,
     message VARCHAR NOT NULL,
-    stacktrace VARCHAR,
+    stacktrace VARCHAR USING COMPRESSION zstd,
     occurred_at BIGINT NOT NULL
 );

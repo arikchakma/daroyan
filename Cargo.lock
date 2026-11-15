@@ -1200,12 +1200,10 @@ dependencies = [
 name = "daroyan-migration"
 version = "0.0.29"
 dependencies = [
- "anyhow",
  "async-trait",
  "clap",
  "dotenvy",
  "duckdb",
- "nix",
  "sea-orm-migration",
  "serde_json",
  "tokio",

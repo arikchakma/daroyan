@@ -235,16 +235,16 @@ The backup folder holds up to 8 full copies of the DuckDB file. On the same disk
 that is up to 8 times the size of `daroyan.duckdb`, so point `DUCKDB_BACKUP_DIR`
 at another disk, or move the files to a bucket and delete them from the folder.
 
-The first start after an upgrade from 0.0.29 or older rewrites `daroyan.duckdb` once into a
-compressed file. The API does not answer until it finishes. The disk must have as
-much free space as the size of the old file. If it has less, or the rewrite fails,
-the API stops with an error and does not start. The old file is left as it was, so
-free some space and start the API again.
+A `daroyan.duckdb` file made by 0.0.29 or older stays in the old storage format,
+and its columns are not compressed. The API still works with it and logs a warning
+on start. To get a compressed file, stop the API, delete `daroyan.duckdb` and
+`daroyan.duckdb.wal`, and start the API again. This deletes the logs, traces,
+metrics, uptime results and cron runs. Servers, alerts and settings are in
+`daroyan.db` and are kept.
 
 JSON log lines and OpenTelemetry logs are stored as their message and attributes
-only. Daroyan no longer keeps a second copy of the original line for them, and the
-rewrite removes that copy from old rows. Details that the parser does not keep,
-such as the order of the keys, are not stored.
+only. Daroyan does not keep a second copy of the original line for them. Details
+that the parser does not keep, such as the order of the keys, are not stored.
 
 Set `DUCKDB_MAX_SIZE_GB` to limit the data DuckDB keeps. The API checks every
 5 minutes and deletes the oldest logs and traces when the data is over the limit.
