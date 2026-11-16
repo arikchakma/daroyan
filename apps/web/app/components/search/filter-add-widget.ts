@@ -49,7 +49,6 @@ export const FilterAddWidget = Extension.create({
             if (!onAdd) {
               return null;
             }
-            // A positive side draws the widget after the caret at the same position.
             const widget = Decoration.widget(
               state.doc.content.size,
               () => {

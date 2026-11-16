@@ -113,7 +113,6 @@ export function SearchFilter(props: SearchFilterProps) {
   const isListVisible =
     isOpen && (items.length > 0 || isEmpty || !!error || !!hint);
 
-  // Typing in the field list highlights a search option when there is one, or nothing. Elsewhere the highlight moves to the first item, but a value that was just picked keeps it.
   const mode = editing ? `${editing.key}:${part}` : 'fields';
   const [previous, setPrevious] = useState({ mode, text });
   if (previous.mode !== mode || previous.text !== text) {
@@ -229,13 +228,11 @@ export function SearchFilter(props: SearchFilterProps) {
     },
   });
 
-  // The doc changes first and the props follow later. Sync only when the props change, so a late render does not undo an edit.
   const filtersKey = JSON.stringify(filters);
   useEffect(() => {
     editor?.commands.syncFilterTokens(JSON.parse(filtersKey));
   }, [editor, filtersKey]);
 
-  // The bar sends its query up and gets it back a render later, while typing may have moved on. Only a query from outside the bar rebuilds the pills.
   useEffect(() => {
     if (!editor || query === sentQueryRef.current) {
       return;
@@ -446,7 +443,6 @@ export function SearchFilter(props: SearchFilterProps) {
     setIsOpen(true);
   }
 
-  // Text input reaches React after the next key can arrive, so keys read the doc from the editor.
   function handleKeyDown(event: KeyboardEvent, state: EditorState) {
     const doc = readDoc(state.doc);
     const editedToken = doc.tokens.find((token) => token.key === editing?.key);
@@ -493,7 +489,6 @@ export function SearchFilter(props: SearchFilterProps) {
         const step = event.key === 'ArrowLeft' ? -1 : 1;
         const node = step < 0 ? $from.nodeBefore : $from.nodeAfter;
 
-        // The editor moves the caret itself, so the next key sees where it is.
         if (editing) {
           if (isFilterSearch(node)) {
             editor.chain().setTextSelection(from + step).scrollIntoView().run();
