@@ -1,17 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnVisibilityState } from '@tanstack/react-table';
-import { useCallback, useEffect, useEffectEvent, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
 import { AlertBanners } from '~/components/alerts/alert-banners';
 import { Icon } from '~/components/icons/icon';
 import { LogSheet } from '~/components/logs/log-sheet';
 import { LogVolume } from '~/components/logs/log-volume';
+import { RunQueryButton } from '~/components/logs/run-query-button';
 import { SaveViewDialog } from '~/components/logs/save-view-dialog';
 import { SearchSyntaxPopover } from '~/components/logs/search-syntax-popover';
 import { ViewMenu, VIEWS } from '~/components/logs/view-menu';
 import type { LevelView } from '~/components/logs/view-menu';
-import { ColumnMenu } from '~/components/ui/column-menu';
+import { ViewOptionsMenu } from '~/components/logs/view-options-menu';
 import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { DataTable } from '~/components/ui/data-table';
 import { EmptyState } from '~/components/ui/empty-state';
@@ -133,15 +134,7 @@ export default function LogsPage() {
     setUntil(Date.now());
   };
 
-  const commitSearch = useEffectEvent(() => setParams({ q: search.trim() || null }));
-
-  useEffect(() => {
-    if (search === q) {
-      return;
-    }
-    const timer = setTimeout(commitSearch, 300);
-    return () => clearTimeout(timer);
-  }, [search, q]);
+  const runQuery = (query: string) => setParams({ q: query.trim() || null });
 
   const isFollowing = isLive && page === 1 && !zoom;
   const filters = {
@@ -162,7 +155,7 @@ export default function LogsPage() {
     logQueries.volume({ ...filters, ...timeRange }, isFollowing)
   );
   const isShowingOldResults = isShowingOldLines || isShowingOldVolume;
-  const isSearching = isShowingOldResults || search.trim() !== q;
+  const isQueryChanged = search.trim() !== q;
 
   const serverNames = new Map([
     [OTLP_SERVER_ID, OTLP_SERVER_NAME],
@@ -351,6 +344,13 @@ export default function LogsPage() {
                 </Menu.Positioner>
               </Menu.Portal>
             </Menu.Root>
+            <ViewOptionsMenu
+              labels={COLUMN_LABELS}
+              hidden={hiddenColumns}
+              onHiddenChange={setHiddenColumns}
+              isWrapped={isWrapped}
+              onWrappedChange={setIsWrapped}
+            />
             <Button type="button" variant="secondary" className="w-fit" disabled={isExporting} onClick={() => void exportLogs()}>
               <Icon name={isExporting ? 'loader' : 'download'} className={cn(isExporting && 'animate-spin')} />
               Export
@@ -412,7 +412,7 @@ export default function LogsPage() {
               }}
               query={search}
               onQueryChange={setSearch}
-              isSearching={isSearching}
+              onSubmit={runQuery}
             />
             {canSaveView && (
               <button
@@ -434,21 +434,11 @@ export default function LogsPage() {
               />
             )}
             <SearchSyntaxPopover />
-            <ColumnMenu
-              labels={COLUMN_LABELS}
-              hidden={hiddenColumns}
-              onChange={setHiddenColumns}
+            <RunQueryButton
+              isChanged={isQueryChanged}
+              isRunning={isShowingOldResults}
+              onRun={() => runQuery(search)}
             />
-            <button
-              type="button"
-              aria-label="Wrap Lines"
-              aria-pressed={isWrapped}
-              title="Wrap lines"
-              onClick={() => setIsWrapped(!isWrapped)}
-              className="flex size-7 shrink-0 items-center justify-center rounded-sm text-text-secondary outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40 aria-pressed:bg-surface-fill aria-pressed:text-text-primary"
-            >
-              <Icon name="align-left" />
-            </button>
           </div>
           <div className={cn('flex flex-col gap-2 transition-opacity', isShowingOldResults && 'opacity-60')}>
             <LogVolume volume={volume} onZoom={onZoom} />
@@ -522,7 +512,9 @@ export default function LogsPage() {
         onNavigate={(step) => setOpenLine(lines[openIndex + step])}
         onClose={() => setOpenLine(undefined)}
         onFilter={(term) => {
-          setSearch(getQuery([search, formatTerm(term)]));
+          const query = getQuery([search, formatTerm(term)]);
+          setSearch(query);
+          runQuery(query);
           setOpenLine(undefined);
         }}
       />

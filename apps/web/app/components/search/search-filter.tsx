@@ -47,6 +47,7 @@ type SearchFilterProps = {
   onFilterChange: (changes: SearchFilterChange[]) => void;
   query: string;
   onQueryChange: (query: string) => void;
+  onSubmit?: (query: string) => void;
   isSearching?: boolean;
 };
 
@@ -58,6 +59,7 @@ export function SearchFilter(props: SearchFilterProps) {
     onFilterChange,
     query,
     onQueryChange,
+    onSubmit,
     isSearching = false,
   } = props;
 
@@ -287,6 +289,18 @@ export function SearchFilter(props: SearchFilterProps) {
     return caret.text;
   }
 
+  function submit() {
+    if (!editor || !onSubmit) {
+      return;
+    }
+
+    const { query: next } = readDoc(editor.state.doc);
+    if (getTextError(next) || hasOpenRegex(next)) {
+      return;
+    }
+    onSubmit(next);
+  }
+
   function markTyping() {
     setIsTyping(true);
     window.clearTimeout(typingTimerRef.current);
@@ -511,9 +525,12 @@ export function SearchFilter(props: SearchFilterProps) {
         return true;
       }
       case 'Enter': {
-        const item = items[activeIndex];
-        if (isListVisible && item) {
+        const item = isListVisible ? items[activeIndex] : undefined;
+        if (item) {
           choose(item);
+        }
+        if (!item || item.kind === 'terms') {
+          submit();
         }
         return true;
       }
