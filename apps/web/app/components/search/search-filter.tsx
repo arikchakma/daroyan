@@ -520,6 +520,14 @@ export function SearchFilter(props: SearchFilterProps) {
         return true;
       }
       case 'Enter': {
+        if (event.metaKey || event.ctrlKey) {
+          stopEditing();
+          setIsOpen(false);
+          setIsPicking(false);
+          submit();
+          return true;
+        }
+
         const item = isListVisible ? items[activeIndex] : undefined;
         if (item) {
           choose(item);
