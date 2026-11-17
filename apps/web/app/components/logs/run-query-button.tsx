@@ -18,13 +18,13 @@ export function RunQueryButton(props: RunQueryButtonProps) {
       variant={isChanged ? 'primary' : 'tertiary'}
       size="xs"
       title={`Run query (${formatHotkey('Mod+Enter')})`}
-      disabled={isRunning}
+      aria-keyshortcuts={isMacPlatform() ? 'Meta+Enter' : 'Control+Enter'}
       className="shrink-0 gap-1.5 rounded-sm pr-1"
       onClick={onRun}
     >
       <Icon name={isRunning ? 'loader' : 'play'} className={cn('size-3!', isRunning && 'animate-spin')} />
       Run
-      <span className="flex h-5 items-center gap-0.5 rounded-xs bg-current/15 px-1 font-sans text-axis">
+      <span aria-hidden="true" className="flex h-5 items-center gap-0.5 rounded-xs bg-current/15 px-1 font-sans text-axis">
         {isMacPlatform() ? <Icon name="command" className="size-3!" /> : 'Ctrl'}
         <Icon name="corner-down-left" className="size-3!" />
       </span>
