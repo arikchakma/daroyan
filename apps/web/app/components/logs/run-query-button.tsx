@@ -1,7 +1,7 @@
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
 import { cn } from '~/utils/classname';
-import { formatHotkey } from '~/utils/hotkey';
+import { formatHotkey, getModifierLabel } from '~/utils/hotkey';
 
 type RunQueryButtonProps = {
   isChanged: boolean;
@@ -24,8 +24,9 @@ export function RunQueryButton(props: RunQueryButtonProps) {
     >
       <Icon name={isRunning ? 'loader' : 'play'} className={cn('size-3!', isRunning && 'animate-spin')} />
       Run
-      <span className="flex h-5 items-center rounded-xs bg-current/15 px-1 font-sans text-axis">
-        {formatHotkey('Mod+Enter')}
+      <span className="flex h-5 items-center gap-0.5 rounded-xs bg-current/15 px-1 font-sans text-axis">
+        {getModifierLabel()}
+        <Icon name="corner-down-left" className="size-3!" />
       </span>
     </Button>
   );
