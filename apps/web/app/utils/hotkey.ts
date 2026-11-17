@@ -7,6 +7,6 @@ export function formatHotkey(hotkey: Hotkey) {
   });
 }
 
-export function getModifierLabel() {
-  return detectPlatform() === 'mac' ? '⌘' : 'Ctrl';
+export function isMacPlatform() {
+  return detectPlatform() === 'mac';
 }
