@@ -116,8 +116,15 @@ export default function LogsPage() {
   const zoomUntil = Number(searchParams.get('to'));
   const zoom = zoomSince > 0 && zoomUntil > zoomSince ? { since: zoomSince, until: zoomUntil } : undefined;
 
+  const committedKey = JSON.stringify([q, getFilterParams(filterValues)]);
   const [search, setSearch] = useState(q);
   const [draftFilters, setDraftFilters] = useState(() => getFilterValues(searchParams));
+  const [draftKey, setDraftKey] = useState(committedKey);
+  if (draftKey !== committedKey) {
+    setDraftKey(committedKey);
+    setSearch(q);
+    setDraftFilters(filterValues);
+  }
   const [isLive, setIsLive] = useState(false);
   const paramsKey = searchParams.toString();
   const [timeWindow, setTimeWindow] = useState(() => ({
