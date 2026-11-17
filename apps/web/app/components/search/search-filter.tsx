@@ -4,7 +4,6 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 
 import { Icon } from '~/components/icons/icon';
 import { useSearchFilterEditor } from '~/hooks/use-search-filter-editor';
-import { cn } from '~/utils/classname';
 import {
   FILTER_SEARCH_MARK,
   getFilterChanges,
@@ -48,7 +47,6 @@ type SearchFilterProps = {
   query: string;
   onQueryChange: (query: string) => void;
   onSubmit?: (query: string) => void;
-  isSearching?: boolean;
 };
 
 export function SearchFilter(props: SearchFilterProps) {
@@ -60,7 +58,6 @@ export function SearchFilter(props: SearchFilterProps) {
     query,
     onQueryChange,
     onSubmit,
-    isSearching = false,
   } = props;
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -532,9 +529,6 @@ export function SearchFilter(props: SearchFilterProps) {
         if (item) {
           choose(item);
         }
-        if (!item || item.kind === 'terms') {
-          submit();
-        }
         return true;
       }
       case 'Escape':
@@ -636,10 +630,7 @@ export function SearchFilter(props: SearchFilterProps) {
           }
         }}
       >
-        <Icon
-          name={isSearching ? 'loader' : 'search'}
-          className={cn('shrink-0 text-text-tertiary', isSearching && 'animate-spin')}
-        />
+        <Icon name="search" className="shrink-0 text-text-tertiary" />
 
         <div className="relative flex min-w-0 flex-1 items-center">
           <EditorContent editor={editor} className="flex min-w-0 flex-1" />
