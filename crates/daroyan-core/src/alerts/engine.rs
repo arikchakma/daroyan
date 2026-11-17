@@ -1341,7 +1341,7 @@ impl Reply {
     }
 
     fn is_broadcast(self) -> bool {
-        matches!(self, Self::Broadcast | Self::Escalate)
+        matches!(self, Self::Broadcast | Self::Escalate | Self::Resolve)
     }
 }
 

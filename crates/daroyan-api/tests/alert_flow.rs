@@ -351,7 +351,7 @@ async fn fires_and_resolves_alerts_through_a_webhook() {
     );
     assert_eq!(posts[0]["blocks"][0]["text"]["text"], "*🔴 Critical: High CPU*");
     assert_eq!(posts[1]["thread_ts"], "1730000000.000001");
-    assert_eq!(posts[1].get("reply_broadcast"), None);
+    assert_eq!(posts[1]["reply_broadcast"], true);
     assert_eq!(posts[1]["blocks"][0]["text"]["text"], "*✅ Resolved: High CPU*");
 
     let update = slack_updates.lock().unwrap()[0].clone();
