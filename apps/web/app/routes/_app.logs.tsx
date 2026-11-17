@@ -538,7 +538,7 @@ export default function LogsPage() {
         onNavigate={(step) => setOpenLine(lines[openIndex + step])}
         onClose={() => setOpenLine(undefined)}
         onFilter={(term) => {
-          setSearch(getQuery([search, formatTerm(term)]));
+          runQuery(getQuery([search, formatTerm(term)]));
           setOpenLine(undefined);
         }}
       />
