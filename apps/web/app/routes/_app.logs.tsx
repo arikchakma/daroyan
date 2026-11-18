@@ -119,7 +119,7 @@ export default function LogsPage() {
   const hasArchive = !!instance?.archive;
   const ranges = RANGES.filter((item) => hasArchive || !item.isArchived);
   const widestRange = ranges[ranges.length - 1]!;
-  const range = ranges.find((item) => item.value === searchParams.get('range')) ?? RANGES.find((item) => item.value === DEFAULT_RANGE)!;
+  const range = RANGES.find((item) => item.value === searchParams.get('range')) ?? RANGES.find((item) => item.value === DEFAULT_RANGE)!;
   const zoomSince = Number(searchParams.get('from'));
   const zoomUntil = Number(searchParams.get('to'));
   const zoom = zoomSince > 0 && zoomUntil > zoomSince ? { since: zoomSince, until: zoomUntil } : undefined;
