@@ -161,5 +161,6 @@ internal_from!(
     serde_json::Error,
     tokio::task::JoinError,
     object_store::Error,
+    object_store::path::Error,
     std::io::Error,
 );

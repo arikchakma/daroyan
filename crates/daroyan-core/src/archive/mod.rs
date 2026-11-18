@@ -1,32 +1,43 @@
+mod upkeep;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use futures_util::TryStreamExt;
 use object_store::aws::AmazonS3Builder;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 
 use crate::analytics::Analytics;
+use crate::analytics::archive::export::stage_logs;
 use crate::analytics::archive::{
-    ArchivedFile, HOUR_MS, StagedFile, record_files, stage_logs,
+    ArchivedFile, FileKind, HOUR_MS, StagedFile, record_files,
 };
 use crate::config::ArchiveConfig;
 use crate::error::Result;
 
+pub use upkeep::Upkeep;
+
 pub const TENANT: &str = "default";
 const EXPORT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const EXPORT_SETTLE_MS: i64 = 60_000;
+const UPKEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const UPKEEP_DELAY: Duration = Duration::from_secs(10 * 60);
 const CHECK_OBJECT: &str = ".daroyan-check";
+const DEFAULT_RETENTION_DAYS: u32 = 90;
 
 #[derive(Clone)]
 pub struct Archive {
     store: Arc<dyn ObjectStore>,
     root: String,
-    staging: PathBuf,
+    work_dir: PathBuf,
+    retention_days: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -59,18 +70,25 @@ impl TryFrom<&ArchiveConfig> for Archive {
         Ok(Self::new(
             Arc::new(builder.build()?),
             &config.prefix,
-            config.cache_dir.join("staging"),
-        ))
+            config.cache_dir.clone(),
+        )
+        .with_retention_days(config.retention_days))
     }
 }
 
 impl Archive {
-    pub fn new(store: Arc<dyn ObjectStore>, prefix: &str, staging: PathBuf) -> Self {
+    pub fn new(store: Arc<dyn ObjectStore>, prefix: &str, work_dir: PathBuf) -> Self {
         Self {
             store,
             root: prefix.trim_matches('/').to_string(),
-            staging,
+            work_dir,
+            retention_days: DEFAULT_RETENTION_DAYS,
         }
+    }
+
+    pub fn with_retention_days(mut self, retention_days: u32) -> Self {
+        self.retention_days = retention_days;
+        self
     }
 
     fn object_path(&self, relative: &str) -> Path {
@@ -85,12 +103,21 @@ impl Archive {
         let start = DateTime::<Utc>::from_timestamp_millis(file.hour * HOUR_MS)
             .unwrap_or_default();
 
-        self.object_path(&format!(
-            "logs/v1/tenant={TENANT}/dt={}/hour={}/{}",
-            start.format("%Y-%m-%d"),
-            start.format("%H"),
-            file.name
-        ))
+        let day = start.format("%Y-%m-%d");
+
+        match file.kind {
+            FileKind::Hour => self.object_path(&format!(
+                "logs/v1/tenant={TENANT}/dt={day}/hour={}/{}",
+                start.format("%H"),
+                file.name
+            )),
+            FileKind::Day => self
+                .object_path(&format!("logs/v1/tenant={TENANT}/dt={day}/{}", file.name)),
+        }
+    }
+
+    fn logs_root(&self) -> Path {
+        self.object_path(&format!("logs/v1/tenant={TENANT}"))
     }
 
     pub async fn check(&self) -> Result<()> {
@@ -102,13 +129,10 @@ impl Archive {
     }
 
     pub async fn export_logs(&self, analytics: &Analytics) -> Result<Export> {
-        tokio::fs::remove_dir_all(&self.staging).await.ok();
-        tokio::fs::create_dir_all(&self.staging).await?;
-
-        let staging = self.staging.clone();
+        let staging = reset_dir(self.work_dir.join("export")).await?;
+        let dir = staging.clone();
         let until = Utc::now().timestamp_millis() - EXPORT_SETTLE_MS;
-        let staged =
-            analytics.read(move |conn| stage_logs(conn, &staging, until)).await?;
+        let staged = analytics.read(move |conn| stage_logs(conn, &dir, until)).await?;
 
         let mut archived = Vec::with_capacity(staged.files.len());
         let mut uploaded = Ok(());
@@ -124,7 +148,7 @@ impl Archive {
                 }
             }
         }
-        tokio::fs::remove_dir_all(&self.staging).await.ok();
+        tokio::fs::remove_dir_all(&staging).await.ok();
         uploaded?;
 
         let export = Export {
@@ -166,6 +190,24 @@ impl Archive {
 
         Ok((path, bytes))
     }
+
+    async fn download(&self, path: &Path, local: &std::path::Path) -> Result<()> {
+        let mut stream = self.store.get(path).await?.into_stream();
+        let mut file = tokio::fs::File::create(local).await?;
+        while let Some(chunk) = stream.try_next().await? {
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+
+        Ok(())
+    }
+}
+
+async fn reset_dir(dir: PathBuf) -> Result<PathBuf> {
+    tokio::fs::remove_dir_all(&dir).await.ok();
+    tokio::fs::create_dir_all(&dir).await?;
+
+    Ok(dir)
 }
 
 pub fn spawn_archive_task(archive: Archive, analytics: Analytics) -> JoinHandle<()> {
@@ -178,16 +220,34 @@ pub fn spawn_archive_task(archive: Archive, analytics: Analytics) -> JoinHandle<
         }
 
         let mut export = tokio::time::interval(EXPORT_INTERVAL);
+        export.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut upkeep = tokio::time::interval_at(
+            tokio::time::Instant::now() + UPKEEP_DELAY,
+            UPKEEP_INTERVAL,
+        );
+        upkeep.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
         loop {
-            export.tick().await;
-            match archive.export_logs(&analytics).await {
-                Ok(done) => tracing::info!(
-                    files = done.files,
-                    rows = done.rows,
-                    bytes = done.bytes,
-                    "archived logs"
-                ),
-                Err(error) => tracing::error!(%error, "archive logs"),
+            tokio::select! {
+                _ = export.tick() => match archive.export_logs(&analytics).await {
+                    Ok(done) => tracing::info!(
+                        files = done.files,
+                        rows = done.rows,
+                        bytes = done.bytes,
+                        "archived logs"
+                    ),
+                    Err(error) => tracing::error!(%error, "archive logs"),
+                },
+                _ = upkeep.tick() => match archive.tidy(&analytics).await {
+                    Ok(done) => tracing::info!(
+                        merged = done.merged,
+                        expired = done.expired,
+                        deleted = done.deleted,
+                        orphans = done.orphans,
+                        "tidied the log archive"
+                    ),
+                    Err(error) => tracing::error!(%error, "tidy the log archive"),
+                },
             }
         }
     })
@@ -203,6 +263,7 @@ mod tests {
 
     use super::Archive;
     use crate::analytics::Analytics;
+    use crate::analytics::archive::create_log_tables;
 
     #[tokio::test]
     async fn uploads_hourly_files_and_records_them() {
@@ -213,14 +274,7 @@ mod tests {
         let analytics = Analytics::open(&dir.join("daroyan.duckdb")).unwrap();
         analytics
             .run(|conn| {
-                for sql in [
-                    include_str!("../../daroyan-migration/duckdb/0002_log_lines.sql"),
-                    include_str!("../../daroyan-migration/duckdb/0003_log_raw.sql"),
-                    include_str!("../../daroyan-migration/duckdb/0011_log_resource.sql"),
-                    include_str!("../../daroyan-migration/duckdb/0012_log_archive.sql"),
-                ] {
-                    conn.execute_batch(sql)?;
-                }
+                create_log_tables(conn)?;
                 conn.execute_batch(
                     "INSERT INTO log_lines (server_id, logged_at, service, stream, severity, message, attributes, ingested_at) \
                      VALUES ('srv_1', 1794002400000, 'api', 'otlp', 9, 'done', '{\"user.id\":\"u_1\"}', 1), \
@@ -230,13 +284,13 @@ mod tests {
             .unwrap();
 
         let store = Arc::new(InMemory::new());
-        let archive = Archive::new(store.clone(), "/prod/", dir.join("staging"));
+        let archive = Archive::new(store.clone(), "/prod/", dir.join("work"));
         archive.check().await.unwrap();
 
         let export = archive.export_logs(&analytics).await.unwrap();
         assert_eq!((export.files, export.rows), (2, 2));
         assert!(export.bytes > 0);
-        assert!(!dir.join("staging").exists());
+        assert!(!dir.join("work").join("export").exists());
 
         let mut paths: Vec<String> = store
             .list(None)
