@@ -38,6 +38,7 @@ const DEFAULT_RETENTION_DAYS: u32 = 90;
 const DEFAULT_LOG_RETENTION_DAYS: u32 = 7;
 const DEFAULT_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const RANGE_SECRET: &str = "daroyan_archive";
+const KEPT_BACKUPS: usize = 2;
 
 #[derive(Clone)]
 pub struct Archive {
@@ -220,7 +221,41 @@ impl Archive {
 
     async fn upload(&self, file: &StagedFile) -> Result<(Path, u64)> {
         let path = self.log_path(file);
-        let mut source = tokio::fs::File::open(&file.local).await?;
+        let bytes = self.upload_file(&file.local, &path).await?;
+
+        Ok((path, bytes))
+    }
+
+    pub fn backup_dir(&self) -> PathBuf {
+        self.work_dir.join("backups")
+    }
+
+    pub async fn upload_backup(&self, local: &std::path::Path, name: &str) -> Result<()> {
+        let backups = self.object_path("backups");
+        self.upload_file(local, &backups.clone().join(name)).await?;
+
+        let mut paths: Vec<Path> = self
+            .store
+            .list(Some(&backups))
+            .map_ok(|object| object.location)
+            .try_filter(|path| {
+                std::future::ready(path.filename().is_some_and(|name| {
+                    name.starts_with("daroyan-") && name.ends_with(".duckdb")
+                }))
+            })
+            .try_collect()
+            .await?;
+        paths.sort_unstable();
+        let excess = paths.len().saturating_sub(KEPT_BACKUPS);
+        for path in &paths[..excess] {
+            self.store.delete(path).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn upload_file(&self, local: &std::path::Path, path: &Path) -> Result<u64> {
+        let mut source = tokio::fs::File::open(local).await?;
         let bytes = source.metadata().await?.len();
 
         let mut writer = BufWriter::new(Arc::clone(&self.store), path.clone());
@@ -234,7 +269,7 @@ impl Archive {
             return Err(error.into());
         }
 
-        Ok((path, bytes))
+        Ok(bytes)
     }
 
     async fn download(&self, path: &Path, local: &std::path::Path) -> Result<()> {

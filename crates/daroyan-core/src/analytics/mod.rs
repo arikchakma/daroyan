@@ -42,7 +42,6 @@ const MAX_SERVER_ROWS: usize = MAX_PENDING_ROWS / 10;
 const MAX_REPORT_EVENTS: usize = 1_000;
 const KEPT_BACKUPS: usize = 8;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
-const BACKUP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const SLOW_READ: Duration = Duration::from_millis(200);
 const TRIM_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TRIM_TARGET_PERCENT: u64 = 90;
@@ -459,7 +458,6 @@ pub fn spawn_analytics_tasks(
     analytics: Analytics,
     retention_days: u32,
     log_retention_days: u32,
-    backup_dir: Option<PathBuf>,
     max_bytes: Option<u64>,
     archive_days: Option<u32>,
 ) -> JoinHandle<()> {
@@ -467,10 +465,6 @@ pub fn spawn_analytics_tasks(
         let mut flush = tokio::time::interval(FLUSH_INTERVAL);
         let mut purge = tokio::time::interval(PURGE_INTERVAL);
         let mut trim = tokio::time::interval(TRIM_INTERVAL);
-        let mut backup = tokio::time::interval_at(
-            tokio::time::Instant::now() + BACKUP_INTERVAL,
-            BACKUP_INTERVAL,
-        );
         loop {
             tokio::select! {
                 _ = flush.tick() => {
@@ -514,13 +508,6 @@ pub fn spawn_analytics_tasks(
                         ),
                         Ok(None) => {}
                         Err(error) => tracing::error!(error = %error, "trim analytics"),
-                    }
-                }
-                _ = backup.tick(), if backup_dir.is_some() => {
-                    let Some(dir) = backup_dir.clone() else { continue };
-                    match analytics.back_up(dir).await {
-                        Ok(backup) => tracing::info!(name = %backup.name, "backed up analytics"),
-                        Err(error) => tracing::error!(error = %error, "back up analytics"),
                     }
                 }
             }

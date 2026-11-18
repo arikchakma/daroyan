@@ -12,6 +12,7 @@ use daroyan_core::agents::Agents;
 use daroyan_core::alerts::connect::ConnectStates;
 use daroyan_core::analytics::Analytics;
 use daroyan_core::archive::Archive;
+use daroyan_core::backup::Backups;
 use daroyan_core::config::Config;
 use daroyan_core::crons::Crons;
 use daroyan_core::db::Database;
@@ -32,4 +33,10 @@ pub struct AppState {
     pub connects: ConnectStates,
     pub uptime: Uptime,
     pub crons: Crons,
+}
+
+impl AppState {
+    pub fn backups(&self) -> Backups {
+        Backups::new(self.config.backup_dir.clone(), self.archive.clone())
+    }
 }

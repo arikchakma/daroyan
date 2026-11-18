@@ -18,7 +18,7 @@ async fn get_backup_status(
     _user: CurrentUser,
 ) -> Json<BackupStatusView> {
     Json(BackupStatusView {
-        is_enabled: state.config.backup_dir.is_some(),
+        is_enabled: state.backups().is_enabled(),
         last_backup: state.analytics.read_last_backup().map(BackupView::from),
     })
 }
@@ -28,11 +28,12 @@ async fn create_backup(
     State(state): State<AppState>,
     AdminUser(_user): AdminUser,
 ) -> Result<Json<BackupView>> {
-    let dir = state.config.backup_dir.clone().ok_or_else(|| {
+    let backup = state.backups().back_up(&state.analytics).await?.ok_or_else(|| {
         Error::new(
             ErrorName::ValidationError,
-            "Backups are off. Set DUCKDB_BACKUP_DIR to turn them on.",
+            "Backups are off. Set DUCKDB_BACKUP_DIR or ARCHIVE_URL to turn them on.",
         )
     })?;
-    Ok(Json(state.analytics.back_up(dir).await?.into()))
+
+    Ok(Json(backup.into()))
 }
