@@ -1,17 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnVisibilityState } from '@tanstack/react-table';
-import { useCallback, useEffect, useEffectEvent, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
 import { AlertBanners } from '~/components/alerts/alert-banners';
 import { Icon } from '~/components/icons/icon';
 import { LogSheet } from '~/components/logs/log-sheet';
 import { LogVolume } from '~/components/logs/log-volume';
+import { RunQueryButton } from '~/components/logs/run-query-button';
 import { SaveViewDialog } from '~/components/logs/save-view-dialog';
 import { SearchSyntaxPopover } from '~/components/logs/search-syntax-popover';
 import { ViewMenu, VIEWS } from '~/components/logs/view-menu';
 import type { LevelView } from '~/components/logs/view-menu';
-import { ColumnMenu } from '~/components/ui/column-menu';
+import { ViewOptionsMenu } from '~/components/logs/view-options-menu';
 import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { DataTable } from '~/components/ui/data-table';
 import { EmptyState } from '~/components/ui/empty-state';
@@ -35,11 +36,11 @@ import { getQuery, readListParam } from '~/utils/filter';
 import { joinNames } from '~/utils/format';
 import { getViewChips, getViewParams, isSameView } from '~/utils/log-views';
 import type { SavedLogView } from '~/utils/log-views';
-import type { SearchFilterField } from '~/utils/filter';
+import type { SearchFilterField, SearchFilterValue } from '~/utils/filter';
 import { formatTerm } from '~/utils/log-search';
 import { getZoomLabel, OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
-const PAGE_SIZE = 50;
+const PAGE_SIZES = [50, 100, 200];
 const EXPORT_LIMIT = 5_000;
 const COLUMNS_KEY = 'daroyan.logs.columns';
 const WRAP_KEY = 'daroyan.logs.wrap';
@@ -66,6 +67,31 @@ const RANGES: { value: LogRange; label: string; ms: number }[] = [
   { value: '7d', label: 'Last 7 Days', ms: 7 * 24 * 3_600_000 },
 ];
 
+const EMPTY_FILTER: SearchFilterValue = { values: [], negate: false };
+
+function getFilterValues(params: URLSearchParams): Record<string, SearchFilterValue> {
+  return Object.fromEntries(
+    FILTER_KEYS.map(({ key, param }) => [
+      key,
+      { values: readListParam(params.get(param)), negate: params.get(`${key}_op`) === 'not' },
+    ])
+  );
+}
+
+function getFilterParams(values: Record<string, SearchFilterValue>) {
+  return Object.fromEntries(
+    FILTER_KEYS.flatMap(({ key, param }) => {
+      const value = values[key] ?? EMPTY_FILTER;
+      const isSet = value.values.length > 0;
+
+      return [
+        [param, isSet ? value.values.join(',') : null],
+        [`${key}_op`, isSet && value.negate ? 'not' : null],
+      ];
+    })
+  );
+}
+
 function toOptions(values: string[]) {
   return values.map((value) => ({ value, label: value }));
 }
@@ -76,35 +102,41 @@ export function meta() {
 
 export default function LogsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const filterValues = Object.fromEntries(
-    FILTER_KEYS.map(({ key, param }) => [
-      key,
-      { values: readListParam(searchParams.get(param)), negate: searchParams.get(`${key}_op`) === 'not' },
-    ])
-  );
+  const filterValues = getFilterValues(searchParams);
   const filterParams = Object.fromEntries(
-    FILTER_KEYS.flatMap(({ key, param }) =>
-      filterValues[key]!.values.length
-        ? [
-            [param, filterValues[key]!.values.join(',')],
-            ...(filterValues[key]!.negate ? [[`${key}_op`, 'not']] : []),
-          ]
-        : []
-    )
+    Object.entries(getFilterParams(filterValues)).filter(([, value]) => value)
   );
   const server = filterValues.server!;
   const isTelemetryView = !server.negate && server.values.includes(OTLP_SERVER_ID);
   const view = (VIEWS.find((item) => item.value === searchParams.get('level'))?.value ?? 'all') as LevelView;
   const q = searchParams.get('q') ?? '';
   const page = Math.max(Number(searchParams.get('page')) || 1, 1);
+  const pageSize = PAGE_SIZES.find((size) => size === Number(searchParams.get('limit'))) ?? PAGE_SIZES[0]!;
   const range = RANGES.find((item) => item.value === searchParams.get('range')) ?? RANGES.find((item) => item.value === DEFAULT_RANGE)!;
   const zoomSince = Number(searchParams.get('from'));
   const zoomUntil = Number(searchParams.get('to'));
   const zoom = zoomSince > 0 && zoomUntil > zoomSince ? { since: zoomSince, until: zoomUntil } : undefined;
 
+  const committedKey = JSON.stringify([q, getFilterParams(filterValues)]);
   const [search, setSearch] = useState(q);
+  const [draftFilters, setDraftFilters] = useState(() => getFilterValues(searchParams));
+  const [draftKey, setDraftKey] = useState(committedKey);
+  if (draftKey !== committedKey) {
+    setDraftKey(committedKey);
+    setSearch(q);
+    setDraftFilters(filterValues);
+  }
   const [isLive, setIsLive] = useState(false);
-  const [until, setUntil] = useState(() => Date.now());
+  const paramsKey = searchParams.toString();
+  const [timeWindow, setTimeWindow] = useState(() => ({
+    key: paramsKey,
+    until: Date.now(),
+    nextUntil: undefined as number | undefined,
+  }));
+  if (timeWindow.key !== paramsKey) {
+    setTimeWindow({ key: paramsKey, until: timeWindow.nextUntil ?? Date.now(), nextUntil: undefined });
+  }
+  const until = timeWindow.until;
   const [openLine, setOpenLine] = useState<LogRow>();
   const [isWrapped, setIsWrapped] = useStoredState(WRAP_KEY, false);
   const [hiddenColumns, setHiddenColumns] = useStoredState<ColumnVisibilityState>(COLUMNS_KEY, {});
@@ -113,35 +145,37 @@ export default function LogsPage() {
   const [removingView, setRemovingView] = useState<SavedLogView>();
   const [isExporting, setIsExporting] = useState(false);
 
-  const setParams = (changes: Record<string, string | null>) => {
-    setSearchParams(
-      (params) => {
-        for (const [key, value] of Object.entries(changes)) {
-          if (value) {
-            params.set(key, value);
-          } else {
-            params.delete(key);
-          }
-        }
-        if (!('page' in changes)) {
-          params.delete('page');
-        }
-        return params;
-      },
-      { replace: true }
-    );
-    setUntil(Date.now());
-  };
-
-  const commitSearch = useEffectEvent(() => setParams({ q: search.trim() || null }));
-
-  useEffect(() => {
-    if (search === q) {
+  const commitParams = (next: URLSearchParams) => {
+    if (next.toString() === paramsKey) {
+      setTimeWindow((current) => ({ ...current, until: Date.now() }));
       return;
     }
-    const timer = setTimeout(commitSearch, 300);
-    return () => clearTimeout(timer);
-  }, [search, q]);
+
+    setSearchParams(next, { replace: true });
+  };
+
+  const setParams = (changes: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams);
+    for (const [key, value] of Object.entries(changes)) {
+      if (value) {
+        next.set(key, value);
+      } else {
+        next.delete(key);
+      }
+    }
+    if (!('page' in changes)) {
+      next.delete('page');
+    }
+
+    commitParams(next);
+  };
+
+  const runQuery = (query: string, changes: Record<string, string | null> = {}) =>
+    setParams({ ...getFilterParams(draftFilters), q: query.trim() || null, ...changes });
+  const resetDraft = (params: URLSearchParams) => {
+    setSearch(params.get('q') ?? '');
+    setDraftFilters(getFilterValues(params));
+  };
 
   const isFollowing = isLive && page === 1 && !zoom;
   const filters = {
@@ -156,13 +190,15 @@ export default function LogsPage() {
   const { data: servers } = useQuery(serverQueries.list());
   const { data: sources } = useQuery(logQueries.sources());
   const { data, isLoading, isPlaceholderData: isShowingOldLines } = useQuery(
-    logQueries.list({ ...filters, ...timeRange, offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE }, isFollowing)
+    logQueries.list({ ...filters, ...timeRange, offset: (page - 1) * pageSize, limit: pageSize }, isFollowing)
   );
   const { data: volume, isPlaceholderData: isShowingOldVolume } = useQuery(
     logQueries.volume({ ...filters, ...timeRange }, isFollowing)
   );
   const isShowingOldResults = isShowingOldLines || isShowingOldVolume;
-  const isSearching = isShowingOldResults || search.trim() !== q;
+  const isDraftChanged =
+    search.trim() !== q ||
+    JSON.stringify(getFilterParams(draftFilters)) !== JSON.stringify(getFilterParams(filterValues));
 
   const serverNames = new Map([
     [OTLP_SERVER_ID, OTLP_SERVER_NAME],
@@ -225,7 +261,7 @@ export default function LogsPage() {
     }
   };
 
-  const selectedServers = filterValues.server!;
+  const draftServers = draftFilters.server ?? EMPTY_FILTER;
   const pickedServers = filterValues.server!;
   const silentServers = pickedServers.negate
     ? []
@@ -259,8 +295,8 @@ export default function LogsPage() {
           (sources ?? [])
             .filter(
               (source) =>
-                !selectedServers.values.length ||
-                selectedServers.values.includes(source.server_id) !== selectedServers.negate
+                !draftServers.values.length ||
+                draftServers.values.includes(source.server_id) !== draftServers.negate
             )
             .map((source) => source.service)
         ),
@@ -288,10 +324,15 @@ export default function LogsPage() {
     rangeLabel: range.value === DEFAULT_RANGE ? undefined : range.label,
   });
 
-  const applyView = (saved: SavedLogView) => {
-    setSearch(saved.params.q ?? '');
-    setSearchParams(new URLSearchParams(saved.params), { replace: true });
-    setUntil(Date.now());
+  const applyView = (params: Record<string, string>) => {
+    const next = new URLSearchParams(params);
+    const limit = searchParams.get('limit');
+    if (limit) {
+      next.set('limit', limit);
+    }
+
+    resetDraft(next);
+    commitParams(next);
   };
   const saveView = (name: string) => {
     setSavedViews([...savedViews, { id: String(Date.now()), name, params: viewParams }]);
@@ -351,6 +392,19 @@ export default function LogsPage() {
                 </Menu.Positioner>
               </Menu.Portal>
             </Menu.Root>
+            <ViewOptionsMenu
+              labels={COLUMN_LABELS}
+              hidden={hiddenColumns}
+              onHiddenChange={setHiddenColumns}
+              isWrapped={isWrapped}
+              onWrappedChange={setIsWrapped}
+              pageSizes={PAGE_SIZES}
+              pageSize={pageSize}
+              onPageSizeChange={(next) => {
+                setTimeWindow((current) => ({ ...current, nextUntil: current.until }));
+                setParams({ limit: next === PAGE_SIZES[0] ? null : String(next) });
+              }}
+            />
             <Button type="button" variant="secondary" className="w-fit" disabled={isExporting} onClick={() => void exportLogs()}>
               <Icon name={isExporting ? 'loader' : 'download'} className={cn(isExporting && 'animate-spin')} />
               Export
@@ -388,31 +442,24 @@ export default function LogsPage() {
               savedViews={savedViews}
               activeView={activeView}
               canSaveView={canSaveView}
-              onChange={(next) => setParams({ level: next === 'all' ? null : next })}
-              onApplyView={applyView}
+              onChange={(next) => runQuery(search, { level: next === 'all' ? null : next })}
+              onApplyView={(saved) => applyView(saved.params)}
               onRemoveView={setRemovingView}
               onSaveView={() => setIsSavingView(true)}
             />
             <SearchFilter
               label="Search, or -path:/v1/health"
               fields={fields}
-              filters={filterValues}
-              onFilterChange={(changes) => {
-                setParams(
-                  Object.fromEntries(
-                    changes.flatMap((change) => {
-                      const { key, param } = FILTER_KEYS.find((item) => item.key === change.key)!;
-                      return [
-                        [param, change.value?.values.join(',') || null],
-                        [`${key}_op`, change.value?.negate ? 'not' : null],
-                      ];
-                    })
-                  )
-                );
-              }}
+              filters={draftFilters}
+              onFilterChange={(changes) =>
+                setDraftFilters((current) => ({
+                  ...current,
+                  ...Object.fromEntries(changes.map((change) => [change.key, change.value ?? EMPTY_FILTER])),
+                }))
+              }
               query={search}
               onQueryChange={setSearch}
-              isSearching={isSearching}
+              onSubmit={runQuery}
             />
             {canSaveView && (
               <button
@@ -426,29 +473,15 @@ export default function LogsPage() {
             )}
             {isViewChanged && (
               <ResetViewButton
-                onReset={() => {
-                  setSearch('');
-                  setSearchParams({}, { replace: true });
-                  setUntil(Date.now());
-                }}
+                onReset={() => applyView({})}
               />
             )}
             <SearchSyntaxPopover />
-            <ColumnMenu
-              labels={COLUMN_LABELS}
-              hidden={hiddenColumns}
-              onChange={setHiddenColumns}
+            <RunQueryButton
+              isChanged={isDraftChanged}
+              isRunning={isShowingOldResults}
+              onRun={() => runQuery(search)}
             />
-            <button
-              type="button"
-              aria-label="Wrap Lines"
-              aria-pressed={isWrapped}
-              title="Wrap lines"
-              onClick={() => setIsWrapped(!isWrapped)}
-              className="flex size-7 shrink-0 items-center justify-center rounded-sm text-text-secondary outline-none hover:bg-surface-fill focus-visible:ring-2 focus-visible:ring-text-link/40 aria-pressed:bg-surface-fill aria-pressed:text-text-primary"
-            >
-              <Icon name="align-left" />
-            </button>
           </div>
           <div className={cn('flex flex-col gap-2 transition-opacity', isShowingOldResults && 'opacity-60')}>
             <LogVolume volume={volume} onZoom={onZoom} />
@@ -482,23 +515,15 @@ export default function LogsPage() {
           )}
           <Pager
             className="mt-auto"
-            start={(page - 1) * PAGE_SIZE + 1}
+            start={(page - 1) * pageSize + 1}
             rowCount={data?.lines.length ?? 0}
             hasPrevious={page > 1}
             hasNext={!!data?.has_more}
             onPrevious={() => setParams({ page: page > 2 ? String(page - 1) : null })}
             onNext={() => {
               setIsLive(false);
-              setSearchParams(
-                (params) => {
-                  params.set('page', String(page + 1));
-                  return params;
-                },
-                { replace: true }
-              );
-              if (data) {
-                setUntil(data.until);
-              }
+              setTimeWindow((current) => ({ ...current, nextUntil: data?.until }));
+              setParams({ page: String(page + 1) });
             }}
           />
         </div>
@@ -522,7 +547,7 @@ export default function LogsPage() {
         onNavigate={(step) => setOpenLine(lines[openIndex + step])}
         onClose={() => setOpenLine(undefined)}
         onFilter={(term) => {
-          setSearch(getQuery([search, formatTerm(term)]));
+          runQuery(getQuery([search, formatTerm(term)]));
           setOpenLine(undefined);
         }}
       />

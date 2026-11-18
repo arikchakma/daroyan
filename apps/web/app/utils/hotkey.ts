@@ -6,3 +6,7 @@ export function formatHotkey(hotkey: Hotkey) {
     separatorToken: detectPlatform() === 'mac' ? '' : null,
   });
 }
+
+export function isMacPlatform() {
+  return detectPlatform() === 'mac';
+}
