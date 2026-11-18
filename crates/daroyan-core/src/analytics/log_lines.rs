@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use daroyan_protocol::log::{LogBatch, SEVERITY_ERROR, SEVERITY_INFO, SEVERITY_WARN};
@@ -13,6 +15,7 @@ use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::alerts::message::format_bytes;
+use crate::analytics::archive::quote_identifier;
 use crate::analytics::log_parse::{
     normalize_json_line, parse_text_line, read_level_value, read_level_word,
     take_json_time,
@@ -29,6 +32,7 @@ const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_NAME_BYTES: usize = 200;
 const AGENT_SERVICE: &str = "Daroyan agent";
 const LINE_OVERHEAD: u64 = 64;
+pub const MINUTE_MS: i64 = 60_000;
 pub const OTLP_SERVER_ID: &str = "otlp";
 pub const OTLP_SERVER_NAME: &str = "OpenTelemetry";
 const LEVEL_KEYS: [&str; 4] = ["level", "severity", "status", "log.level"];
@@ -346,6 +350,26 @@ pub fn append_logs(
     appender.flush()
 }
 
+pub fn append_volume(conn: &Connection, rows: &[LogRow]) -> duckdb::Result<()> {
+    let mut counts: HashMap<(i64, &str, &str, u8), i64> = HashMap::new();
+    for row in rows {
+        let minute = row.at.div_euclid(MINUTE_MS) * MINUTE_MS;
+        *counts
+            .entry((minute, &row.server_id, &row.service, row.severity))
+            .or_default() += 1;
+    }
+
+    let mut statement = conn.prepare(
+        "INSERT INTO log_volume (minute, server_id, service, severity, lines) VALUES (?, ?, ?, ?, ?) \
+         ON CONFLICT DO UPDATE SET lines = lines + excluded.lines",
+    )?;
+    for ((minute, server_id, service, severity), lines) in counts {
+        statement.execute(params![minute, server_id, service, severity, lines])?;
+    }
+
+    Ok(())
+}
+
 pub fn read_level(severity: u8) -> &'static str {
     match severity {
         0..SEVERITY_INFO => "debug",
@@ -355,20 +379,20 @@ pub fn read_level(severity: u8) -> &'static str {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LogFilter {
     pub values: Vec<String>,
     pub negate: bool,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SearchField {
     Message,
     Any,
     Key(String),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SearchMatch {
     Text(String),
     OneOf(Vec<String>),
@@ -377,7 +401,7 @@ pub enum SearchMatch {
     Below(f64),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SearchTerm {
     pub field: SearchField,
     pub matches: SearchMatch,
@@ -402,7 +426,7 @@ impl SearchTerm {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LogSearch {
     pub servers: LogFilter,
     pub services: LogFilter,
@@ -414,26 +438,182 @@ pub struct LogSearch {
     pub until: i64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LogQuery {
     pub search: LogSearch,
     pub offset: u32,
     pub limit: u32,
 }
 
-const METHOD_COLUMN: &str =
-    "coalesce(http_method, json_extract_string(attributes, '$.\"http.method\"'))";
-const STATUS_COLUMN: &str = "coalesce(CAST(http_status AS VARCHAR), \
-     json_extract_string(attributes, '$.\"http.status\"'))";
-const PATH_COLUMN: &str =
-    "coalesce(url_path, json_extract_string(attributes, '$.\"url.path\"'))";
-const CLIENT_IP_COLUMN: &str =
-    "coalesce(client_ip, json_extract_string(attributes, '$.\"client.ip\"'))";
-const MESSAGE_COLUMN: &str = "CASE WHEN message = '' THEN concat_ws(' ', \
-     coalesce(http_method, json_extract_string(attributes, '$.\"http.method\"')), \
-     coalesce(url_path, json_extract_string(attributes, '$.\"url.path\"')), \
-     coalesce(CAST(http_status AS VARCHAR), json_extract_string(attributes, '$.\"http.status\"'))) \
-     ELSE message END";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogCursor {
+    pub at: i64,
+    pub skip: u32,
+}
+
+impl LogSearch {
+    pub fn can_use_rollup(&self) -> bool {
+        self.methods.values.is_empty()
+            && self.status_classes.values.is_empty()
+            && self.terms.is_empty()
+    }
+}
+
+impl LogCursor {
+    pub fn after(lines: &[LogItem], until: i64, offset: u32) -> Option<Self> {
+        let last = lines.last()?.at;
+        let same = lines.iter().filter(|line| line.at == last).count() as u32;
+        let skip = if last == until { offset + same } else { same };
+
+        Some(Self { at: last, skip })
+    }
+}
+
+impl fmt::Display for LogCursor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}:{}", self.at, self.skip)
+    }
+}
+
+impl FromStr for LogCursor {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let invalid = || format!("The cursor {text} is not valid");
+        let (at, skip) = text.split_once(':').ok_or_else(invalid)?;
+
+        Ok(Self {
+            at: at.parse().map_err(|_| invalid())?,
+            skip: skip.parse().map_err(|_| invalid())?,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, ToSchema)]
+#[schema(as = LogScan)]
+pub struct LogScan {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct LogPage {
+    pub lines: Vec<LogItem>,
+    pub has_more: bool,
+    pub next: Option<LogCursor>,
+    pub scan: Option<LogScan>,
+}
+
+impl LogPage {
+    pub fn new(
+        mut lines: Vec<LogItem>,
+        query: &LogQuery,
+        stopped_at: Option<i64>,
+        scan: Option<LogScan>,
+    ) -> Self {
+        let limit = query.limit as usize;
+        let is_full = lines.len() > limit;
+        lines.truncate(limit);
+
+        let next = if is_full {
+            LogCursor::after(&lines, query.search.until, query.offset)
+        } else {
+            stopped_at.map(|at| LogCursor { at, skip: 0 })
+        };
+
+        Self { has_more: next.is_some(), lines, next, scan }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum LogColumns {
+    #[default]
+    Hot,
+    Cold(HashSet<String>),
+}
+
+impl LogColumns {
+    fn attribute(&self, key: &str, values: &mut Vec<SqlValue>) -> String {
+        let path = format!("$.\"{}\"", key.replace('"', ""));
+        let Self::Cold(names) = self else {
+            values.extend([SqlValue::Text(path.clone()), SqlValue::Text(path)]);
+            return "coalesce(json_extract_string(attributes, ?), json_extract_string(resource, ?))"
+                .to_string();
+        };
+
+        let mut sources = Vec::new();
+        for (prefix, rest) in [("a.", "_rest_attributes"), ("r.", "_rest_resource")] {
+            let name = format!("{prefix}{key}");
+            if names.contains(&name) {
+                sources.push(format!("CAST({} AS VARCHAR)", quote_identifier(&name)));
+            }
+            if names.contains(rest) {
+                values.push(SqlValue::Text(path.clone()));
+                sources.push(format!("json_extract_string({rest}, ?)"));
+            }
+        }
+
+        match sources.len() {
+            0 => "NULL".to_string(),
+            1 => sources.remove(0),
+            _ => format!("coalesce({})", sources.join(", ")),
+        }
+    }
+
+    fn http(&self, column: &str, key: &str, values: &mut Vec<SqlValue>) -> String {
+        let fallback = match self {
+            Self::Hot => {
+                values.push(SqlValue::Text(format!("$.\"{key}\"")));
+                "json_extract_string(attributes, ?)".to_string()
+            }
+            Self::Cold(_) => self.attribute(key, values),
+        };
+
+        format!("coalesce({column}, {fallback})")
+    }
+
+    fn method(&self, values: &mut Vec<SqlValue>) -> String {
+        self.http("http_method", "http.method", values)
+    }
+
+    fn status(&self, values: &mut Vec<SqlValue>) -> String {
+        self.http("CAST(http_status AS VARCHAR)", "http.status", values)
+    }
+
+    fn path(&self, values: &mut Vec<SqlValue>) -> String {
+        self.http("url_path", "url.path", values)
+    }
+
+    fn client_ip(&self, values: &mut Vec<SqlValue>) -> String {
+        self.http("client_ip", "client.ip", values)
+    }
+
+    fn message(&self, values: &mut Vec<SqlValue>) -> String {
+        let method = self.method(values);
+        let path = self.path(values);
+        let status = self.status(values);
+
+        format!(
+            "CASE WHEN message = '' THEN concat_ws(' ', {method}, {path}, {status}) ELSE message END"
+        )
+    }
+
+    fn any(&self, values: &mut Vec<SqlValue>) -> String {
+        let message = self.message(values);
+
+        match self {
+            Self::Hot => {
+                format!(
+                    "(({message}) || ' ' || coalesce(CAST(attributes AS VARCHAR), ''))"
+                )
+            }
+            Self::Cold(names) if names.is_empty() => format!("({message})"),
+            Self::Cold(_) => {
+                format!("concat_ws(' ', ({message}), *COLUMNS('^(a|r)\\.|^_rest_'))")
+            }
+        }
+    }
+}
 
 fn push_condition(sql: &mut String, condition: &str, negate: bool) {
     let not = if negate { "NOT " } else { "" };
@@ -444,37 +624,32 @@ fn push_filter(
     sql: &mut String,
     values: &mut Vec<SqlValue>,
     column: &str,
-    filter: LogFilter,
+    filter: &LogFilter,
 ) {
     if filter.values.is_empty() {
         return;
     }
     let marks = vec!["?"; filter.values.len()].join(", ");
     push_condition(sql, &format!("{column} IN ({marks})"), filter.negate);
-    values.extend(filter.values.into_iter().map(SqlValue::Text));
+    values.extend(filter.values.iter().cloned().map(SqlValue::Text));
 }
 
-fn push_column(values: &mut Vec<SqlValue>, field: SearchField) -> String {
+fn push_column(
+    columns: &LogColumns,
+    values: &mut Vec<SqlValue>,
+    field: &SearchField,
+) -> String {
     match field {
-        SearchField::Message => format!("({MESSAGE_COLUMN})"),
-        SearchField::Any => {
-            format!(
-                "(({MESSAGE_COLUMN}) || ' ' || coalesce(CAST(attributes AS VARCHAR), ''))"
-            )
-        }
+        SearchField::Message => format!("({})", columns.message(values)),
+        SearchField::Any => columns.any(values),
         SearchField::Key(key) => match key.as_str() {
             "service" | "source" => "service".to_string(),
             "trace_id" | "trace" => "trace_id".to_string(),
-            "http.status" => format!("({STATUS_COLUMN})"),
-            "http.method" => format!("({METHOD_COLUMN})"),
-            "url.path" => format!("({PATH_COLUMN})"),
-            "client.ip" => format!("({CLIENT_IP_COLUMN})"),
-            _ => {
-                let path = format!("$.\"{}\"", key.replace('"', ""));
-                values.extend([SqlValue::Text(path.clone()), SqlValue::Text(path)]);
-                "coalesce(json_extract_string(attributes, ?), json_extract_string(resource, ?))"
-                    .to_string()
-            }
+            "http.status" => format!("({})", columns.status(values)),
+            "http.method" => format!("({})", columns.method(values)),
+            "url.path" => format!("({})", columns.path(values)),
+            "client.ip" => format!("({})", columns.client_ip(values)),
+            _ => columns.attribute(key, values),
         },
     }
 }
@@ -487,38 +662,43 @@ fn to_like_pattern(value: &str) -> String {
         .replace('*', "%")
 }
 
-fn push_term(sql: &mut String, values: &mut Vec<SqlValue>, term: SearchTerm) {
+fn push_term(
+    sql: &mut String,
+    values: &mut Vec<SqlValue>,
+    columns: &LogColumns,
+    term: &SearchTerm,
+) {
     let is_free_text = matches!(term.field, SearchField::Message | SearchField::Any);
-    let column = push_column(values, term.field);
+    let column = push_column(columns, values, &term.field);
 
-    let condition = match term.matches {
+    let condition = match &term.matches {
         SearchMatch::Text(text) if is_free_text => {
-            values.push(SqlValue::Text(text));
+            values.push(SqlValue::Text(text.clone()));
             format!("contains(lower({column}), lower(?))")
         }
         SearchMatch::Text(text) if text.contains('*') => {
-            values.push(SqlValue::Text(to_like_pattern(&text)));
+            values.push(SqlValue::Text(to_like_pattern(text)));
             format!("{column} ILIKE ? ESCAPE '\\'")
         }
         SearchMatch::Text(text) => {
-            values.push(SqlValue::Text(text));
+            values.push(SqlValue::Text(text.clone()));
             format!("lower({column}) = lower(?)")
         }
         SearchMatch::OneOf(items) => {
             let marks = vec!["lower(?)"; items.len()].join(", ");
-            values.extend(items.into_iter().map(SqlValue::Text));
+            values.extend(items.iter().cloned().map(SqlValue::Text));
             format!("lower({column}) IN ({marks})")
         }
         SearchMatch::Regex(pattern) => {
-            values.push(SqlValue::Text(pattern));
+            values.push(SqlValue::Text(pattern.clone()));
             format!("regexp_matches({column}, ?, 'i')")
         }
         SearchMatch::Above(number) => {
-            values.push(SqlValue::Double(number));
+            values.push(SqlValue::Double(*number));
             format!("TRY_CAST({column} AS DOUBLE) > ?")
         }
         SearchMatch::Below(number) => {
-            values.push(SqlValue::Double(number));
+            values.push(SqlValue::Double(*number));
             format!("TRY_CAST({column} AS DOUBLE) < ?")
         }
     };
@@ -526,23 +706,41 @@ fn push_term(sql: &mut String, values: &mut Vec<SqlValue>, term: SearchTerm) {
     push_condition(sql, &condition, term.negate);
 }
 
-fn push_search(sql: &mut String, values: &mut Vec<SqlValue>, search: LogSearch) {
+pub fn push_search(
+    sql: &mut String,
+    values: &mut Vec<SqlValue>,
+    columns: &LogColumns,
+    search: &LogSearch,
+) {
     sql.push_str(" WHERE logged_at <= ?");
     values.push(SqlValue::BigInt(search.until));
     if let Some(since) = search.since {
         sql.push_str(" AND logged_at >= ?");
         values.push(SqlValue::BigInt(since));
     }
-    push_filter(sql, values, "server_id", search.servers);
-    push_filter(sql, values, "service", search.services);
-    push_filter(sql, values, METHOD_COLUMN, search.methods);
-    push_filter(sql, values, &format!("left({STATUS_COLUMN}, 1)"), search.status_classes);
+    push_filter(sql, values, "server_id", &search.servers);
+    push_filter(sql, values, "service", &search.services);
+
+    let mut method_values = Vec::new();
+    let method = columns.method(&mut method_values);
+    if !search.methods.values.is_empty() {
+        values.extend(method_values);
+        push_filter(sql, values, &method, &search.methods);
+    }
+
+    let mut status_values = Vec::new();
+    let status = columns.status(&mut status_values);
+    if !search.status_classes.values.is_empty() {
+        values.extend(status_values);
+        push_filter(sql, values, &format!("left({status}, 1)"), &search.status_classes);
+    }
+
     if let Some(min_severity) = search.min_severity {
         sql.push_str(" AND severity >= ?");
         values.push(SqlValue::UTinyInt(min_severity));
     }
-    for term in search.terms {
-        push_term(sql, values, term);
+    for term in &search.terms {
+        push_term(sql, values, columns, term);
     }
 }
 
@@ -575,7 +773,7 @@ pub async fn list_logs(analytics: &Analytics, query: LogQuery) -> Result<Vec<Log
                  FROM log_lines",
             );
             let mut values = Vec::new();
-            push_search(&mut sql, &mut values, query.search);
+            push_search(&mut sql, &mut values, &LogColumns::Hot, &query.search);
             sql.push_str(" ORDER BY logged_at DESC LIMIT ? OFFSET ?");
             values.push(SqlValue::UInt(query.limit));
             values.push(SqlValue::UInt(query.offset));
@@ -587,7 +785,27 @@ pub async fn list_logs(analytics: &Analytics, query: LogQuery) -> Result<Vec<Log
         .await
 }
 
-fn read_item(row: &duckdb::Row<'_>) -> duckdb::Result<LogItem> {
+pub async fn count_logs(analytics: &Analytics, search: LogSearch) -> Result<u64> {
+    analytics
+        .read(move |conn| {
+            let mut sql = String::from("SELECT count(*) FROM log_lines");
+            let mut values = Vec::new();
+            push_search(&mut sql, &mut values, &LogColumns::Hot, &search);
+
+            conn.query_row(&sql, params_from_iter(values), |row| row.get(0))
+        })
+        .await
+}
+
+pub async fn read_oldest_log(analytics: &Analytics) -> Result<Option<i64>> {
+    analytics
+        .read(|conn| {
+            conn.query_row("SELECT min(logged_at) FROM log_lines", [], |row| row.get(0))
+        })
+        .await
+}
+
+pub fn read_item(row: &duckdb::Row<'_>) -> duckdb::Result<LogItem> {
     let severity: u8 = row.get(4)?;
     let attributes: Option<String> = row.get(6)?;
     Ok(LogItem {
@@ -639,7 +857,7 @@ pub async fn count_log_buckets(
                 SqlValue::UTinyInt(SEVERITY_ERROR),
                 SqlValue::UTinyInt(SEVERITY_ERROR),
             ];
-            push_search(&mut sql, &mut values, search);
+            push_search(&mut sql, &mut values, &LogColumns::Hot, &search);
             sql.push_str(" GROUP BY bucket ORDER BY bucket");
 
             let mut statement = conn.prepare(&sql)?;
@@ -650,6 +868,56 @@ pub async fn count_log_buckets(
                         info: row.get(1)?,
                         warn: row.get(2)?,
                         error: row.get(3)?,
+                    })
+                })?
+                .collect()
+        })
+        .await
+}
+
+pub async fn count_rolled_buckets(
+    analytics: &Analytics,
+    search: LogSearch,
+    bucket_ms: i64,
+) -> Result<Vec<LogBucket>> {
+    analytics
+        .read(move |conn| {
+            let mut sql = String::from(
+                "SELECT minute // ? * ? AS bucket, \
+                 coalesce(sum(lines) FILTER (WHERE severity < ?), 0), \
+                 coalesce(sum(lines) FILTER (WHERE severity >= ? AND severity < ?), 0), \
+                 coalesce(sum(lines) FILTER (WHERE severity >= ?), 0) \
+                 FROM log_volume WHERE minute <= ?",
+            );
+            let mut values = vec![
+                SqlValue::BigInt(bucket_ms),
+                SqlValue::BigInt(bucket_ms),
+                SqlValue::UTinyInt(SEVERITY_WARN),
+                SqlValue::UTinyInt(SEVERITY_WARN),
+                SqlValue::UTinyInt(SEVERITY_ERROR),
+                SqlValue::UTinyInt(SEVERITY_ERROR),
+                SqlValue::BigInt(search.until),
+            ];
+            if let Some(since) = search.since {
+                sql.push_str(" AND minute >= ?");
+                values.push(SqlValue::BigInt(since.div_euclid(MINUTE_MS) * MINUTE_MS));
+            }
+            push_filter(&mut sql, &mut values, "server_id", &search.servers);
+            push_filter(&mut sql, &mut values, "service", &search.services);
+            if let Some(min_severity) = search.min_severity {
+                sql.push_str(" AND severity >= ?");
+                values.push(SqlValue::UTinyInt(min_severity));
+            }
+            sql.push_str(" GROUP BY bucket ORDER BY bucket");
+
+            let mut statement = conn.prepare(&sql)?;
+            statement
+                .query_map(params_from_iter(values), |row| {
+                    Ok(LogBucket {
+                        at: row.get(0)?,
+                        info: u64::try_from(row.get::<_, i128>(1)?).unwrap_or_default(),
+                        warn: u64::try_from(row.get::<_, i128>(2)?).unwrap_or_default(),
+                        error: u64::try_from(row.get::<_, i128>(3)?).unwrap_or_default(),
                     })
                 })?
                 .collect()
@@ -892,7 +1160,8 @@ mod tests {
 
     use super::{
         HttpFields, LogBucket, LogFilter, LogQuery, LogSearch, SearchField, SearchMatch,
-        SearchTerm, count_log_buckets, list_logs, read_level, to_log_rows,
+        SearchTerm, count_log_buckets, count_rolled_buckets, list_logs, read_level,
+        to_log_rows,
     };
     use crate::analytics::Analytics;
 
@@ -1185,6 +1454,9 @@ mod tests {
         assert_eq!(find(SearchTerm::key("url.path", "*", false)).await, [4, 1]);
         assert_eq!(find(term(path(), SearchMatch::Text("*".into()), true)).await, [3, 2]);
 
+        let rolled = count_rolled_buckets(&analytics, search(10), 60_000).await.unwrap();
+        assert_eq!(rolled, [LogBucket { at: 0, info: 2, warn: 1, error: 1 }]);
+
         let buckets = count_log_buckets(&analytics, search(10), 2).await.unwrap();
         assert_eq!(
             buckets,
@@ -1212,6 +1484,9 @@ mod tests {
         ))?;
         conn.execute_batch(include_str!(
             "../../../daroyan-migration/duckdb/0012_log_archive.sql"
+        ))?;
+        conn.execute_batch(include_str!(
+            "../../../daroyan-migration/duckdb/0014_log_volume.sql"
         ))
     }
 

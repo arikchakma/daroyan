@@ -12,6 +12,7 @@ use axum::{Extension, Json, Router};
 use daroyan_core::agents::Agents;
 use daroyan_core::alerts::connect::ConnectStates;
 use daroyan_core::analytics::Analytics;
+use daroyan_core::archive::Archive;
 use daroyan_core::config::Config;
 use daroyan_core::crons::Crons;
 use daroyan_core::db::connect_database;
@@ -42,6 +43,7 @@ pub async fn open_state(config: Config) -> anyhow::Result<AppState> {
     let database = connect_database(&config).await?;
     Migrator::up(&database.conn, None).await?;
     let analytics = Analytics::try_from(open_duckdb(&config.duckdb_path)?)?;
+    let archive = open_archive(&config, &analytics).await?;
     restrict_data_files(&config);
     let uptime = Uptime::new(database.clone(), analytics.clone());
     let crons = Crons::new(database.clone(), analytics.clone());
@@ -51,12 +53,27 @@ pub async fn open_state(config: Config) -> anyhow::Result<AppState> {
         config: Arc::new(config),
         database,
         analytics,
+        archive,
         uptime,
         crons,
         agents: Agents::default(),
         limits: Limits::default(),
         connects: ConnectStates::default(),
     })
+}
+
+async fn open_archive(
+    config: &Config,
+    analytics: &Analytics,
+) -> anyhow::Result<Option<Archive>> {
+    let Some(settings) = &config.archive else { return Ok(None) };
+    let archive =
+        Archive::try_from(settings)?.with_log_retention_days(config.log_retention_days);
+    if !settings.range_reads {
+        return Ok(Some(archive));
+    }
+
+    Ok(Some(archive.with_range_reads(analytics, settings).await))
 }
 
 fn restrict_data_files(config: &Config) {

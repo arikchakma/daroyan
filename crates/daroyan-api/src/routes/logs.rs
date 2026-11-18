@@ -2,10 +2,10 @@ use axum::Json;
 use axum::extract::{Query, State};
 use chrono::Utc;
 use daroyan_core::analytics::log_lines::{
-    LogBucket, LogFilter, LogItem, LogQuery, LogSearch, LogSource, SearchField,
-    SearchMatch, SearchTerm, count_log_buckets, list_log_context, list_log_sources,
-    list_logs,
+    LogBucket, LogCursor, LogFilter, LogItem, LogQuery, LogScan, LogSearch, LogSource,
+    SearchField, SearchMatch, SearchTerm, list_log_sources,
 };
+use daroyan_core::archive::{count_any_log_buckets, list_any_log_context, search_logs};
 use daroyan_core::error::{Error, ErrorName, Result};
 use daroyan_protocol::log::{
     SEVERITY_DEBUG, SEVERITY_ERROR, SEVERITY_INFO, SEVERITY_WARN,
@@ -64,6 +64,7 @@ struct LogsQuery {
     q: Option<String>,
     since: Option<i64>,
     until: Option<i64>,
+    before: Option<String>,
     offset: Option<u32>,
     limit: Option<u32>,
 }
@@ -74,6 +75,8 @@ struct LogPageView {
     lines: Vec<LogItem>,
     has_more: bool,
     until: i64,
+    next: Option<String>,
+    scanned: Option<LogScan>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -304,8 +307,9 @@ fn read_filter(values: Option<String>, op: Option<String>) -> LogFilter {
         ("level" = Option<String>, Query, description = "The lowest level shown: debug, info, warn or error"),
         ("q" = Option<String>, Query, description = "Words match the message, and `*:word` matches any field. `key:value` matches an attribute, where `*` is a wildcard and `key:*` means the attribute exists. `key:[a,b]` matches either value, `key:>500` and `key:<100` compare numbers, and `/regex/` or `key:/regex/` match an RE2 regex. A leading `-` excludes. Quote text with spaces. Matching ignores case"),
         ("since" = Option<i64>, Query, description = "Only lines at or after this time in ms"),
-        ("until" = Option<i64>, Query, description = "Only lines at or before this time in ms. Keep it the same while paging"),
-        ("offset" = Option<u32>, Query),
+        ("until" = Option<i64>, Query, description = "Only lines at or before this time in ms"),
+        ("before" = Option<String>, Query, description = "The next value of the last page, to get the page after it"),
+        ("offset" = Option<u32>, Query, description = "Deprecated, use before. Lines to skip, keeping until the same"),
         ("limit" = Option<u32>, Query)
     ),
     responses((status = 200, body = LogPageView))
@@ -316,15 +320,34 @@ async fn get_logs(
     Query(query): Query<LogsQuery>,
 ) -> Result<Json<LogPageView>> {
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let offset = query.offset.unwrap_or(0);
-    let search = read_search(query)?;
+    let cursor = query
+        .before
+        .as_deref()
+        .map(str::parse::<LogCursor>)
+        .transpose()
+        .map_err(|message| Error::new(ErrorName::ValidationError, message))?;
+    let mut offset = query.offset.unwrap_or(0);
+    let mut search = read_search(query)?;
+    if let Some(cursor) = cursor {
+        search.until = cursor.at;
+        offset = cursor.skip;
+    }
+
     let until = search.until;
-    let mut lines =
-        list_logs(&state.analytics, LogQuery { search, offset, limit: limit + 1 })
-            .await?;
-    let has_more = lines.len() > limit as usize;
-    lines.truncate(limit as usize);
-    Ok(Json(LogPageView { lines, has_more, until }))
+    let page = search_logs(
+        &state.analytics,
+        state.archive.as_ref(),
+        LogQuery { search, offset, limit },
+    )
+    .await?;
+
+    Ok(Json(LogPageView {
+        lines: page.lines,
+        has_more: page.has_more,
+        until,
+        next: page.next.map(|cursor| cursor.to_string()),
+        scanned: page.scan,
+    }))
 }
 
 #[utoipa::path(
@@ -358,7 +381,13 @@ async fn get_log_volume(
     let start = since.div_euclid(bucket_ms) * bucket_ms;
     search.since = Some(since);
 
-    let counted = count_log_buckets(&state.analytics, search, bucket_ms).await?;
+    let counted = count_any_log_buckets(
+        &state.analytics,
+        state.archive.as_ref(),
+        search,
+        bucket_ms,
+    )
+    .await?;
     Ok(Json(LogVolumeView {
         bucket_ms,
         since,
@@ -436,8 +465,9 @@ async fn get_log_context(
     Query(query): Query<ContextQuery>,
 ) -> Result<Json<Vec<LogItem>>> {
     Ok(Json(
-        list_log_context(
+        list_any_log_context(
             &state.analytics,
+            state.archive.as_ref(),
             query.server_id,
             query.service,
             query.at,

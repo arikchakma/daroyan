@@ -21,7 +21,9 @@ use duckdb::Connection;
 use tokio::task::{JoinHandle, spawn_blocking};
 
 use crate::analytics::archive::IS_ARCHIVED;
-use crate::analytics::log_lines::{LogRow, OTLP_SERVER_ID, append_logs, to_log_rows};
+use crate::analytics::log_lines::{
+    LogRow, OTLP_SERVER_ID, append_logs, append_volume, to_log_rows,
+};
 use crate::analytics::server_events::{
     EventRow, append_events, to_event_row, to_event_rows,
 };
@@ -68,6 +70,32 @@ pub struct Trim {
     pub logs_until: Option<i64>,
     pub spans_until: Option<i64>,
     pub unarchived_rows: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Purge {
+    pub cutoff_ms: i64,
+    pub log_cutoff_ms: i64,
+    pub volume_cutoff_ms: i64,
+    pub keep_unarchived: bool,
+}
+
+impl Purge {
+    pub fn at(
+        now_ms: i64,
+        retention_days: u32,
+        log_retention_days: u32,
+        archive_days: Option<u32>,
+    ) -> Self {
+        let before = |days: u32| now_ms - i64::from(days) * DAY_MS;
+
+        Self {
+            cutoff_ms: before(retention_days),
+            log_cutoff_ms: before(log_retention_days),
+            volume_cutoff_ms: before(archive_days.unwrap_or(log_retention_days)),
+            keep_unarchived: archive_days.is_some(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -265,17 +293,19 @@ impl Analytics {
             append_disks(conn, &pending.disks)?;
             append_events(conn, &pending.events)?;
             append_logs(conn, &pending.logs, Utc::now().timestamp_millis())?;
+            append_volume(conn, &pending.logs)?;
             append_spans(conn, &pending.spans, &pending.exceptions)
         })
         .await
     }
 
-    pub async fn purge_before(
-        &self,
-        cutoff_ms: i64,
-        log_cutoff_ms: i64,
-        keep_unarchived: bool,
-    ) -> Result<()> {
+    pub async fn purge(&self, purge: Purge) -> Result<()> {
+        let Purge {
+            cutoff_ms,
+            log_cutoff_ms,
+            volume_cutoff_ms,
+            keep_unarchived,
+        } = purge;
         self.write(move |conn| {
             conn.execute("DELETE FROM server_states WHERE taken_at < ?", [cutoff_ms])?;
             conn.execute("DELETE FROM disk_states WHERE taken_at < ?", [cutoff_ms])?;
@@ -286,6 +316,7 @@ impl Analytics {
                 logs.push_str(&format!(" AND {IS_ARCHIVED}"));
             }
             conn.execute(&logs, [log_cutoff_ms])?;
+            conn.execute("DELETE FROM log_volume WHERE minute < ?", [volume_cutoff_ms])?;
 
             conn.execute("DELETE FROM spans WHERE started_at < ?", [cutoff_ms * 1_000])?;
             conn.execute(
@@ -414,6 +445,7 @@ impl Analytics {
                 [OTLP_SERVER_ID, &server_id],
             )?;
             conn.execute("DELETE FROM log_lines WHERE server_id = ?", [&server_id])?;
+            conn.execute("DELETE FROM log_volume WHERE server_id = ?", [&server_id])?;
             conn.execute(
                 "UPDATE spans SET server_id = NULL WHERE server_id = ?",
                 [&server_id],
@@ -430,7 +462,7 @@ pub fn spawn_analytics_tasks(
     log_retention_days: u32,
     backup_dir: Option<PathBuf>,
     max_bytes: Option<u64>,
-    archive: bool,
+    archive_days: Option<u32>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut flush = tokio::time::interval(FLUSH_INTERVAL);
@@ -448,16 +480,19 @@ pub fn spawn_analytics_tasks(
                     }
                 }
                 _ = purge.tick() => {
-                    let now = Utc::now().timestamp_millis();
-                    let cutoff = now - i64::from(retention_days) * DAY_MS;
-                    let log_cutoff = now - i64::from(log_retention_days) * DAY_MS;
-                    if let Err(error) = analytics.purge_before(cutoff, log_cutoff, archive).await {
+                    let purge = Purge::at(
+                        Utc::now().timestamp_millis(),
+                        retention_days,
+                        log_retention_days,
+                        archive_days,
+                    );
+                    if let Err(error) = analytics.purge(purge).await {
                         tracing::error!(error = %error, "purge analytics");
                     }
                 }
                 _ = trim.tick(), if max_bytes.is_some() => {
                     let Some(max_bytes) = max_bytes else { continue };
-                    match analytics.trim_to(max_bytes, archive).await {
+                    match analytics.trim_to(max_bytes, archive_days.is_some()).await {
                         Ok(Some(trim)) if trim.deleted_rows == 0 => tracing::error!(
                             used_mb = trim.used_bytes / 1_048_576,
                             max_mb = max_bytes / 1_048_576,
@@ -552,7 +587,7 @@ mod tests {
     use daroyan_protocol::log::LogBatch;
     use serde_json::json;
 
-    use super::{Analytics, MAX_SERVER_ROWS};
+    use super::{Analytics, MAX_SERVER_ROWS, Purge};
 
     fn batch(lines: usize) -> LogBatch {
         let line = json!({ "at": 1, "service": "app", "stream": "file", "severity": 9, "message": "hi" });
@@ -786,6 +821,7 @@ mod tests {
                      CREATE TABLE uptime_results (checked_at BIGINT); \
                      CREATE TABLE cron_runs (finished_at BIGINT); \
                      CREATE TABLE log_lines (logged_at BIGINT, ingested_at BIGINT); \
+                     CREATE TABLE log_volume (minute BIGINT); \
                      CREATE TABLE archive_state (name VARCHAR PRIMARY KEY, value BIGINT NOT NULL); \
                      INSERT INTO log_lines VALUES (1, 10), (2, 20), (3, 30), (500, 500); \
                      INSERT INTO archive_state VALUES ('log_watermark', 20);",
@@ -802,10 +838,19 @@ mod tests {
                 .unwrap()
         };
 
-        analytics.purge_before(0, 100, true).await.unwrap();
+        let purge = Purge {
+            cutoff_ms: 0,
+            log_cutoff_ms: 100,
+            volume_cutoff_ms: 0,
+            keep_unarchived: true,
+        };
+        analytics.purge(purge).await.unwrap();
         assert_eq!(logged_at(), [3, 500]);
 
-        analytics.purge_before(0, 100, false).await.unwrap();
+        analytics
+            .purge(Purge { keep_unarchived: false, ..purge })
+            .await
+            .unwrap();
         assert_eq!(logged_at(), [500]);
 
         std::fs::remove_dir_all(dir).ok();
