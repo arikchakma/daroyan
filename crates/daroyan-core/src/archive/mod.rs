@@ -2,7 +2,7 @@ mod search;
 mod upkeep;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -46,6 +46,7 @@ pub struct Archive {
     log_retention_days: u32,
     cache_bytes: u64,
     range_bucket: Option<String>,
+    last_error: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -95,6 +96,7 @@ impl Archive {
             log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
             cache_bytes: DEFAULT_CACHE_BYTES,
             range_bucket: None,
+            last_error: Arc::default(),
         }
     }
 
@@ -128,6 +130,14 @@ impl Archive {
         }
 
         self
+    }
+
+    pub fn read_last_error(&self) -> Option<String> {
+        self.last_error.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    fn remember_error(&self, error: Option<String>) {
+        *self.last_error.lock().unwrap_or_else(PoisonError::into_inner) = error;
     }
 
     fn object_path(&self, relative: &str) -> Path {
@@ -277,6 +287,7 @@ async fn reset_dir(dir: PathBuf) -> Result<PathBuf> {
 pub fn spawn_archive_task(archive: Archive, analytics: Analytics) -> JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(error) = archive.check().await {
+            archive.remember_error(Some(error.to_string()));
             tracing::error!(
                 %error,
                 "cannot write to the archive bucket, check ARCHIVE_URL and its keys"
@@ -294,13 +305,19 @@ pub fn spawn_archive_task(archive: Archive, analytics: Analytics) -> JoinHandle<
         loop {
             tokio::select! {
                 _ = export.tick() => match archive.export_logs(&analytics).await {
-                    Ok(done) => tracing::info!(
-                        files = done.files,
-                        rows = done.rows,
-                        bytes = done.bytes,
-                        "archived logs"
-                    ),
-                    Err(error) => tracing::error!(%error, "archive logs"),
+                    Ok(done) => {
+                        archive.remember_error(None);
+                        tracing::info!(
+                            files = done.files,
+                            rows = done.rows,
+                            bytes = done.bytes,
+                            "archived logs"
+                        );
+                    }
+                    Err(error) => {
+                        archive.remember_error(Some(error.to_string()));
+                        tracing::error!(%error, "archive logs");
+                    }
                 },
                 _ = upkeep.tick() => match archive.tidy(&analytics).await {
                     Ok(done) => tracing::info!(

@@ -1,6 +1,6 @@
 import { describeRequest } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
-import { DAY_MS, formatClock, formatDate, HOUR_MS } from '~/utils/format';
+import { DAY_MS, formatBytes, formatClock, formatDate, HOUR_MS, pluralize } from '~/utils/format';
 
 export const OTLP_SERVER_ID = 'otlp';
 export const OTLP_SERVER_NAME = 'OpenTelemetry';
@@ -81,4 +81,19 @@ export function getZoomLabel(since: number, until: number) {
   }
 
   return `${formatDate(since)} ${getBucketClock(since, span)} – ${formatDate(until)} ${getBucketClock(until, span)}`;
+}
+
+export function getPagingKey(params: URLSearchParams) {
+  const rest = new URLSearchParams(params);
+  rest.delete('page');
+
+  return rest.toString();
+}
+
+export function getScanNote(scan: { files: number; bytes: number } | null | undefined) {
+  if (!scan || scan.files === 0) {
+    return undefined;
+  }
+
+  return `Read ${pluralize(scan.files, 'archived file')}, ${formatBytes(scan.bytes)}`;
 }

@@ -1072,7 +1072,7 @@
     },
     "/v1/instance": {
       "get": {
-        "description": "Settings this Daroyan instance reads from its environment: the public URL and how long metrics and logs are kept",
+        "description": "Settings this Daroyan instance reads from its environment: the public URL, how long metrics and logs are kept, and the log archive",
         "operationId": "get_instance",
         "responses": {
           "200": {
@@ -1576,7 +1576,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "Words match the message or the attributes. `key:value` matches an attribute, `*` is a wildcard, and a leading `-` excludes. Quote phrases with spaces",
+            "description": "Words match the message, and `*:word` matches any field. `key:value` matches an attribute, where `*` is a wildcard and `key:*` means the attribute exists. `key:[a,b]` matches either value, `key:>500` and `key:<100` compare numbers, and `/regex/` or `key:/regex/` match an RE2 regex. A leading `-` excludes. Quote text with spaces. Matching ignores case",
             "required": false,
             "schema": {
               "type": "string"
@@ -1595,7 +1595,7 @@
           {
             "name": "until",
             "in": "query",
-            "description": "Only lines at or before this time in ms. Keep it the same while paging",
+            "description": "Only lines at or before this time in ms",
             "required": false,
             "schema": {
               "type": "integer",
@@ -1603,8 +1603,18 @@
             }
           },
           {
+            "name": "before",
+            "in": "query",
+            "description": "The next value of the last page, to get the page after it",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "offset",
             "in": "query",
+            "description": "Deprecated, use before. Lines to skip, keeping until the same",
             "required": false,
             "schema": {
               "type": "integer",
@@ -3233,6 +3243,55 @@
       },
       "AlertRuleId": {
         "type": "string"
+      },
+      "Archive": {
+        "type": "object",
+        "required": [
+          "url",
+          "retention_days",
+          "files",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "exported_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "files": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "oldest_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "retention_days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string"
+          }
+        }
       },
       "BacktestAlertRuleBody": {
         "type": "object",
@@ -5381,6 +5440,16 @@
               "null"
             ]
           },
+          "archive": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Archive"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "log_retention_days": {
             "type": "integer",
             "format": "int32",
@@ -5815,9 +5884,43 @@
               "$ref": "#/components/schemas/LogLine"
             }
           },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanned": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LogScan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "until": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "LogScan": {
+        "type": "object",
+        "required": [
+          "files",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "files": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
