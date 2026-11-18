@@ -116,10 +116,6 @@ impl Archive {
         }
     }
 
-    fn logs_root(&self) -> Path {
-        self.object_path(&format!("logs/v1/tenant={TENANT}"))
-    }
-
     pub async fn check(&self) -> Result<()> {
         let path = self.object_path(CHECK_OBJECT);
         self.store.put(&path, "ok".into()).await?;
@@ -243,7 +239,6 @@ pub fn spawn_archive_task(archive: Archive, analytics: Analytics) -> JoinHandle<
                         merged = done.merged,
                         expired = done.expired,
                         deleted = done.deleted,
-                        orphans = done.orphans,
                         "tidied the log archive"
                     ),
                     Err(error) => tracing::error!(%error, "tidy the log archive"),

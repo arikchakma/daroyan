@@ -1,14 +1,13 @@
 use std::path::Path as LocalPath;
 
-use chrono::{DateTime, TimeDelta, Utc};
-use futures_util::TryStreamExt;
+use chrono::{DateTime, Utc};
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
 
 use crate::analytics::Analytics;
 use crate::analytics::archive::upkeep::{
-    Merge, expire_files, forget_files, list_deleted, list_known_paths, merge_files,
-    plan_merges, replace_files,
+    Merge, expire_files, forget_files, list_deleted, merge_files, plan_merges,
+    replace_files,
 };
 use crate::analytics::archive::{ArchivedFile, DAY_MS, FileKind, HOUR_MS};
 use crate::archive::{Archive, TENANT, reset_dir};
@@ -16,14 +15,12 @@ use crate::error::Result;
 
 const SETTLE_MS: i64 = 6 * HOUR_MS;
 const DELETE_DELAY_MS: i64 = 2 * HOUR_MS;
-const ORPHAN_AGE: TimeDelta = TimeDelta::days(1);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Upkeep {
     pub merged: usize,
     pub expired: usize,
     pub deleted: usize,
-    pub orphans: usize,
 }
 
 impl Archive {
@@ -40,9 +37,8 @@ impl Archive {
             .await?;
         let merged = self.merge_days(analytics, now_ms).await?;
         let deleted = self.delete_expired(analytics, now_ms).await?;
-        let orphans = self.delete_orphans(analytics, now).await?;
 
-        Ok(Upkeep { merged, expired, deleted, orphans })
+        Ok(Upkeep { merged, expired, deleted })
     }
 
     async fn merge_days(&self, analytics: &Analytics, now_ms: i64) -> Result<usize> {
@@ -53,7 +49,8 @@ impl Archive {
         for merge in merges {
             let dir = reset_dir(self.work_dir.join("merge")).await?;
             match self.merge(analytics, merge, &dir, now_ms).await {
-                Ok(()) => merged += 1,
+                Ok(true) => merged += 1,
+                Ok(false) => {}
                 Err(error) => tracing::warn!(%error, "merge archived log files"),
             }
             tokio::fs::remove_dir_all(&dir).await.ok();
@@ -68,7 +65,7 @@ impl Archive {
         merge: Merge,
         dir: &LocalPath,
         now_ms: i64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut sources = Vec::with_capacity(merge.files.len());
         for (index, file) in merge.files.iter().enumerate() {
             let local = dir.join(format!("{index}.parquet"));
@@ -86,12 +83,15 @@ impl Archive {
         let file = analytics
             .read(move |conn| merge_files(conn, &merge, &sources, &target))
             .await?;
+        let Some(file) = file else { return Ok(false) };
 
         let (path, bytes) = self.upload(&file).await?;
         let merged = ArchivedFile { path: path.to_string(), bytes, file };
         analytics
             .write(move |conn| replace_files(conn, &merged, &old, TENANT, now_ms))
-            .await
+            .await?;
+
+        Ok(true)
     }
 
     async fn delete_expired(&self, analytics: &Analytics, now_ms: i64) -> Result<usize> {
@@ -111,33 +111,6 @@ impl Archive {
         analytics.write(move |conn| forget_files(conn, &gone)).await?;
 
         Ok(count)
-    }
-
-    async fn delete_orphans(
-        &self,
-        analytics: &Analytics,
-        now: DateTime<Utc>,
-    ) -> Result<usize> {
-        let known = analytics.read(list_known_paths).await?;
-        let cutoff = now - ORPHAN_AGE;
-
-        let orphans: Vec<Path> = self
-            .store
-            .list(Some(&self.logs_root()))
-            .try_filter(|meta| {
-                let is_orphan = meta.last_modified < cutoff
-                    && !known.contains(meta.location.as_ref());
-                std::future::ready(is_orphan)
-            })
-            .map_ok(|meta| meta.location)
-            .try_collect()
-            .await?;
-
-        for path in &orphans {
-            self.store.delete(path).await?;
-        }
-
-        Ok(orphans.len())
     }
 }
 
@@ -218,15 +191,15 @@ mod tests {
         assert_eq!(rows, (2, "[a.user.id, a.took]".to_string()));
 
         let later = archive.tidy_at(&analytics, now + TimeDelta::days(2)).await.unwrap();
-        assert_eq!(later, Upkeep { deleted: 2, orphans: 1, ..Upkeep::default() });
-        assert_eq!(&list(&store).await, std::slice::from_ref(day_file));
+        assert_eq!(later, Upkeep { deleted: 2, ..Upkeep::default() });
+        assert_eq!(list(&store).await, [stray.to_string(), day_file.clone()]);
 
         let short = archive.clone().with_retention_days(1);
         let expired = short.tidy_at(&analytics, now).await.unwrap();
         assert_eq!(expired, Upkeep { expired: 1, ..Upkeep::default() });
         let gone = short.tidy_at(&analytics, now + TimeDelta::hours(3)).await.unwrap();
         assert_eq!(gone, Upkeep { deleted: 1, ..Upkeep::default() });
-        assert!(list(&store).await.is_empty());
+        assert_eq!(list(&store).await, [stray.to_string()]);
 
         std::fs::remove_dir_all(dir).ok();
     }

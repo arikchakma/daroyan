@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use duckdb::types::Value as SqlValue;
@@ -10,6 +10,7 @@ use crate::analytics::archive::{
 };
 
 pub const MAX_DAY_BYTES: u64 = 512 * 1024 * 1024;
+const LATE_FILES: usize = 24;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredFile {
@@ -49,6 +50,20 @@ impl Merge {
         names.len() <= max_columns
     }
 
+    fn is_worth_merging(files: &[StoredFile]) -> bool {
+        let merged: u64 = files
+            .iter()
+            .filter(|file| file.kind == FileKind::Day)
+            .map(|file| file.bytes)
+            .sum();
+        let (late_files, late_bytes) = files
+            .iter()
+            .filter(|file| file.kind == FileKind::Hour)
+            .fold((0, 0), |(count, bytes), file| (count + 1, bytes + file.bytes));
+
+        merged == 0 || late_files >= LATE_FILES || late_bytes * 10 >= merged
+    }
+
     pub fn plan(files: Vec<StoredFile>, max_bytes: u64, max_columns: usize) -> Vec<Self> {
         if files.len() < 2 {
             return Vec::new();
@@ -56,6 +71,9 @@ impl Merge {
 
         let bytes: u64 = files.iter().map(|file| file.bytes).sum();
         if bytes <= max_bytes && Self::fits(&files, max_columns) {
+            if !Self::is_worth_merging(&files) {
+                return Vec::new();
+            }
             return vec![Self::new(FileKind::Day, files)];
         }
 
@@ -126,7 +144,15 @@ pub fn merge_files(
     merge: &Merge,
     sources: &[PathBuf],
     target: &Path,
-) -> duckdb::Result<StagedFile> {
+) -> duckdb::Result<Option<StagedFile>> {
+    if !have_matching_columns(conn, sources)? {
+        tracing::warn!(
+            files = sources.len(),
+            "skipped a merge, the files name or type a column differently"
+        );
+        return Ok(None);
+    }
+
     let target_text = quote_literal(&target.to_string_lossy());
     let sources = sources
         .iter()
@@ -155,7 +181,7 @@ pub fn merge_files(
         .query_map([], |row| row.get(0))?
         .collect::<duckdb::Result<_>>()?;
 
-    Ok(StagedFile {
+    Ok(Some(StagedFile {
         local: target.to_path_buf(),
         name: target
             .file_name()
@@ -168,7 +194,35 @@ pub fn merge_files(
         rows,
         services: read_json_list(&services),
         columns,
-    })
+    }))
+}
+
+fn have_matching_columns(conn: &Connection, sources: &[PathBuf]) -> duckdb::Result<bool> {
+    let mut seen: HashMap<String, (String, String)> = HashMap::new();
+    for source in sources {
+        let mut statement = conn.prepare(&format!(
+            "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_parquet('{}'))",
+            quote_literal(&source.to_string_lossy())
+        ))?;
+        let columns = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()?;
+
+        for (name, kind) in columns {
+            let column = (name.clone(), kind);
+            match seen.get(&name.to_lowercase()) {
+                Some(known) if *known != column => return Ok(false),
+                Some(_) => {}
+                None => {
+                    seen.insert(name.to_lowercase(), column);
+                }
+            }
+        }
+    }
+
+    Ok(true)
 }
 
 pub fn replace_files(
@@ -233,12 +287,6 @@ pub fn forget_files(conn: &Connection, paths: &[String]) -> duckdb::Result<()> {
     )?;
 
     Ok(())
-}
-
-pub fn list_known_paths(conn: &Connection) -> duckdb::Result<BTreeSet<String>> {
-    let mut statement = conn.prepare("SELECT path FROM archive_files")?;
-
-    statement.query_map([], |row| row.get(0))?.collect()
 }
 
 #[cfg(test)]
@@ -320,6 +368,15 @@ mod tests {
     }
 
     #[test]
+    fn leaves_a_merged_day_alone_until_enough_late_lines_arrive() {
+        let day = || stored("day", FileKind::Day, 0, 1_000, &["a.x"]);
+        let late = |bytes| stored("late", FileKind::Hour, 9, bytes, &["a.x"]);
+
+        assert_eq!(Merge::plan(vec![day(), late(10)], 10_000, 10), []);
+        assert_eq!(Merge::plan(vec![day(), late(100)], 10_000, 10).len(), 1);
+    }
+
+    #[test]
     fn merges_by_hour_when_the_day_is_too_big() {
         let files = vec![
             stored("day", FileKind::Day, 0, 80, &["a.x"]),
@@ -375,7 +432,7 @@ mod tests {
         let second = dir.join("second.parquet");
         conn.execute_batch(&format!(
             "COPY (SELECT 'srv_1' AS server_id, {DAY} + 5 AS logged_at, 'web' AS service, 1::BIGINT AS \"a.x\") TO '{}'; \
-             COPY (SELECT 'srv_1' AS server_id, {DAY} + 1 AS logged_at, 'api' AS service, 'one' AS \"a.x\", '{{}}' AS _rest_attributes) TO '{}';",
+             COPY (SELECT 'srv_1' AS server_id, {DAY} + 1 AS logged_at, 'api' AS service, 2::BIGINT AS \"a.x\", '{{}}' AS _rest_attributes) TO '{}';",
             first.display(),
             second.display()
         ))
@@ -389,7 +446,24 @@ mod tests {
             files: Vec::new(),
         };
         let target = dir.join("day-1.parquet");
-        let file = merge_files(&conn, &merge, &[first, second], &target).unwrap();
+        let clash = dir.join("clash.parquet");
+        conn.execute_batch(&format!(
+            "COPY (SELECT 'srv_1' AS server_id, {DAY} + 7 AS logged_at, 'api' AS service, 'one' AS \"a.x\") TO '{}';",
+            clash.display()
+        ))
+        .unwrap();
+        let skipped = merge_files(
+            &conn,
+            &merge,
+            &[first.clone(), clash],
+            &dir.join("skip.parquet"),
+        )
+        .unwrap();
+        assert!(skipped.is_none());
+
+        let file = merge_files(&conn, &merge, &[first, second], &target)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             (file.min_logged_at, file.max_logged_at, file.rows),
             (DAY + 1, DAY + 5, 2)
