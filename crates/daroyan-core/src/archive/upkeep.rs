@@ -9,8 +9,8 @@ use crate::analytics::archive::upkeep::{
     Merge, expire_files, forget_files, list_deleted, merge_files, plan_merges,
     replace_files,
 };
-use crate::analytics::archive::{ArchivedFile, DAY_MS, FileKind, HOUR_MS};
-use crate::archive::{Archive, TENANT, reset_dir};
+use crate::analytics::archive::{DAY_MS, FileKind, HOUR_MS};
+use crate::archive::{Archive, TENANT, meta_path, reset_dir};
 use crate::error::Result;
 
 const SETTLE_MS: i64 = 6 * HOUR_MS;
@@ -79,16 +79,14 @@ impl Archive {
         };
         let target =
             dir.join(format!("{prefix}{now_ms}-{:08x}.parquet", rand::random::<u32>()));
-        let old = merge.paths();
         let file = analytics
             .read(move |conn| merge_files(conn, &merge, &sources, &target))
             .await?;
         let Some(file) = file else { return Ok(false) };
 
-        let (path, bytes) = self.upload(&file).await?;
-        let merged = ArchivedFile { path: path.to_string(), bytes, file };
+        let merged = self.publish(file, now_ms).await?;
         analytics
-            .write(move |conn| replace_files(conn, &merged, &old, TENANT, now_ms))
+            .write(move |conn| replace_files(conn, &merged, TENANT, now_ms))
             .await?;
 
         Ok(true)
@@ -101,8 +99,8 @@ impl Archive {
 
         let mut gone = Vec::with_capacity(paths.len());
         for path in paths {
-            match self.store.delete(&Path::parse(&path)?).await {
-                Ok(()) | Err(object_store::Error::NotFound { .. }) => gone.push(path),
+            match self.delete_file(&path).await {
+                Ok(()) => gone.push(path),
                 Err(error) => tracing::warn!(%error, path, "delete an archived log file"),
             }
         }
@@ -111,6 +109,17 @@ impl Archive {
         analytics.write(move |conn| forget_files(conn, &gone)).await?;
 
         Ok(count)
+    }
+
+    async fn delete_file(&self, path: &str) -> Result<()> {
+        for target in [meta_path(path), path.to_string()] {
+            match self.store.delete(&Path::parse(target)?).await {
+                Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -133,6 +142,7 @@ mod tests {
         let mut paths: Vec<String> = store
             .list(None)
             .map_ok(|meta| meta.location.to_string())
+            .try_filter(|path| std::future::ready(!path.ends_with(".json")))
             .try_collect()
             .await
             .unwrap();
@@ -193,6 +203,14 @@ mod tests {
         let later = archive.tidy_at(&analytics, now + TimeDelta::days(2)).await.unwrap();
         assert_eq!(later, Upkeep { deleted: 2, ..Upkeep::default() });
         assert_eq!(list(&store).await, [stray.to_string(), day_file.clone()]);
+        let metas: Vec<String> = store
+            .list(None)
+            .map_ok(|meta| meta.location.to_string())
+            .try_filter(|path| std::future::ready(path.ends_with(".json")))
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(metas, [format!("{day_file}.json")]);
 
         let short = archive.clone().with_retention_days(1);
         let expired = short.tidy_at(&analytics, now).await.unwrap();

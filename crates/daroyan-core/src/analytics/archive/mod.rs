@@ -1,4 +1,5 @@
 pub mod export;
+pub mod recover;
 pub mod search;
 pub mod upkeep;
 
@@ -6,6 +7,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use duckdb::{Connection, params};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const LOG_WATERMARK: &str = "log_watermark";
@@ -17,7 +19,8 @@ pub const REST_PREFIX: &str = "_rest_";
 const PARQUET_OPTIONS: &str =
     "FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 3, ROW_GROUP_SIZE 122880";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FileKind {
     Hour,
     Day,
@@ -55,13 +58,46 @@ pub struct StagedFile {
     pub rows: i64,
     pub services: Vec<String>,
     pub columns: Vec<String>,
+    pub exported_until: i64,
+    pub replaces: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileMeta {
+    pub kind: FileKind,
+    pub min_logged_at: i64,
+    pub max_logged_at: i64,
+    pub rows: i64,
+    pub bytes: u64,
+    pub services: Vec<String>,
+    pub columns: Vec<String>,
+    pub exported_until: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<String>,
+    pub created_at: i64,
+}
+
+impl FileMeta {
+    pub fn new(file: StagedFile, bytes: u64, created_at: i64) -> Self {
+        Self {
+            kind: file.kind,
+            min_logged_at: file.min_logged_at,
+            max_logged_at: file.max_logged_at,
+            rows: file.rows,
+            bytes,
+            services: file.services,
+            columns: file.columns,
+            exported_until: file.exported_until,
+            replaces: file.replaces,
+            created_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchivedFile {
     pub path: String,
-    pub bytes: u64,
-    pub file: StagedFile,
+    pub meta: FileMeta,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -104,17 +140,20 @@ pub fn record_files(
     files: &[ArchivedFile],
     tenant: &str,
     until: i64,
-    now_ms: i64,
 ) -> duckdb::Result<()> {
     in_transaction(conn, || {
-        insert_files(conn, files, tenant, now_ms)?;
-        conn.execute(
-            "INSERT OR REPLACE INTO archive_state (name, value) VALUES (?, ?)",
-            params![LOG_WATERMARK, until],
-        )?;
-
-        Ok(())
+        insert_files(conn, files, tenant)?;
+        write_watermark(conn, until)
     })
+}
+
+fn write_watermark(conn: &Connection, until: i64) -> duckdb::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO archive_state (name, value) VALUES (?, ?)",
+        params![LOG_WATERMARK, until],
+    )?;
+
+    Ok(())
 }
 
 fn in_transaction(
@@ -135,7 +174,6 @@ fn insert_files(
     conn: &Connection,
     files: &[ArchivedFile],
     tenant: &str,
-    now_ms: i64,
 ) -> duckdb::Result<()> {
     let mut statement = conn.prepare(
         "INSERT INTO archive_files \
@@ -144,18 +182,18 @@ fn insert_files(
     )?;
 
     for archived in files {
-        let file = &archived.file;
+        let meta = &archived.meta;
         statement.execute(params![
             archived.path,
             tenant,
-            file.kind.as_str(),
-            file.min_logged_at,
-            file.max_logged_at,
-            file.rows,
-            archived.bytes,
-            Value::from(file.services.clone()).to_string(),
-            Value::from(file.columns.clone()).to_string(),
-            now_ms,
+            meta.kind.as_str(),
+            meta.min_logged_at,
+            meta.max_logged_at,
+            meta.rows,
+            meta.bytes,
+            Value::from(meta.services.clone()).to_string(),
+            Value::from(meta.columns.clone()).to_string(),
+            meta.created_at,
         ])?;
     }
 
