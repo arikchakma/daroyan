@@ -328,12 +328,12 @@ async fn get_logs(
         .map_err(|message| Error::new(ErrorName::ValidationError, message))?;
     let mut offset = query.offset.unwrap_or(0);
     let mut search = read_search(query)?;
+    let until = search.until;
     if let Some(cursor) = cursor {
         search.until = cursor.at;
         offset = cursor.skip;
     }
 
-    let until = search.until;
     let page = search_logs(
         &state.analytics,
         state.archive.as_ref(),

@@ -277,8 +277,9 @@ Once an hour, the API also does upkeep on the bucket:
 
 Search reads DuckDB first. When it needs lines that are older than
 `LOG_RETENTION_DAYS`, it reads the files in the bucket, one day at a time, newest
-first. One search reads at most 2 GB of files or runs for at most 20 seconds.
-Then it returns the lines it found and a `next` value to search further.
+first. After each day, it checks whether it has read 2 GB of files or run for
+20 seconds. If it has, it returns the lines it found and a `next` value to
+search further. One day is always read in full, so a busy day can take longer.
 
 When the archive is on, the API does not delete a log from DuckDB until it is
 in the bucket. If `DUCKDB_MAX_SIZE_GB` is reached first, the API deletes the

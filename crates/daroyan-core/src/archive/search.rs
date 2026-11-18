@@ -141,7 +141,7 @@ impl Archive {
         let kept = Utc::now().timestamp_millis()
             - i64::from(self.log_retention_days) * DAY_MS
             + HOUR_MS;
-        let oldest = read_oldest_log(analytics).await?;
+        let oldest = read_oldest_log(analytics, kept).await?;
 
         Ok(oldest.map_or(kept, |oldest| oldest.max(kept)))
     }
@@ -261,7 +261,8 @@ impl Archive {
         if let Some(parent) = local.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        let partial = local.with_extension("partial");
+        let partial =
+            local.with_extension(format!("{:08x}.partial", rand::random::<u32>()));
         self.download(&Path::parse(path)?, &partial).await?;
         tokio::fs::rename(&partial, &local).await?;
 
@@ -363,6 +364,16 @@ mod tests {
         analytics
             .run(move |conn| {
                 conn.execute("DELETE FROM log_lines WHERE logged_at < ?", [now - DAY_MS])
+            })
+            .unwrap();
+
+        analytics
+            .run(move |conn| {
+                conn.execute(
+                    "INSERT INTO log_lines (server_id, logged_at, service, stream, severity, message, ingested_at) \
+                     VALUES ('srv_1', ?, 'api', 'otlp', 9, 'late and old', ?)",
+                    [now - 10 * DAY_MS, now],
+                )
             })
             .unwrap();
 

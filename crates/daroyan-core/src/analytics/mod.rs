@@ -445,7 +445,6 @@ impl Analytics {
                 [OTLP_SERVER_ID, &server_id],
             )?;
             conn.execute("DELETE FROM log_lines WHERE server_id = ?", [&server_id])?;
-            conn.execute("DELETE FROM log_volume WHERE server_id = ?", [&server_id])?;
             conn.execute(
                 "UPDATE spans SET server_id = NULL WHERE server_id = ?",
                 [&server_id],

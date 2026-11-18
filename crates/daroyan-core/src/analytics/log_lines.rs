@@ -797,10 +797,14 @@ pub async fn count_logs(analytics: &Analytics, search: LogSearch) -> Result<u64>
         .await
 }
 
-pub async fn read_oldest_log(analytics: &Analytics) -> Result<Option<i64>> {
+pub async fn read_oldest_log(analytics: &Analytics, since: i64) -> Result<Option<i64>> {
     analytics
-        .read(|conn| {
-            conn.query_row("SELECT min(logged_at) FROM log_lines", [], |row| row.get(0))
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT min(logged_at) FROM log_lines WHERE logged_at >= ?",
+                [since],
+                |row| row.get(0),
+            )
         })
         .await
 }
