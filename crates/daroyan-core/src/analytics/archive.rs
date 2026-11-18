@@ -323,6 +323,8 @@ fn read_fields(
     let mut statement = conn.prepare(&format!(
         "SELECT key, count(*) AS found, \
          CAST(to_json(list_distinct(list(CASE WHEN contains(key, '\"') THEN 'VARCHAR' \
+              WHEN json_type({column}, '$.\"' || key || '\"') = 'UBIGINT' \
+                   AND TRY_CAST(json_extract_string({column}, '$.\"' || key || '\"') AS BIGINT) IS NULL THEN 'VARCHAR' \
               ELSE json_type({column}, '$.\"' || key || '\"') END))) AS VARCHAR) \
          FROM (SELECT {column}, unnest(json_keys({column})) AS key FROM log_lines \
                WHERE {scope} AND {column} IS NOT NULL) \
@@ -360,7 +362,7 @@ pub fn record_files(
         )
     });
     if let Err(error) = recorded {
-        conn.execute_batch("ROLLBACK")?;
+        conn.execute_batch("ROLLBACK").ok();
         return Err(error);
     }
 
@@ -515,6 +517,29 @@ mod tests {
             )
             .unwrap();
         assert_eq!(statuses, "200,500");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn keeps_integers_too_big_for_bigint_as_text() {
+        let dir = scratch("big");
+        let conn = open(&dir);
+        insert(&conn, 1_000, 100, r#"{"hash":18446744073709551615,"small":7}"#);
+        insert(&conn, 1_001, 100, r#"{"hash":3,"small":8}"#);
+
+        let export = stage_logs_with(&conn, &dir, 500, 10).unwrap();
+        let local = export.files[0].local.to_string_lossy().to_string();
+        let (hash, small): (String, i64) = conn
+            .query_row(
+                &format!(
+                    "SELECT \"a.hash\", \"a.small\" FROM read_parquet('{local}') ORDER BY logged_at LIMIT 1"
+                ),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((hash.as_str(), small), ("18446744073709551615", 7));
 
         fs::remove_dir_all(dir).ok();
     }

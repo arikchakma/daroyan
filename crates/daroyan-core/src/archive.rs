@@ -19,6 +19,7 @@ use crate::error::Result;
 
 pub const TENANT: &str = "default";
 const EXPORT_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const EXPORT_SETTLE_MS: i64 = 60_000;
 const CHECK_OBJECT: &str = ".daroyan-check";
 
 #[derive(Clone)]
@@ -105,9 +106,9 @@ impl Archive {
         tokio::fs::create_dir_all(&self.staging).await?;
 
         let staging = self.staging.clone();
-        let staged = analytics
-            .write(move |conn| stage_logs(conn, &staging, Utc::now().timestamp_millis()))
-            .await?;
+        let until = Utc::now().timestamp_millis() - EXPORT_SETTLE_MS;
+        let staged =
+            analytics.read(move |conn| stage_logs(conn, &staging, until)).await?;
 
         let mut archived = Vec::with_capacity(staged.files.len());
         let mut uploaded = Ok(());
@@ -153,8 +154,15 @@ impl Archive {
         let bytes = source.metadata().await?.len();
 
         let mut writer = BufWriter::new(Arc::clone(&self.store), path.clone());
-        tokio::io::copy(&mut source, &mut writer).await?;
-        writer.shutdown().await?;
+        let copied = tokio::io::copy(&mut source, &mut writer).await;
+        let finished = match copied {
+            Ok(_) => writer.shutdown().await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = finished {
+            writer.abort().await.ok();
+            return Err(error.into());
+        }
 
         Ok((path, bytes))
     }
