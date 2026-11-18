@@ -10,10 +10,13 @@ type ViewOptionsMenuProps = {
   onHiddenChange: (hidden: ColumnVisibilityState) => void;
   isWrapped: boolean;
   onWrappedChange: (isWrapped: boolean) => void;
+  pageSizes: number[];
+  pageSize: number;
+  onPageSizeChange: (pageSize: number) => void;
 };
 
 export function ViewOptionsMenu(props: ViewOptionsMenuProps) {
-  const { labels, hidden, onHiddenChange, isWrapped, onWrappedChange } = props;
+  const { labels, hidden, onHiddenChange, isWrapped, onWrappedChange, pageSizes, pageSize, onPageSizeChange } = props;
 
   return (
     <Menu.Root>
@@ -41,6 +44,17 @@ export function ViewOptionsMenu(props: ViewOptionsMenuProps) {
             <Menu.CheckboxItem checked={isWrapped} onCheckedChange={(checked: boolean) => onWrappedChange(checked)}>
               Wrap Lines
             </Menu.CheckboxItem>
+            <Menu.Separator />
+            <Menu.Group>
+              <Menu.GroupLabel>Lines per Page</Menu.GroupLabel>
+              <Menu.RadioGroup value={pageSize} onValueChange={(value: number) => onPageSizeChange(value)}>
+                {pageSizes.map((size) => (
+                  <Menu.RadioItem key={size} value={size}>
+                    {size}
+                  </Menu.RadioItem>
+                ))}
+              </Menu.RadioGroup>
+            </Menu.Group>
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>

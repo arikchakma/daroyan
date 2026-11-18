@@ -40,7 +40,7 @@ import type { SearchFilterField, SearchFilterValue } from '~/utils/filter';
 import { formatTerm } from '~/utils/log-search';
 import { getZoomLabel, OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 
-const PAGE_SIZE = 50;
+const PAGE_SIZES = [50, 100, 200];
 const EXPORT_LIMIT = 5_000;
 const COLUMNS_KEY = 'daroyan.logs.columns';
 const WRAP_KEY = 'daroyan.logs.wrap';
@@ -111,6 +111,7 @@ export default function LogsPage() {
   const view = (VIEWS.find((item) => item.value === searchParams.get('level'))?.value ?? 'all') as LevelView;
   const q = searchParams.get('q') ?? '';
   const page = Math.max(Number(searchParams.get('page')) || 1, 1);
+  const pageSize = PAGE_SIZES.find((size) => size === Number(searchParams.get('limit'))) ?? PAGE_SIZES[0]!;
   const range = RANGES.find((item) => item.value === searchParams.get('range')) ?? RANGES.find((item) => item.value === DEFAULT_RANGE)!;
   const zoomSince = Number(searchParams.get('from'));
   const zoomUntil = Number(searchParams.get('to'));
@@ -189,7 +190,7 @@ export default function LogsPage() {
   const { data: servers } = useQuery(serverQueries.list());
   const { data: sources } = useQuery(logQueries.sources());
   const { data, isLoading, isPlaceholderData: isShowingOldLines } = useQuery(
-    logQueries.list({ ...filters, ...timeRange, offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE }, isFollowing)
+    logQueries.list({ ...filters, ...timeRange, offset: (page - 1) * pageSize, limit: pageSize }, isFollowing)
   );
   const { data: volume, isPlaceholderData: isShowingOldVolume } = useQuery(
     logQueries.volume({ ...filters, ...timeRange }, isFollowing)
@@ -323,8 +324,13 @@ export default function LogsPage() {
     rangeLabel: range.value === DEFAULT_RANGE ? undefined : range.label,
   });
 
-  const applyView = (saved: SavedLogView) => {
-    const next = new URLSearchParams(saved.params);
+  const applyView = (params: Record<string, string>) => {
+    const next = new URLSearchParams(params);
+    const limit = searchParams.get('limit');
+    if (limit) {
+      next.set('limit', limit);
+    }
+
     resetDraft(next);
     commitParams(next);
   };
@@ -392,6 +398,12 @@ export default function LogsPage() {
               onHiddenChange={setHiddenColumns}
               isWrapped={isWrapped}
               onWrappedChange={setIsWrapped}
+              pageSizes={PAGE_SIZES}
+              pageSize={pageSize}
+              onPageSizeChange={(next) => {
+                setTimeWindow((current) => ({ ...current, nextUntil: current.until }));
+                setParams({ limit: next === PAGE_SIZES[0] ? null : String(next) });
+              }}
             />
             <Button type="button" variant="secondary" className="w-fit" disabled={isExporting} onClick={() => void exportLogs()}>
               <Icon name={isExporting ? 'loader' : 'download'} className={cn(isExporting && 'animate-spin')} />
@@ -431,7 +443,7 @@ export default function LogsPage() {
               activeView={activeView}
               canSaveView={canSaveView}
               onChange={(next) => runQuery(search, { level: next === 'all' ? null : next })}
-              onApplyView={applyView}
+              onApplyView={(saved) => applyView(saved.params)}
               onRemoveView={setRemovingView}
               onSaveView={() => setIsSavingView(true)}
             />
@@ -461,10 +473,7 @@ export default function LogsPage() {
             )}
             {isViewChanged && (
               <ResetViewButton
-                onReset={() => {
-                  resetDraft(new URLSearchParams());
-                  commitParams(new URLSearchParams());
-                }}
+                onReset={() => applyView({})}
               />
             )}
             <SearchSyntaxPopover />
@@ -506,7 +515,7 @@ export default function LogsPage() {
           )}
           <Pager
             className="mt-auto"
-            start={(page - 1) * PAGE_SIZE + 1}
+            start={(page - 1) * pageSize + 1}
             rowCount={data?.lines.length ?? 0}
             hasPrevious={page > 1}
             hasNext={!!data?.has_more}
