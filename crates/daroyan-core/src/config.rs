@@ -16,6 +16,7 @@ pub struct Config {
     pub otlp_log_budget: u64,
     pub backup_dir: Option<PathBuf>,
     pub duckdb_max_bytes: Option<u64>,
+    pub archive: Option<ArchiveConfig>,
     pub trusted_proxies: Vec<IpNet>,
     pub client_ip_header: String,
     pub app_url: Option<String>,
@@ -29,6 +30,54 @@ pub struct Config {
     pub discord_client_secret: Option<String>,
     pub telegram_bot_token: Option<String>,
     pub allow_private_targets: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ArchiveConfig {
+    pub bucket: String,
+    pub prefix: String,
+    pub endpoint: Option<String>,
+    pub region: String,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    pub retention_days: u32,
+    pub cache_dir: PathBuf,
+    pub cache_bytes: u64,
+    pub range_reads: bool,
+}
+
+impl ArchiveConfig {
+    pub fn from_env() -> Result<Option<Self>> {
+        let Some(url) = read_optional("ARCHIVE_URL") else { return Ok(None) };
+        let (bucket, prefix) = parse_archive_url(&url)?;
+
+        Ok(Some(Self {
+            bucket,
+            prefix,
+            endpoint: read_optional("ARCHIVE_ENDPOINT"),
+            region: read_optional("ARCHIVE_REGION").unwrap_or_else(|| "auto".to_string()),
+            access_key_id: read_optional("ARCHIVE_ACCESS_KEY_ID"),
+            secret_access_key: read_optional("ARCHIVE_SECRET_ACCESS_KEY"),
+            retention_days: read_number("ARCHIVE_RETENTION_DAYS", 90)?,
+            cache_dir: read_optional("ARCHIVE_CACHE_DIR")
+                .map_or_else(|| PathBuf::from("data/archive-cache"), PathBuf::from),
+            cache_bytes: read_number::<u64>("ARCHIVE_CACHE_GB", 2)? * 1024 * 1024 * 1024,
+            range_reads: read_optional("ARCHIVE_RANGE_READS")
+                .is_some_and(|value| value == "true"),
+        }))
+    }
+}
+
+pub fn parse_archive_url(url: &str) -> Result<(String, String)> {
+    let rest = url
+        .strip_prefix("s3://")
+        .ok_or_else(|| anyhow::anyhow!("ARCHIVE_URL must start with s3://"))?;
+    let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+    if bucket.is_empty() {
+        anyhow::bail!("ARCHIVE_URL must name a bucket, like s3://daroyan-logs");
+    }
+
+    Ok((bucket.to_string(), prefix.trim_matches('/').to_string()))
 }
 
 impl Config {
@@ -50,6 +99,7 @@ impl Config {
                 .map_err(|_| anyhow::anyhow!("DUCKDB_MAX_SIZE_GB must be a number"))?
                 .filter(|gigabytes| *gigabytes > 0)
                 .map(|gigabytes| gigabytes * 1024 * 1024 * 1024),
+            archive: ArchiveConfig::from_env()?,
             trusted_proxies: parse_trusted_proxies(
                 &env::var("TRUSTED_PROXIES")
                     .unwrap_or_else(|_| "127.0.0.1,::1".to_string()),
@@ -125,5 +175,19 @@ mod tests {
                 .any(|net| net.contains(&"::1".parse::<IpAddr>().unwrap()))
         );
         assert!(parse_trusted_proxies("nope").is_err());
+    }
+
+    #[test]
+    fn splits_the_archive_url_into_bucket_and_prefix() {
+        assert_eq!(
+            parse_archive_url("s3://daroyan-logs").unwrap(),
+            ("daroyan-logs".to_string(), String::new())
+        );
+        assert_eq!(
+            parse_archive_url("s3://daroyan-logs/prod/eu/").unwrap(),
+            ("daroyan-logs".to_string(), "prod/eu".to_string())
+        );
+        assert!(parse_archive_url("https://daroyan-logs").is_err());
+        assert!(parse_archive_url("s3:///prod").is_err());
     }
 }

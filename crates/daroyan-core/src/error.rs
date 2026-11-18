@@ -156,4 +156,10 @@ macro_rules! internal_from {
     };
 }
 
-internal_from!(duckdb::Error, serde_json::Error, tokio::task::JoinError);
+internal_from!(
+    duckdb::Error,
+    serde_json::Error,
+    tokio::task::JoinError,
+    object_store::Error,
+    std::io::Error,
+);

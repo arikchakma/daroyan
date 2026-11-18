@@ -4,7 +4,7 @@ use duckdb::{Config, Connection};
 
 const STORAGE_VERSION: &str = "v1.2.0";
 
-const MIGRATIONS: [(&str, &str); 11] = [
+const MIGRATIONS: [(&str, &str); 13] = [
     ("0001_server_states.sql", include_str!("../duckdb/0001_server_states.sql")),
     ("0002_log_lines.sql", include_str!("../duckdb/0002_log_lines.sql")),
     ("0003_log_raw.sql", include_str!("../duckdb/0003_log_raw.sql")),
@@ -16,6 +16,8 @@ const MIGRATIONS: [(&str, &str); 11] = [
     ("0009_disk_states.sql", include_str!("../duckdb/0009_disk_states.sql")),
     ("0010_span_servers.sql", include_str!("../duckdb/0010_span_servers.sql")),
     ("0011_log_resource.sql", include_str!("../duckdb/0011_log_resource.sql")),
+    ("0012_log_archive.sql", include_str!("../duckdb/0012_log_archive.sql")),
+    ("0013_log_ingested_at.sql", include_str!("../duckdb/0013_log_ingested_at.sql")),
 ];
 
 pub fn open_duckdb(path: &Path) -> duckdb::Result<Connection> {

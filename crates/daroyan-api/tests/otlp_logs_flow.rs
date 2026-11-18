@@ -94,6 +94,7 @@ async fn open_test_state(dir: &Path) -> AppState {
         otlp_log_budget: 4 * 1024,
         backup_dir: None,
         duckdb_max_bytes: None,
+        archive: None,
         trusted_proxies: Vec::new(),
         client_ip_header: "cf-connecting-ip".to_string(),
         app_url: Some("https://daroyan.example".to_string()),

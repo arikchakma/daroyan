@@ -4,6 +4,7 @@ use std::time::Duration;
 use daroyan_api::app::{build_app, open_state};
 use daroyan_core::alerts::engine::spawn_alert_engine;
 use daroyan_core::analytics::spawn_analytics_tasks;
+use daroyan_core::archive::{Archive, spawn_archive_task};
 use daroyan_core::config::Config;
 use daroyan_core::crons::spawn_cron_runner;
 use daroyan_core::incidents::spawn_incident_scheduler;
@@ -32,7 +33,15 @@ async fn main() -> anyhow::Result<()> {
         state.config.log_retention_days,
         state.config.backup_dir.clone(),
         state.config.duckdb_max_bytes,
+        state.config.archive.is_some(),
     );
+    let archive_task = state
+        .config
+        .archive
+        .as_ref()
+        .map(Archive::try_from)
+        .transpose()?
+        .map(|archive| spawn_archive_task(archive, analytics.clone()));
     let alert_engine = spawn_alert_engine(
         state.database.clone(),
         state.agents.clone(),
@@ -66,6 +75,9 @@ async fn main() -> anyhow::Result<()> {
     })
     .await?;
     analytics_tasks.abort();
+    if let Some(task) = archive_task {
+        task.abort();
+    }
     alert_engine.abort();
     uptime_runner.abort();
     cron_runner.abort();

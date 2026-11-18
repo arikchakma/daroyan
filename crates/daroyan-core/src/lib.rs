@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod alerts;
 pub mod analytics;
+pub mod archive;
 pub mod auth;
 pub mod commands;
 pub mod config;
