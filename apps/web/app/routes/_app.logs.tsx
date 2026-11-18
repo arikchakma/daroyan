@@ -39,7 +39,16 @@ import { getViewChips, getViewParams, isSameView } from '~/utils/log-views';
 import type { SavedLogView } from '~/utils/log-views';
 import type { SearchFilterField, SearchFilterValue } from '~/utils/filter';
 import { formatTerm } from '~/utils/log-search';
-import { getPagingKey, getScanNote, getZoomLabel, OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
+import {
+  DEFAULT_LOG_RANGE,
+  getLogRange,
+  getLogRanges,
+  getPagingKey,
+  getScanNote,
+  getZoomLabel,
+  OTLP_SERVER_ID,
+  OTLP_SERVER_NAME,
+} from '~/utils/logs';
 
 const PAGE_SIZES = [50, 100, 200];
 const EXPORT_LIMIT = 5_000;
@@ -56,19 +65,6 @@ const FILTER_KEYS = [
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 const STATUSES = ['2xx', '3xx', '4xx', '5xx'];
-
-type LogRange = '15m' | '1h' | '24h' | '7d' | '30d' | '90d';
-
-const DEFAULT_RANGE: LogRange = '24h';
-
-const RANGES: { value: LogRange; label: string; ms: number; isArchived?: boolean }[] = [
-  { value: '15m', label: 'Last 15 Minutes', ms: 15 * 60_000 },
-  { value: '1h', label: 'Last Hour', ms: 3_600_000 },
-  { value: '24h', label: 'Last 24 Hours', ms: 24 * 3_600_000 },
-  { value: '7d', label: 'Last 7 Days', ms: 7 * 24 * 3_600_000 },
-  { value: '30d', label: 'Last 30 Days', ms: 30 * 24 * 3_600_000, isArchived: true },
-  { value: '90d', label: 'Last 90 Days', ms: 90 * 24 * 3_600_000, isArchived: true },
-];
 
 const EMPTY_FILTER: SearchFilterValue = { values: [], negate: false };
 
@@ -116,10 +112,9 @@ export default function LogsPage() {
   const page = Math.max(Number(searchParams.get('page')) || 1, 1);
   const pageSize = PAGE_SIZES.find((size) => size === Number(searchParams.get('limit'))) ?? PAGE_SIZES[0]!;
   const { data: instance } = useQuery(instanceQueries.detail());
-  const hasArchive = !!instance?.archive;
-  const ranges = RANGES.filter((item) => hasArchive || !item.isArchived);
+  const ranges = getLogRanges(instance?.archive?.retention_days);
   const widestRange = ranges[ranges.length - 1]!;
-  const range = RANGES.find((item) => item.value === searchParams.get('range')) ?? RANGES.find((item) => item.value === DEFAULT_RANGE)!;
+  const range = getLogRange(searchParams.get('range'));
   const zoomSince = Number(searchParams.get('from'));
   const zoomUntil = Number(searchParams.get('to'));
   const zoom = zoomSince > 0 && zoomUntil > zoomSince ? { since: zoomSince, until: zoomUntil } : undefined;
@@ -324,7 +319,7 @@ export default function LogsPage() {
     { key: 'status', label: 'Status', verb: 'is', multiple: true, negatable: true, options: toOptions(STATUSES) },
   ];
   const isViewChanged =
-    view !== 'all' || !!q || Object.keys(filterParams).length > 0 || range.value !== DEFAULT_RANGE || !!zoom;
+    view !== 'all' || !!q || Object.keys(filterParams).length > 0 || range.value !== DEFAULT_LOG_RANGE || !!zoom;
   const hasNoSources = sources?.length === 0;
   const viewParams = getViewParams(searchParams);
   const activeView = savedViews.find((saved) => isSameView(saved.params, viewParams));
@@ -339,7 +334,7 @@ export default function LogsPage() {
       ),
     })),
     q,
-    rangeLabel: range.value === DEFAULT_RANGE ? undefined : range.label,
+    rangeLabel: range.value === DEFAULT_LOG_RANGE ? undefined : range.label,
   });
 
   const applyView = (params: Record<string, string>) => {
@@ -396,8 +391,8 @@ export default function LogsPage() {
                   <Menu.Popup className="min-w-40">
                     <Menu.RadioGroup
                       value={zoom ? null : range.value}
-                      onValueChange={(value: LogRange) =>
-                        setParams({ range: value === DEFAULT_RANGE ? null : value, from: null, to: null })
+                      onValueChange={(value: string) =>
+                        setParams({ range: value === DEFAULT_LOG_RANGE ? null : value, from: null, to: null })
                       }
                     >
                       {ranges.map((item) => (
