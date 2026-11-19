@@ -7,6 +7,7 @@ use duckdb::{Connection, params_from_iter};
 use crate::analytics::archive::{
     ArchivedFile, DAY_MS, FileKind, HOUR_MS, MAX_COLUMNS, PARQUET_OPTIONS, REST_PREFIX,
     StagedFile, in_transaction, insert_files, quote_literal, read_json_list,
+    read_watermark,
 };
 
 pub const MAX_DAY_BYTES: u64 = 512 * 1024 * 1024;
@@ -194,6 +195,8 @@ pub fn merge_files(
         rows,
         services: read_json_list(&services),
         columns,
+        exported_until: read_watermark(conn)?,
+        replaces: merge.paths(),
     }))
 }
 
@@ -228,17 +231,20 @@ fn have_matching_columns(conn: &Connection, sources: &[PathBuf]) -> duckdb::Resu
 pub fn replace_files(
     conn: &Connection,
     merged: &ArchivedFile,
-    old: &[String],
     tenant: &str,
     now_ms: i64,
 ) -> duckdb::Result<()> {
     in_transaction(conn, || {
-        insert_files(conn, std::slice::from_ref(merged), tenant, now_ms)?;
-        mark_deleted(conn, old, now_ms)
+        insert_files(conn, std::slice::from_ref(merged), tenant)?;
+        mark_deleted(conn, &merged.meta.replaces, now_ms)
     })
 }
 
-fn mark_deleted(conn: &Connection, paths: &[String], now_ms: i64) -> duckdb::Result<()> {
+pub(super) fn mark_deleted(
+    conn: &Connection,
+    paths: &[String],
+    now_ms: i64,
+) -> duckdb::Result<()> {
     if paths.is_empty() {
         return Ok(());
     }
@@ -301,7 +307,7 @@ mod tests {
         plan_merges_with, replace_files,
     };
     use crate::analytics::archive::{
-        ArchivedFile, DAY_MS, FileKind, HOUR_MS, create_log_tables,
+        ArchivedFile, DAY_MS, FileKind, FileMeta, HOUR_MS, create_log_tables,
     };
 
     const DAY: i64 = 1_794_009_600_000 / DAY_MS * DAY_MS;
@@ -484,9 +490,10 @@ mod tests {
             .unwrap();
         assert_eq!(order, "api,web");
 
-        let merged = ArchivedFile { path: "day".to_string(), bytes: 15, file };
-        replace_files(&conn, &merged, &["first".into(), "second".into()], "default", 700)
-            .unwrap();
+        let mut meta = FileMeta::new(file, 15, 600);
+        meta.replaces = vec!["first".into(), "second".into()];
+        let merged = ArchivedFile { path: "day".to_string(), meta };
+        replace_files(&conn, &merged, "default", 700).unwrap();
         let rows: Vec<(String, String, Option<i64>)> = conn
             .prepare("SELECT path, kind, deleted_at FROM archive_files ORDER BY path")
             .unwrap()

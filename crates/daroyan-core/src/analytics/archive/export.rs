@@ -263,6 +263,8 @@ fn stage_hour(
         rows,
         services: read_json_list(&services),
         columns: fields.names(),
+        exported_until: until,
+        replaces: Vec::new(),
     })
 }
 
@@ -308,7 +310,7 @@ mod tests {
 
     use super::{ColumnKind, stage_logs_with};
     use crate::analytics::archive::{
-        ArchivedFile, HOUR_MS, create_log_tables, read_watermark, record_files,
+        ArchivedFile, FileMeta, HOUR_MS, create_log_tables, read_watermark, record_files,
     };
 
     fn scratch(name: &str) -> PathBuf {
@@ -470,11 +472,10 @@ mod tests {
             .into_iter()
             .map(|file| ArchivedFile {
                 path: format!("logs/{}", file.name),
-                bytes: 10,
-                file,
+                meta: FileMeta::new(file, 10, 600),
             })
             .collect();
-        record_files(&conn, &files, "default", until, 600).unwrap();
+        record_files(&conn, &files, "default", until).unwrap();
         assert_eq!(read_watermark(&conn).unwrap(), 500);
 
         let again = stage_logs_with(&conn, &dir, 700, 10).unwrap();

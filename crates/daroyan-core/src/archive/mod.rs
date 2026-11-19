@@ -1,3 +1,4 @@
+mod recover;
 mod search;
 mod upkeep;
 
@@ -18,11 +19,12 @@ use tokio::time::MissedTickBehavior;
 use crate::analytics::Analytics;
 use crate::analytics::archive::export::stage_logs;
 use crate::analytics::archive::{
-    ArchivedFile, FileKind, HOUR_MS, StagedFile, record_files,
+    ArchivedFile, FileKind, FileMeta, HOUR_MS, StagedFile, record_files,
 };
 use crate::config::ArchiveConfig;
 use crate::error::Result;
 
+pub use recover::Reconcile;
 pub use search::{count_any_log_buckets, list_any_log_context, search_logs};
 pub use upkeep::Upkeep;
 
@@ -179,18 +181,14 @@ impl Archive {
         let until = Utc::now().timestamp_millis() - EXPORT_SETTLE_MS;
         let staged = analytics.read(move |conn| stage_logs(conn, &dir, until)).await?;
 
+        let created_at = Utc::now().timestamp_millis();
         let mut archived = Vec::with_capacity(staged.files.len());
         let mut uploaded = Ok(());
         for file in staged.files {
-            if uploaded.is_ok() {
-                match self.upload(&file).await {
-                    Ok((path, bytes)) => archived.push(ArchivedFile {
-                        path: path.to_string(),
-                        bytes,
-                        file,
-                    }),
-                    Err(error) => uploaded = Err(error),
-                }
+            uploaded =
+                self.publish(file, created_at).await.map(|file| archived.push(file));
+            if uploaded.is_err() {
+                break;
             }
         }
         tokio::fs::remove_dir_all(&staging).await.ok();
@@ -198,23 +196,26 @@ impl Archive {
 
         let export = Export {
             files: archived.len(),
-            rows: archived.iter().map(|archived| archived.file.rows).sum(),
-            bytes: archived.iter().map(|archived| archived.bytes).sum(),
+            rows: archived.iter().map(|archived| archived.meta.rows).sum(),
+            bytes: archived.iter().map(|archived| archived.meta.bytes).sum(),
         };
         let until = staged.until;
         analytics
-            .write(move |conn| {
-                record_files(
-                    conn,
-                    &archived,
-                    TENANT,
-                    until,
-                    Utc::now().timestamp_millis(),
-                )
-            })
+            .write(move |conn| record_files(conn, &archived, TENANT, until))
             .await?;
 
         Ok(export)
+    }
+
+    async fn publish(&self, file: StagedFile, created_at: i64) -> Result<ArchivedFile> {
+        let (path, bytes) = self.upload(&file).await?;
+        let archived = ArchivedFile {
+            path: path.to_string(),
+            meta: FileMeta::new(file, bytes, created_at),
+        };
+        self.write_meta(&archived.path, &archived.meta).await?;
+
+        Ok(archived)
     }
 
     async fn upload(&self, file: &StagedFile) -> Result<(Path, u64)> {
@@ -277,11 +278,71 @@ fn create_range_secret(config: &ArchiveConfig) -> String {
     )
 }
 
+fn meta_path(path: &str) -> String {
+    format!("{path}.json")
+}
+
 async fn reset_dir(dir: PathBuf) -> Result<PathBuf> {
     tokio::fs::remove_dir_all(&dir).await.ok();
     tokio::fs::create_dir_all(&dir).await?;
 
     Ok(dir)
+}
+
+impl Archive {
+    async fn catch_up(&self, analytics: &Analytics) -> Result<()> {
+        let done = self.reconcile(analytics).await?;
+        if !done.is_empty() {
+            tracing::info!(
+                adopted = done.adopted,
+                superseded = done.superseded,
+                described = done.described,
+                "matched the archive file list to the bucket"
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn run_export(&self, analytics: &Analytics) {
+        let exported = async {
+            self.catch_up(analytics).await?;
+            self.export_logs(analytics).await
+        };
+
+        match exported.await {
+            Ok(done) => {
+                self.remember_error(None);
+                tracing::info!(
+                    files = done.files,
+                    rows = done.rows,
+                    bytes = done.bytes,
+                    "archived logs"
+                );
+            }
+            Err(error) => {
+                self.remember_error(Some(error.to_string()));
+                tracing::error!(%error, "archive logs");
+            }
+        }
+    }
+
+    async fn run_upkeep(&self, analytics: &Analytics) {
+        let tidied = async {
+            self.catch_up(analytics).await?;
+            self.tidy(analytics).await
+        };
+
+        match tidied.await {
+            Ok(done) => tracing::info!(
+                merged = done.merged,
+                expired = done.expired,
+                deleted = done.deleted,
+                "tidied the log archive"
+            ),
+            Err(error) => tracing::error!(%error, "tidy the log archive"),
+        }
+    }
 }
 
 pub fn spawn_archive_task(archive: Archive, analytics: Analytics) -> JoinHandle<()> {
@@ -304,30 +365,8 @@ pub fn spawn_archive_task(archive: Archive, analytics: Analytics) -> JoinHandle<
 
         loop {
             tokio::select! {
-                _ = export.tick() => match archive.export_logs(&analytics).await {
-                    Ok(done) => {
-                        archive.remember_error(None);
-                        tracing::info!(
-                            files = done.files,
-                            rows = done.rows,
-                            bytes = done.bytes,
-                            "archived logs"
-                        );
-                    }
-                    Err(error) => {
-                        archive.remember_error(Some(error.to_string()));
-                        tracing::error!(%error, "archive logs");
-                    }
-                },
-                _ = upkeep.tick() => match archive.tidy(&analytics).await {
-                    Ok(done) => tracing::info!(
-                        merged = done.merged,
-                        expired = done.expired,
-                        deleted = done.deleted,
-                        "tidied the log archive"
-                    ),
-                    Err(error) => tracing::error!(%error, "tidy the log archive"),
-                },
+                _ = export.tick() => archive.run_export(&analytics).await,
+                _ = upkeep.tick() => archive.run_upkeep(&analytics).await,
             }
         }
     })
@@ -375,6 +414,7 @@ mod tests {
         let mut paths: Vec<String> = store
             .list(None)
             .map_ok(|meta| meta.location.to_string())
+            .try_filter(|path| std::future::ready(!path.ends_with(".json")))
             .try_collect()
             .await
             .unwrap();

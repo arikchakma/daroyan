@@ -275,6 +275,17 @@ Once an hour, the API also does upkeep on the bucket:
   file from its list first and deletes the object 2 hours later, so a search
   that already started can finish.
 
+Next to each Parquet file, the API writes a small `<file>.parquet.json` file.
+It holds the time range, row count, services and columns of the file, and the
+files that it replaces. The API writes it after the Parquet file is uploaded,
+so a Parquet file without one is an unfinished upload and is not used.
+
+Before each export and each upkeep, the API compares its list of files with
+the bucket. If the DuckDB file was lost, or restored from an older backup, the
+API adds the missing files from their JSON files and skips the files that a
+newer export or merge replaced. You do not need to do anything. Start the API
+with the same `ARCHIVE_URL` and you can search the archive again.
+
 Search reads DuckDB first. When it needs lines that are older than
 `LOG_RETENTION_DAYS`, it reads the files in the bucket, one day at a time, newest
 first. After each day, it checks whether it has read 2 GB of files or run for
