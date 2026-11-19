@@ -19,17 +19,19 @@ hex.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+object_store.workspace = true
 ipnet.workspace = true
 opentelemetry-proto.workspace = true
 prost.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+reqwest-object-store.workspace = true
 rustls.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt-multi-thread"] }
 tokio-rustls.workspace = true
 tracing.workspace = true
 utoipa.workspace = true

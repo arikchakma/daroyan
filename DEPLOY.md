@@ -40,6 +40,11 @@ start. Put TLS in front of it with a reverse proxy.
 | `DUCKDB_MAX_SIZE_GB` | No | – | The most data DuckDB keeps, in GB. When the data passes it, the API deletes the oldest logs and traces, even if they are newer than the retention days, but it keeps the newest hour. Leave it empty or `0` for no limit. |
 | `RETENTION_DAYS` | No | `30` | Days of metrics/traces kept. |
 | `LOG_RETENTION_DAYS` | No | `7` | Days of logs kept. |
+| `ARCHIVE_URL` | No | – | A bucket for old logs, like `s3://daroyan-logs/prod`. When set, the API copies new logs to Parquet files in the bucket every hour. See [Log archive](#log-archive). |
+| `ARCHIVE_ENDPOINT` | No | AWS | The S3 API URL of the bucket. For Cloudflare R2 it is `https://<account-id>.r2.cloudflarestorage.com`. |
+| `ARCHIVE_REGION` | No | `auto` | The bucket region. R2 uses `auto`. |
+| `ARCHIVE_ACCESS_KEY_ID` / `ARCHIVE_SECRET_ACCESS_KEY` | No | – | A key that can read, write, list and delete objects in the bucket. |
+| `ARCHIVE_CACHE_DIR` | No | `data/archive-cache` | A local folder for files before they are uploaded. |
 | `OTLP_LOG_BUDGET_KB` | No | `1024` | The most OpenTelemetry log data each ingest token can send per minute, in KB. Batches over it get `429` with `Retry-After`, so SDKs retry them. Settings → Telemetry counts them. |
 | `TRUSTED_PROXIES` | No | `127.0.0.1,::1` | CIDRs allowed to set the real-client-IP header. See the warning below. |
 | `CLIENT_IP_HEADER` | No | `cf-connecting-ip` | Header your proxy sets with the real client IP. Use `x-forwarded-for` for most proxies. |
@@ -242,6 +247,43 @@ runs. Servers, alerts and settings are kept.
 Set `DUCKDB_MAX_SIZE_GB` to limit the data DuckDB keeps. Over the limit, the API
 deletes the oldest logs and traces, but keeps the newest hour. The file does not
 get smaller, it only stops growing.
+
+### Log archive
+
+Set `ARCHIVE_URL` to keep logs longer than `LOG_RETENTION_DAYS` in a bucket.
+Any S3-compatible store works. We recommend Cloudflare R2, because it does not
+charge to read data back.
+
+Every hour, the API writes the new logs to one Parquet file for each hour of
+log time. It uploads them to
+`<prefix>/logs/v1/tenant=default/dt=<date>/hour=<hour>/`. Each attribute
+becomes its own column, named `a.<key>`, and each resource attribute is named
+`r.<key>`. A file has at most 1,000 of these columns. The other keys go into the
+`_rest_attributes` and `_rest_resource` columns.
+
+When the archive is on, the API does not delete a log from DuckDB until it is
+in the bucket. If `DUCKDB_MAX_SIZE_GB` is reached first, the API deletes the
+logs anyway and writes an error with the number of logs it lost.
+
+To set up R2:
+
+1. Create a bucket, for example `daroyan-logs`.
+2. Create an R2 API token with "Object Read & Write" access to that bucket.
+3. Set `ARCHIVE_URL=s3://daroyan-logs`, `ARCHIVE_ENDPOINT`,
+   `ARCHIVE_ACCESS_KEY_ID` and `ARCHIVE_SECRET_ACCESS_KEY`.
+4. Add a lifecycle rule on the `logs/` prefix that deletes objects after the
+   number of days you want to keep, for example 90.
+
+At startup, the API writes and deletes a small `.daroyan-check` object. If
+that fails, it writes an error and keeps running, and the logs stay in DuckDB.
+
+You can read the files with any Parquet tool, for example DuckDB:
+
+```sql
+SELECT logged_at, service, message, "a.http.status"
+FROM read_parquet('daroyan-logs/logs/v1/tenant=default/dt=2026-11-18/*/*.parquet')
+ORDER BY logged_at DESC;
+```
 
 ---
 

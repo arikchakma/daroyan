@@ -32,6 +32,41 @@ const LINE_OVERHEAD: u64 = 64;
 pub const OTLP_SERVER_ID: &str = "otlp";
 pub const OTLP_SERVER_NAME: &str = "OpenTelemetry";
 const LEVEL_KEYS: [&str; 4] = ["level", "severity", "status", "log.level"];
+const STATUS_KEYS: [&str; 3] =
+    ["http.status", "http.response.status_code", "http.status_code"];
+const METHOD_KEYS: [&str; 2] = ["http.method", "http.request.method"];
+const PATH_KEYS: [&str; 2] = ["url.path", "http.target"];
+const CLIENT_IP_KEYS: [&str; 2] = ["client.ip", "client.address"];
+
+#[derive(Default)]
+pub struct HttpFields {
+    status: Option<u16>,
+    method: Option<String>,
+    path: Option<String>,
+    client_ip: Option<String>,
+}
+
+impl From<&Map<String, Value>> for HttpFields {
+    fn from(attributes: &Map<String, Value>) -> Self {
+        let text = |keys: &[&str]| {
+            keys.iter()
+                .find_map(|key| attributes.get(*key).and_then(Value::as_str))
+                .map(|value| cut(value, MAX_NAME_BYTES))
+        };
+        let status = STATUS_KEYS.iter().find_map(|key| match attributes.get(*key)? {
+            Value::Number(number) => number.as_u64()?.try_into().ok(),
+            Value::String(text) => text.trim().parse().ok(),
+            _ => None,
+        });
+
+        Self {
+            status,
+            method: text(&METHOD_KEYS),
+            path: text(&PATH_KEYS),
+            client_ip: text(&CLIENT_IP_KEYS),
+        }
+    }
+}
 
 pub struct LogRow {
     server_id: String,
@@ -45,6 +80,7 @@ pub struct LogRow {
     span_id: Option<String>,
     raw: Option<String>,
     resource: Option<Arc<str>>,
+    http: HttpFields,
 }
 
 impl LogRow {
@@ -107,6 +143,7 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
                         .insert("log.format".into(), line.format.as_str().into());
                 }
             }
+            let http = HttpFields::from(&line.attributes);
             LogRow {
                 server_id: server_id.to_string(),
                 at: clamp_future_ms(at, now_ms),
@@ -120,6 +157,7 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
                 span_id: line.span_id.map(|id| cut(&id, 32)),
                 raw,
                 resource: None,
+                http,
             }
         })
         .collect();
@@ -160,6 +198,7 @@ fn make_agent_warning(
         span_id: None,
         raw: None,
         resource: None,
+        http: HttpFields::default(),
     }
 }
 
@@ -232,6 +271,7 @@ fn to_otlp_log_row(
         .find(|nanos| *nanos > 0)
         .and_then(|nanos| i64::try_from(nanos / 1_000_000).ok())
         .unwrap_or(now_ms);
+    let http = HttpFields::from(&attributes);
 
     LogRow {
         server_id: server_id.to_string(),
@@ -246,6 +286,7 @@ fn to_otlp_log_row(
         span_id: to_hex(&record.span_id),
         raw: None,
         resource: None,
+        http,
     }
 }
 
@@ -276,7 +317,11 @@ fn read_body(body: Option<&AnyValue>) -> String {
     }
 }
 
-pub fn append_logs(conn: &Connection, rows: &[LogRow]) -> duckdb::Result<()> {
+pub fn append_logs(
+    conn: &Connection,
+    rows: &[LogRow],
+    ingested_at: i64,
+) -> duckdb::Result<()> {
     let mut appender = conn.appender("log_lines")?;
     for row in rows {
         appender.append_row(params![
@@ -291,6 +336,11 @@ pub fn append_logs(conn: &Connection, rows: &[LogRow]) -> duckdb::Result<()> {
             row.span_id,
             row.raw,
             row.resource.as_deref(),
+            ingested_at,
+            row.http.status,
+            row.http.method,
+            row.http.path,
+            row.http.client_ip,
         ])?;
     }
     appender.flush()
@@ -371,13 +421,19 @@ pub struct LogQuery {
     pub limit: u32,
 }
 
-const METHOD_COLUMN: &str = "json_extract_string(attributes, '$.\"http.method\"')";
-const STATUS_CLASS_COLUMN: &str =
-    "left(json_extract_string(attributes, '$.\"http.status\"'), 1)";
+const METHOD_COLUMN: &str =
+    "coalesce(http_method, json_extract_string(attributes, '$.\"http.method\"'))";
+const STATUS_COLUMN: &str = "coalesce(CAST(http_status AS VARCHAR), \
+     json_extract_string(attributes, '$.\"http.status\"'))";
+const PATH_COLUMN: &str =
+    "coalesce(url_path, json_extract_string(attributes, '$.\"url.path\"'))";
+const CLIENT_IP_COLUMN: &str =
+    "coalesce(client_ip, json_extract_string(attributes, '$.\"client.ip\"'))";
 const MESSAGE_COLUMN: &str = "CASE WHEN message = '' THEN concat_ws(' ', \
-     json_extract_string(attributes, '$.\"http.method\"'), \
-     json_extract_string(attributes, '$.\"url.path\"'), \
-     json_extract_string(attributes, '$.\"http.status\"')) ELSE message END";
+     coalesce(http_method, json_extract_string(attributes, '$.\"http.method\"')), \
+     coalesce(url_path, json_extract_string(attributes, '$.\"url.path\"')), \
+     coalesce(CAST(http_status AS VARCHAR), json_extract_string(attributes, '$.\"http.status\"'))) \
+     ELSE message END";
 
 fn push_condition(sql: &mut String, condition: &str, negate: bool) {
     let not = if negate { "NOT " } else { "" };
@@ -409,6 +465,10 @@ fn push_column(values: &mut Vec<SqlValue>, field: SearchField) -> String {
         SearchField::Key(key) => match key.as_str() {
             "service" | "source" => "service".to_string(),
             "trace_id" | "trace" => "trace_id".to_string(),
+            "http.status" => format!("({STATUS_COLUMN})"),
+            "http.method" => format!("({METHOD_COLUMN})"),
+            "url.path" => format!("({PATH_COLUMN})"),
+            "client.ip" => format!("({CLIENT_IP_COLUMN})"),
             _ => {
                 let path = format!("$.\"{}\"", key.replace('"', ""));
                 values.extend([SqlValue::Text(path.clone()), SqlValue::Text(path)]);
@@ -476,7 +536,7 @@ fn push_search(sql: &mut String, values: &mut Vec<SqlValue>, search: LogSearch) 
     push_filter(sql, values, "server_id", search.servers);
     push_filter(sql, values, "service", search.services);
     push_filter(sql, values, METHOD_COLUMN, search.methods);
-    push_filter(sql, values, STATUS_CLASS_COLUMN, search.status_classes);
+    push_filter(sql, values, &format!("left({STATUS_COLUMN}, 1)"), search.status_classes);
     if let Some(min_severity) = search.min_severity {
         sql.push_str(" AND severity >= ?");
         values.push(SqlValue::UTinyInt(min_severity));
@@ -831,8 +891,8 @@ mod tests {
     };
 
     use super::{
-        LogBucket, LogFilter, LogQuery, LogSearch, SearchField, SearchMatch, SearchTerm,
-        count_log_buckets, list_logs, read_level, to_log_rows,
+        HttpFields, LogBucket, LogFilter, LogQuery, LogSearch, SearchField, SearchMatch,
+        SearchTerm, count_log_buckets, list_logs, read_level, to_log_rows,
     };
     use crate::analytics::Analytics;
 
@@ -919,6 +979,25 @@ mod tests {
         assert_eq!(rows[0].message, "request completed");
         assert!(rows[0].attributes.as_deref().unwrap().contains("/v1/links"));
         assert_eq!(rows[0].raw, None);
+    }
+
+    #[test]
+    fn promotes_http_fields_from_attributes() {
+        let attributes = serde_json::json!({
+            "http.response.status_code": "404",
+            "http.request.method": "GET",
+            "url.path": "/v1/links",
+            "client.address": "10.0.0.1",
+        });
+        let http = HttpFields::from(attributes.as_object().unwrap());
+        assert_eq!(http.status, Some(404));
+        assert_eq!(http.method.as_deref(), Some("GET"));
+        assert_eq!(http.path.as_deref(), Some("/v1/links"));
+        assert_eq!(http.client_ip.as_deref(), Some("10.0.0.1"));
+
+        let odd = serde_json::json!({ "http.status": 70_000, "http.method": 1 });
+        let http = HttpFields::from(odd.as_object().unwrap());
+        assert_eq!((http.status, http.method), (None, None));
     }
 
     #[test]
@@ -1130,6 +1209,9 @@ mod tests {
         ))?;
         conn.execute_batch(include_str!(
             "../../../daroyan-migration/duckdb/0011_log_resource.sql"
+        ))?;
+        conn.execute_batch(include_str!(
+            "../../../daroyan-migration/duckdb/0012_log_archive.sql"
         ))
     }
 

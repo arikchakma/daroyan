@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod cron_runs;
 pub mod log_lines;
 pub mod log_parse;
@@ -19,6 +20,7 @@ use daroyan_protocol::report::Report;
 use duckdb::Connection;
 use tokio::task::{JoinHandle, spawn_blocking};
 
+use crate::analytics::archive::IS_ARCHIVED;
 use crate::analytics::log_lines::{LogRow, OTLP_SERVER_ID, append_logs, to_log_rows};
 use crate::analytics::server_events::{
     EventRow, append_events, to_event_row, to_event_rows,
@@ -65,6 +67,7 @@ pub struct Trim {
     pub deleted_rows: usize,
     pub logs_until: Option<i64>,
     pub spans_until: Option<i64>,
+    pub unarchived_rows: usize,
 }
 
 #[derive(Default)]
@@ -261,18 +264,29 @@ impl Analytics {
             append_states(conn, &pending.states)?;
             append_disks(conn, &pending.disks)?;
             append_events(conn, &pending.events)?;
-            append_logs(conn, &pending.logs)?;
+            append_logs(conn, &pending.logs, Utc::now().timestamp_millis())?;
             append_spans(conn, &pending.spans, &pending.exceptions)
         })
         .await
     }
 
-    pub async fn purge_before(&self, cutoff_ms: i64, log_cutoff_ms: i64) -> Result<()> {
+    pub async fn purge_before(
+        &self,
+        cutoff_ms: i64,
+        log_cutoff_ms: i64,
+        keep_unarchived: bool,
+    ) -> Result<()> {
         self.write(move |conn| {
             conn.execute("DELETE FROM server_states WHERE taken_at < ?", [cutoff_ms])?;
             conn.execute("DELETE FROM disk_states WHERE taken_at < ?", [cutoff_ms])?;
             conn.execute("DELETE FROM server_events WHERE occurred_at < ?", [cutoff_ms])?;
-            conn.execute("DELETE FROM log_lines WHERE logged_at < ?", [log_cutoff_ms])?;
+
+            let mut logs = String::from("DELETE FROM log_lines WHERE logged_at < ?");
+            if keep_unarchived {
+                logs.push_str(&format!(" AND {IS_ARCHIVED}"));
+            }
+            conn.execute(&logs, [log_cutoff_ms])?;
+
             conn.execute("DELETE FROM spans WHERE started_at < ?", [cutoff_ms * 1_000])?;
             conn.execute(
                 "DELETE FROM span_exceptions WHERE occurred_at < ?",
@@ -291,7 +305,11 @@ impl Analytics {
         .await
     }
 
-    pub async fn trim_to(&self, max_bytes: u64) -> Result<Option<Trim>> {
+    pub async fn trim_to(
+        &self,
+        max_bytes: u64,
+        count_unarchived: bool,
+    ) -> Result<Option<Trim>> {
         self.write(move |conn| {
             conn.execute_batch("CHECKPOINT")?;
             let used_bytes = read_used_bytes(conn)?;
@@ -318,7 +336,17 @@ impl Analytics {
             )?;
 
             let mut deleted_rows = 0;
+            let mut unarchived_rows = 0;
             if let Some(until) = logs_until {
+                if count_unarchived {
+                    unarchived_rows = conn.query_row(
+                        &format!(
+                            "SELECT count(*) FROM log_lines WHERE logged_at <= ? AND NOT {IS_ARCHIVED}"
+                        ),
+                        [until],
+                        |row| row.get(0),
+                    )?;
+                }
                 deleted_rows +=
                     conn.execute("DELETE FROM log_lines WHERE logged_at <= ?", [until])?;
             }
@@ -334,7 +362,13 @@ impl Analytics {
                 conn.execute_batch("CHECKPOINT")?;
             }
 
-            Ok(Some(Trim { used_bytes, deleted_rows, logs_until, spans_until }))
+            Ok(Some(Trim {
+                used_bytes,
+                deleted_rows,
+                logs_until,
+                spans_until,
+                unarchived_rows,
+            }))
         })
         .await
     }
@@ -396,6 +430,7 @@ pub fn spawn_analytics_tasks(
     log_retention_days: u32,
     backup_dir: Option<PathBuf>,
     max_bytes: Option<u64>,
+    archive: bool,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut flush = tokio::time::interval(FLUSH_INTERVAL);
@@ -416,17 +451,24 @@ pub fn spawn_analytics_tasks(
                     let now = Utc::now().timestamp_millis();
                     let cutoff = now - i64::from(retention_days) * DAY_MS;
                     let log_cutoff = now - i64::from(log_retention_days) * DAY_MS;
-                    if let Err(error) = analytics.purge_before(cutoff, log_cutoff).await {
+                    if let Err(error) = analytics.purge_before(cutoff, log_cutoff, archive).await {
                         tracing::error!(error = %error, "purge analytics");
                     }
                 }
                 _ = trim.tick(), if max_bytes.is_some() => {
                     let Some(max_bytes) = max_bytes else { continue };
-                    match analytics.trim_to(max_bytes).await {
+                    match analytics.trim_to(max_bytes, archive).await {
                         Ok(Some(trim)) if trim.deleted_rows == 0 => tracing::error!(
                             used_mb = trim.used_bytes / 1_048_576,
                             max_mb = max_bytes / 1_048_576,
                             "DuckDB is over its size cap and has no logs or spans older than an hour to delete, raise DUCKDB_MAX_SIZE_GB or lower RETENTION_DAYS"
+                        ),
+                        Ok(Some(trim)) if trim.unarchived_rows > 0 => tracing::error!(
+                            used_mb = trim.used_bytes / 1_048_576,
+                            max_mb = max_bytes / 1_048_576,
+                            deleted_rows = trim.deleted_rows,
+                            lost_rows = trim.unarchived_rows,
+                            "deleted logs that were not archived yet, DuckDB was over its size cap, check the archive export or raise DUCKDB_MAX_SIZE_GB"
                         ),
                         Ok(Some(trim)) => tracing::warn!(
                             used_mb = trim.used_bytes / 1_048_576,
@@ -647,9 +689,9 @@ mod tests {
             })
             .unwrap();
         let used = analytics.run(super::read_used_bytes).unwrap();
-        assert_eq!(analytics.trim_to(used).await.unwrap(), None);
+        assert_eq!(analytics.trim_to(used, false).await.unwrap(), None);
 
-        let trim = analytics.trim_to(used / 2).await.unwrap().unwrap();
+        let trim = analytics.trim_to(used / 2, false).await.unwrap().unwrap();
         assert_eq!(trim.used_bytes, used);
         let logs_until = trim.logs_until.unwrap();
         assert!((200_000..260_000).contains(&logs_until), "{logs_until}");
@@ -676,7 +718,7 @@ mod tests {
         assert_eq!(exceptions, 0);
 
         let mut passes = 1;
-        while analytics.trim_to(used / 2).await.unwrap().is_some() {
+        while analytics.trim_to(used / 2, false).await.unwrap().is_some() {
             passes += 1;
             assert!(passes < 12, "still over the cap after {passes} passes");
         }
@@ -709,7 +751,7 @@ mod tests {
         let used = analytics.run(super::read_used_bytes).unwrap();
 
         for _ in 0..3 {
-            let trim = analytics.trim_to(used / 2).await.unwrap().unwrap();
+            let trim = analytics.trim_to(used / 2, false).await.unwrap().unwrap();
             assert_eq!(trim.deleted_rows, 0);
         }
 
@@ -723,6 +765,48 @@ mod tests {
             })
             .unwrap();
         assert_eq!(kept, (20_000, 20_000));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn keeps_logs_that_are_not_archived_yet() {
+        let dir =
+            std::env::temp_dir().join(format!("daroyan-purge-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let analytics = Analytics::open(&dir.join("live.duckdb")).unwrap();
+        analytics
+            .run(|conn| {
+                conn.execute_batch(
+                    "CREATE TABLE server_states (taken_at BIGINT); \
+                     CREATE TABLE disk_states (taken_at BIGINT); \
+                     CREATE TABLE server_events (occurred_at BIGINT); \
+                     CREATE TABLE spans (started_at BIGINT); \
+                     CREATE TABLE span_exceptions (occurred_at BIGINT); \
+                     CREATE TABLE uptime_results (checked_at BIGINT); \
+                     CREATE TABLE cron_runs (finished_at BIGINT); \
+                     CREATE TABLE log_lines (logged_at BIGINT, ingested_at BIGINT); \
+                     CREATE TABLE archive_state (name VARCHAR PRIMARY KEY, value BIGINT NOT NULL); \
+                     INSERT INTO log_lines VALUES (1, 10), (2, 20), (3, 30), (500, 500); \
+                     INSERT INTO archive_state VALUES ('log_watermark', 20);",
+                )
+            })
+            .unwrap();
+        let logged_at = || {
+            analytics
+                .run(|conn| {
+                    conn.prepare("SELECT logged_at FROM log_lines ORDER BY logged_at")?
+                        .query_map([], |row| row.get::<_, i64>(0))?
+                        .collect::<duckdb::Result<Vec<_>>>()
+                })
+                .unwrap()
+        };
+
+        analytics.purge_before(0, 100, true).await.unwrap();
+        assert_eq!(logged_at(), [3, 500]);
+
+        analytics.purge_before(0, 100, false).await.unwrap();
+        assert_eq!(logged_at(), [500]);
 
         std::fs::remove_dir_all(dir).ok();
     }

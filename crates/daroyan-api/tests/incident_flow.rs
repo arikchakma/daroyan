@@ -50,6 +50,7 @@ async fn declares_updates_and_resolves_incidents() {
         otlp_log_budget: 1024 * 1024,
         backup_dir: None,
         duckdb_max_bytes: None,
+        archive: None,
         trusted_proxies: Vec::new(),
         client_ip_header: "cf-connecting-ip".to_string(),
         app_url: Some("https://daroyan.example".to_string()),
