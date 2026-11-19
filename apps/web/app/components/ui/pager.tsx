@@ -8,11 +8,12 @@ type PagerProps = {
   hasNext: boolean;
   onPrevious: () => void;
   onNext: () => void;
+  note?: string;
   className?: string;
 };
 
 export function Pager(props: PagerProps) {
-  const { start, rowCount, hasPrevious, hasNext, onPrevious, onNext, className } = props;
+  const { start, rowCount, hasPrevious, hasNext, onPrevious, onNext, note, className } = props;
 
   if (!hasPrevious && !hasNext) {
     return null;
@@ -37,6 +38,7 @@ export function Pager(props: PagerProps) {
       </button>
       <span className="text-caption text-text-tertiary tabular-nums">
         {start}–{start + Math.max(rowCount, 1) - 1}
+        {note && ` · ${note}`}
       </span>
       <button
         type="button"

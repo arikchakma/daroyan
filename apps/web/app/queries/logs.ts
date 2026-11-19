@@ -18,11 +18,12 @@ export type LogsParams = {
   q?: string;
   since?: number;
   until?: number;
-  offset: number;
+  before?: string;
+  offset?: number;
   limit: number;
 };
 
-export type LogVolumeParams = Omit<LogsParams, 'offset' | 'limit'>;
+export type LogVolumeParams = Omit<LogsParams, 'before' | 'offset' | 'limit'>;
 
 export const logQueries = {
   all: () => ['logs'] as const,

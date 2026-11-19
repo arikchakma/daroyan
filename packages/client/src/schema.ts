@@ -475,7 +475,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Settings this Daroyan instance reads from its environment: the public URL and how long metrics and logs are kept */
+        /** @description Settings this Daroyan instance reads from its environment: the public URL, how long metrics and logs are kept, and the log archive */
         get: operations["get_instance"];
         put?: never;
         post?: never;
@@ -1314,6 +1314,20 @@ export interface components {
             value: string;
         };
         AlertRuleId: string;
+        Archive: {
+            /** Format: int64 */
+            bytes: number;
+            /** Format: int64 */
+            exported_at?: number | null;
+            /** Format: int64 */
+            files: number;
+            last_error?: string | null;
+            /** Format: int64 */
+            oldest_at?: number | null;
+            /** Format: int32 */
+            retention_days: number;
+            url: string;
+        };
         BacktestAlertRuleBody: {
             condition: components["schemas"]["Condition"];
             /** Format: int32 */
@@ -1879,6 +1893,7 @@ export interface components {
         };
         Instance: {
             app_url?: string | null;
+            archive?: components["schemas"]["Archive"] | null;
             /** Format: int32 */
             log_retention_days: number;
             /** Format: int32 */
@@ -1992,8 +2007,15 @@ export interface components {
         LogPage: {
             has_more: boolean;
             lines: components["schemas"]["LogLine"][];
+            next?: string | null;
+            scanned?: components["schemas"]["LogScan"] | null;
             /** Format: int64 */
             until: number;
+        };
+        LogScan: {
+            /** Format: int64 */
+            bytes: number;
+            files: number;
         };
         LogSource: {
             server_id: string;
@@ -4032,12 +4054,15 @@ export interface operations {
                 status_op?: string;
                 /** @description The lowest level shown: debug, info, warn or error */
                 level?: string;
-                /** @description Words match the message or the attributes. `key:value` matches an attribute, `*` is a wildcard, and a leading `-` excludes. Quote phrases with spaces */
+                /** @description Words match the message, and `*:word` matches any field. `key:value` matches an attribute, where `*` is a wildcard and `key:*` means the attribute exists. `key:[a,b]` matches either value, `key:>500` and `key:<100` compare numbers, and `/regex/` or `key:/regex/` match an RE2 regex. A leading `-` excludes. Quote text with spaces. Matching ignores case */
                 q?: string;
                 /** @description Only lines at or after this time in ms */
                 since?: number;
-                /** @description Only lines at or before this time in ms. Keep it the same while paging */
+                /** @description Only lines at or before this time in ms */
                 until?: number;
+                /** @description The next value of the last page, to get the page after it */
+                before?: string;
+                /** @description Deprecated, use before. Lines to skip, keeping until the same */
                 offset?: number;
                 limit?: number;
             };

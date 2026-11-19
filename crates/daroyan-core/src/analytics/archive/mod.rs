@@ -64,6 +64,31 @@ pub struct ArchivedFile {
     pub file: StagedFile,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ArchiveSummary {
+    pub files: u64,
+    pub bytes: u64,
+    pub oldest_at: Option<i64>,
+    pub exported_at: Option<i64>,
+}
+
+pub fn summarize_archive(conn: &Connection) -> duckdb::Result<ArchiveSummary> {
+    let (files, bytes, oldest_at) = conn.query_row(
+        "SELECT count(*), coalesce(sum(bytes), 0), min(min_logged_at) \
+         FROM archive_files WHERE deleted_at IS NULL",
+        [],
+        |row| Ok((row.get(0)?, row.get::<_, i128>(1)?, row.get(2)?)),
+    )?;
+    let watermark = read_watermark(conn)?;
+
+    Ok(ArchiveSummary {
+        files,
+        bytes: u64::try_from(bytes).unwrap_or_default(),
+        oldest_at,
+        exported_at: (watermark > 0).then_some(watermark),
+    })
+}
+
 pub fn read_watermark(conn: &Connection) -> duckdb::Result<i64> {
     let value: Option<i64> = conn.query_row(
         "SELECT max(value) FROM archive_state WHERE name = ?",

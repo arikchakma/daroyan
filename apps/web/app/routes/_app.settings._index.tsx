@@ -7,8 +7,9 @@ import { ThemeSelect } from '~/components/settings/theme-select';
 import { Skeleton } from '~/components/ui/skeleton';
 import { authQueries } from '~/queries/auth';
 import { instanceQueries } from '~/queries/instance';
+import { cn } from '~/utils/classname';
 import { pluralize } from '~/utils/format';
-import { getRoleLabel } from '~/utils/settings';
+import { getArchiveLabel, getArchiveStatus, getRoleLabel } from '~/utils/settings';
 
 export function meta() {
   return [{ title: 'General · Daroyan' }];
@@ -47,6 +48,16 @@ export default function GeneralSettingsPage() {
           <SettingsRow label="Logs" envVar="LOG_RETENTION_DAYS">
             {instance ? `Kept ${pluralize(instance.log_retention_days, 'day')}` : <Skeleton className="w-20" />}
           </SettingsRow>
+          <SettingsRow label="Log Archive" envVar="ARCHIVE_URL">
+            {instance ? getArchiveLabel(instance.archive) : <Skeleton className="w-40" />}
+          </SettingsRow>
+          {instance?.archive && (
+            <SettingsRow label="Archived Logs">
+              <span className={cn(instance.archive.last_error && 'text-tone-critical-fg')}>
+                {getArchiveStatus(instance.archive)}
+              </span>
+            </SettingsRow>
+          )}
         </SettingsCard>
       </SettingsBlock>
     </SettingsPage>

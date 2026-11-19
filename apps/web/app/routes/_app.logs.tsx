@@ -29,6 +29,7 @@ import type { LogRow } from '~/hooks/use-logs-table';
 import { apiClient } from '~/lib/api-client';
 import { request } from '~/lib/http';
 import { toast } from '~/lib/toast';
+import { instanceQueries } from '~/queries/instance';
 import { logQueries } from '~/queries/logs';
 import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
@@ -38,7 +39,16 @@ import { getViewChips, getViewParams, isSameView } from '~/utils/log-views';
 import type { SavedLogView } from '~/utils/log-views';
 import type { SearchFilterField, SearchFilterValue } from '~/utils/filter';
 import { formatTerm } from '~/utils/log-search';
-import { getZoomLabel, OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
+import {
+  DEFAULT_LOG_RANGE,
+  getLogRange,
+  getLogRanges,
+  getPagingKey,
+  getScanNote,
+  getZoomLabel,
+  OTLP_SERVER_ID,
+  OTLP_SERVER_NAME,
+} from '~/utils/logs';
 
 const PAGE_SIZES = [50, 100, 200];
 const EXPORT_LIMIT = 5_000;
@@ -55,17 +65,6 @@ const FILTER_KEYS = [
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 const STATUSES = ['2xx', '3xx', '4xx', '5xx'];
-
-type LogRange = '15m' | '1h' | '24h' | '7d';
-
-const DEFAULT_RANGE: LogRange = '24h';
-
-const RANGES: { value: LogRange; label: string; ms: number }[] = [
-  { value: '15m', label: 'Last 15 Minutes', ms: 15 * 60_000 },
-  { value: '1h', label: 'Last Hour', ms: 3_600_000 },
-  { value: '24h', label: 'Last 24 Hours', ms: 24 * 3_600_000 },
-  { value: '7d', label: 'Last 7 Days', ms: 7 * 24 * 3_600_000 },
-];
 
 const EMPTY_FILTER: SearchFilterValue = { values: [], negate: false };
 
@@ -112,7 +111,10 @@ export default function LogsPage() {
   const q = searchParams.get('q') ?? '';
   const page = Math.max(Number(searchParams.get('page')) || 1, 1);
   const pageSize = PAGE_SIZES.find((size) => size === Number(searchParams.get('limit'))) ?? PAGE_SIZES[0]!;
-  const range = RANGES.find((item) => item.value === searchParams.get('range')) ?? RANGES.find((item) => item.value === DEFAULT_RANGE)!;
+  const { data: instance } = useQuery(instanceQueries.detail());
+  const ranges = getLogRanges(instance?.archive?.retention_days);
+  const widestRange = ranges[ranges.length - 1]!;
+  const range = getLogRange(searchParams.get('range'));
   const zoomSince = Number(searchParams.get('from'));
   const zoomUntil = Number(searchParams.get('to'));
   const zoom = zoomSince > 0 && zoomUntil > zoomSince ? { since: zoomSince, until: zoomUntil } : undefined;
@@ -137,6 +139,12 @@ export default function LogsPage() {
     setTimeWindow({ key: paramsKey, until: timeWindow.nextUntil ?? Date.now(), nextUntil: undefined });
   }
   const until = timeWindow.until;
+  const pagingKey = getPagingKey(searchParams);
+  const [cursors, setCursors] = useState(() => ({ key: pagingKey, pages: {} as Record<number, string> }));
+  if (cursors.key !== pagingKey) {
+    setCursors({ key: pagingKey, pages: {} });
+  }
+  const before = cursors.key === pagingKey ? cursors.pages[page] : undefined;
   const [openLine, setOpenLine] = useState<LogRow>();
   const [isWrapped, setIsWrapped] = useStoredState(WRAP_KEY, false);
   const [hiddenColumns, setHiddenColumns] = useStoredState<ColumnVisibilityState>(COLUMNS_KEY, {});
@@ -190,7 +198,10 @@ export default function LogsPage() {
   const { data: servers } = useQuery(serverQueries.list());
   const { data: sources } = useQuery(logQueries.sources());
   const { data, isLoading, isPlaceholderData: isShowingOldLines } = useQuery(
-    logQueries.list({ ...filters, ...timeRange, offset: (page - 1) * pageSize, limit: pageSize }, isFollowing)
+    logQueries.list(
+      { ...filters, ...timeRange, ...(before ? { before } : { offset: (page - 1) * pageSize }), limit: pageSize },
+      isFollowing
+    )
   );
   const { data: volume, isPlaceholderData: isShowingOldVolume } = useQuery(
     logQueries.volume({ ...filters, ...timeRange }, isFollowing)
@@ -236,16 +247,18 @@ export default function LogsPage() {
       const exportUntil = zoom?.until ?? Date.now();
       const exportSince = zoom?.since ?? exportUntil - range.ms;
       const rows = [];
-      for (let offset = 0; offset < EXPORT_LIMIT; offset += 200) {
+      let exportBefore: string | undefined;
+      while (rows.length < EXPORT_LIMIT) {
         const page = await request(
           apiClient.GET('/v1/logs', {
-            params: { query: { ...filters, since: exportSince, until: exportUntil, offset, limit: 200 } },
+            params: { query: { ...filters, since: exportSince, until: exportUntil, before: exportBefore, limit: 200 } },
           })
         );
         rows.push(...page.lines);
-        if (!page.has_more) {
+        if (!page.has_more || !page.next) {
           break;
         }
+        exportBefore = page.next;
       }
       const blob = new Blob([rows.map((row) => JSON.stringify(row)).join('\n')], { type: 'application/x-ndjson' });
       const link = document.createElement('a');
@@ -306,7 +319,7 @@ export default function LogsPage() {
     { key: 'status', label: 'Status', verb: 'is', multiple: true, negatable: true, options: toOptions(STATUSES) },
   ];
   const isViewChanged =
-    view !== 'all' || !!q || Object.keys(filterParams).length > 0 || range.value !== DEFAULT_RANGE || !!zoom;
+    view !== 'all' || !!q || Object.keys(filterParams).length > 0 || range.value !== DEFAULT_LOG_RANGE || !!zoom;
   const hasNoSources = sources?.length === 0;
   const viewParams = getViewParams(searchParams);
   const activeView = savedViews.find((saved) => isSameView(saved.params, viewParams));
@@ -321,7 +334,7 @@ export default function LogsPage() {
       ),
     })),
     q,
-    rangeLabel: range.value === DEFAULT_RANGE ? undefined : range.label,
+    rangeLabel: range.value === DEFAULT_LOG_RANGE ? undefined : range.label,
   });
 
   const applyView = (params: Record<string, string>) => {
@@ -378,11 +391,11 @@ export default function LogsPage() {
                   <Menu.Popup className="min-w-40">
                     <Menu.RadioGroup
                       value={zoom ? null : range.value}
-                      onValueChange={(value: LogRange) =>
-                        setParams({ range: value === DEFAULT_RANGE ? null : value, from: null, to: null })
+                      onValueChange={(value: string) =>
+                        setParams({ range: value === DEFAULT_LOG_RANGE ? null : value, from: null, to: null })
                       }
                     >
-                      {RANGES.map((item) => (
+                      {ranges.map((item) => (
                         <Menu.RadioItem key={item.value} value={item.value}>
                           {item.label}
                         </Menu.RadioItem>
@@ -497,17 +510,17 @@ export default function LogsPage() {
                 </>
               ) : zoom ? (
                 'No log lines in this range match these filters.'
-              ) : range.value === '7d' ? (
+              ) : range.value === widestRange.value ? (
                 'No log lines match these filters.'
               ) : (
                 <>
                   No log lines in the {range.label.toLowerCase()} match these filters.{' '}
                   <button
                     type="button"
-                    onClick={() => setParams({ range: '7d' })}
+                    onClick={() => setParams({ range: widestRange.value })}
                     className="text-text-link outline-none hover:underline focus-visible:underline"
                   >
-                    Search the last 7 days
+                    Search the {widestRange.label.toLowerCase()}
                   </button>
                 </>
               )}
@@ -519,10 +532,15 @@ export default function LogsPage() {
             rowCount={data?.lines.length ?? 0}
             hasPrevious={page > 1}
             hasNext={!!data?.has_more}
+            note={getScanNote(data?.scanned)}
             onPrevious={() => setParams({ page: page > 2 ? String(page - 1) : null })}
             onNext={() => {
+              const next = data?.next;
               setIsLive(false);
               setTimeWindow((current) => ({ ...current, nextUntil: data?.until }));
+              if (next) {
+                setCursors((current) => ({ ...current, pages: { ...current.pages, [page + 1]: next } }));
+              }
               setParams({ page: String(page + 1) });
             }}
           />

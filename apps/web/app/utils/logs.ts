@@ -1,6 +1,6 @@
 import { describeRequest } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
-import { DAY_MS, formatClock, formatDate, HOUR_MS } from '~/utils/format';
+import { DAY_MS, formatBytes, formatClock, formatDate, HOUR_MS, pluralize } from '~/utils/format';
 
 export const OTLP_SERVER_ID = 'otlp';
 export const OTLP_SERVER_NAME = 'OpenTelemetry';
@@ -81,4 +81,60 @@ export function getZoomLabel(since: number, until: number) {
   }
 
   return `${formatDate(since)} ${getBucketClock(since, span)} – ${formatDate(until)} ${getBucketClock(until, span)}`;
+}
+
+export function getPagingKey(params: URLSearchParams) {
+  const rest = new URLSearchParams(params);
+  rest.delete('page');
+
+  return rest.toString();
+}
+
+export function getScanNote(scan: { files: number; bytes: number } | null | undefined) {
+  if (!scan || scan.files === 0) {
+    return undefined;
+  }
+
+  return `Read ${pluralize(scan.files, 'archived file')}, ${formatBytes(scan.bytes)}`;
+}
+
+export type LogRange = { value: string; label: string; ms: number };
+
+export const DEFAULT_LOG_RANGE = '24h';
+
+const HOT_RANGES: LogRange[] = [
+  { value: '15m', label: 'Last 15 Minutes', ms: 15 * 60_000 },
+  { value: '1h', label: 'Last Hour', ms: HOUR_MS },
+  { value: '24h', label: 'Last 24 Hours', ms: DAY_MS },
+  { value: '7d', label: 'Last 7 Days', ms: 7 * DAY_MS },
+];
+
+const ARCHIVE_DAYS = [30, 90];
+
+function getDaysRange(days: number): LogRange {
+  return { value: `${days}d`, label: `Last ${days} Days`, ms: days * DAY_MS };
+}
+
+export function getLogRanges(retentionDays: number | undefined) {
+  if (!retentionDays) {
+    return HOT_RANGES;
+  }
+
+  const days = [...ARCHIVE_DAYS.filter((day) => day < retentionDays), retentionDays];
+
+  return [...HOT_RANGES, ...days.filter((day) => day > 7).map(getDaysRange)];
+}
+
+export function getLogRange(value: string | null) {
+  const hot = HOT_RANGES.find((item) => item.value === value);
+  if (hot) {
+    return hot;
+  }
+
+  const days = Number(value?.match(/^(\d+)d$/)?.[1]);
+  if (days > 0) {
+    return getDaysRange(days);
+  }
+
+  return HOT_RANGES.find((item) => item.value === DEFAULT_LOG_RANGE)!;
 }
