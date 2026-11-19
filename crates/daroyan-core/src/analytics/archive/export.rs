@@ -1,18 +1,23 @@
 use std::cmp::Reverse;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use duckdb::{Connection, params};
+use duckdb::Connection;
 use serde_json::{Map, Value};
 
-pub const LOG_WATERMARK: &str = "log_watermark";
-pub const IS_ARCHIVED: &str = "ingested_at <= coalesce((SELECT value FROM archive_state WHERE name = 'log_watermark'), 0)";
-pub const HOUR_MS: i64 = 60 * 60 * 1000;
-pub const MAX_COLUMNS: usize = 1_000;
+use crate::analytics::archive::{
+    FileKind, HOUR_MS, MAX_COLUMNS, PARQUET_OPTIONS, REST_PREFIX, StagedFile,
+    quote_identifier, quote_literal, read_json_list, read_watermark,
+};
+
 const FIXED_COLUMNS: &str = "server_id, logged_at, ingested_at, service, stream, severity, message, \
      trace_id, span_id, raw, http_status, http_method, url_path, client_ip";
-const PARQUET_OPTIONS: &str =
-    "FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 3, ROW_GROUP_SIZE 122880";
+
+#[derive(Debug)]
+pub struct StagedExport {
+    pub files: Vec<StagedFile>,
+    pub until: i64,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Source {
@@ -35,11 +40,8 @@ impl Source {
         }
     }
 
-    fn rest_column(self) -> &'static str {
-        match self {
-            Self::Attributes => "_rest_attributes",
-            Self::Resource => "_rest_resource",
-        }
+    fn rest_column(self) -> String {
+        format!("{REST_PREFIX}{}", self.column())
     }
 }
 
@@ -175,59 +177,9 @@ impl Fields {
         self.chosen
             .iter()
             .map(Field::name)
-            .chain(self.overflowing.iter().map(|source| source.rest_column().to_string()))
+            .chain(self.overflowing.iter().map(|source| source.rest_column()))
             .collect()
     }
-}
-
-#[derive(Debug)]
-pub struct StagedFile {
-    pub local: PathBuf,
-    pub name: String,
-    pub hour: i64,
-    pub min_logged_at: i64,
-    pub max_logged_at: i64,
-    pub rows: i64,
-    pub services: Vec<String>,
-    pub columns: Vec<String>,
-}
-
-#[derive(Debug)]
-pub struct StagedExport {
-    pub files: Vec<StagedFile>,
-    pub until: i64,
-}
-
-#[derive(Debug)]
-pub struct ArchivedFile {
-    pub path: String,
-    pub bytes: u64,
-    pub file: StagedFile,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FileKind {
-    Hour,
-    Day,
-}
-
-impl FileKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Hour => "hour",
-            Self::Day => "day",
-        }
-    }
-}
-
-pub fn read_watermark(conn: &Connection) -> duckdb::Result<i64> {
-    let value: Option<i64> = conn.query_row(
-        "SELECT max(value) FROM archive_state WHERE name = ?",
-        [LOG_WATERMARK],
-        |row| row.get(0),
-    )?;
-
-    Ok(value.unwrap_or_default())
 }
 
 pub fn stage_logs(
@@ -304,11 +256,12 @@ fn stage_hour(
     Ok(StagedFile {
         local,
         name,
+        kind: FileKind::Hour,
         hour,
         min_logged_at,
         max_logged_at,
         rows,
-        services: serde_json::from_str(&services).unwrap_or_default(),
+        services: read_json_list(&services),
         columns: fields.names(),
     })
 }
@@ -334,7 +287,7 @@ fn read_fields(
     statement
         .query_map([], |row| {
             let types: String = row.get(2)?;
-            let types: Vec<String> = serde_json::from_str(&types).unwrap_or_default();
+            let types = read_json_list(&types);
 
             Ok(Field {
                 source,
@@ -346,68 +299,6 @@ fn read_fields(
         .collect()
 }
 
-pub fn record_files(
-    conn: &Connection,
-    files: &[ArchivedFile],
-    tenant: &str,
-    until: i64,
-    now_ms: i64,
-) -> duckdb::Result<()> {
-    conn.execute_batch("BEGIN TRANSACTION")?;
-
-    let recorded = insert_files(conn, files, tenant, now_ms).and_then(|()| {
-        conn.execute(
-            "INSERT OR REPLACE INTO archive_state (name, value) VALUES (?, ?)",
-            params![LOG_WATERMARK, until],
-        )
-    });
-    if let Err(error) = recorded {
-        conn.execute_batch("ROLLBACK").ok();
-        return Err(error);
-    }
-
-    conn.execute_batch("COMMIT")
-}
-
-fn insert_files(
-    conn: &Connection,
-    files: &[ArchivedFile],
-    tenant: &str,
-    now_ms: i64,
-) -> duckdb::Result<()> {
-    let mut statement = conn.prepare(
-        "INSERT INTO archive_files \
-         (path, tenant, kind, min_logged_at, max_logged_at, rows, bytes, services, columns, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, CAST(CAST(? AS JSON) AS VARCHAR[]), CAST(CAST(? AS JSON) AS VARCHAR[]), ?)",
-    )?;
-
-    for archived in files {
-        let file = &archived.file;
-        statement.execute(params![
-            archived.path,
-            tenant,
-            FileKind::Hour.as_str(),
-            file.min_logged_at,
-            file.max_logged_at,
-            file.rows,
-            archived.bytes,
-            Value::from(file.services.clone()).to_string(),
-            Value::from(file.columns.clone()).to_string(),
-            now_ms,
-        ])?;
-    }
-
-    Ok(())
-}
-
-fn quote_literal(text: &str) -> String {
-    text.replace('\'', "''")
-}
-
-fn quote_identifier(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -415,8 +306,9 @@ mod tests {
 
     use duckdb::Connection;
 
-    use super::{
-        ArchivedFile, ColumnKind, read_watermark, record_files, stage_logs_with,
+    use super::{ColumnKind, stage_logs_with};
+    use crate::analytics::archive::{
+        ArchivedFile, HOUR_MS, create_log_tables, read_watermark, record_files,
     };
 
     fn scratch(name: &str) -> PathBuf {
@@ -430,14 +322,7 @@ mod tests {
 
     fn open(dir: &std::path::Path) -> Connection {
         let conn = Connection::open(dir.join("daroyan.duckdb")).unwrap();
-        for sql in [
-            include_str!("../../../daroyan-migration/duckdb/0002_log_lines.sql"),
-            include_str!("../../../daroyan-migration/duckdb/0003_log_raw.sql"),
-            include_str!("../../../daroyan-migration/duckdb/0011_log_resource.sql"),
-            include_str!("../../../daroyan-migration/duckdb/0012_log_archive.sql"),
-        ] {
-            conn.execute_batch(sql).unwrap();
-        }
+        create_log_tables(&conn).unwrap();
 
         conn
     }
@@ -471,10 +356,10 @@ mod tests {
     fn writes_one_flat_parquet_file_per_hour() {
         let dir = scratch("hours");
         let conn = open(&dir);
-        let hour = 1_794_000_000_000 / super::HOUR_MS * super::HOUR_MS;
+        let hour = 1_794_000_000_000 / HOUR_MS * HOUR_MS;
         insert(&conn, hour + 5, 100, r#"{"http.status":200,"user.id":"u_1","took":1.5}"#);
         insert(&conn, hour + 9, 100, r#"{"http.status":"500","ok":true}"#);
-        insert(&conn, hour + super::HOUR_MS + 1, 100, r#"{"ok":false}"#);
+        insert(&conn, hour + HOUR_MS + 1, 100, r#"{"ok":false}"#);
         insert(&conn, hour + 2, 900, r#"{"late":1}"#);
 
         let export = stage_logs_with(&conn, &dir, 500, 1_000).unwrap();
@@ -482,7 +367,7 @@ mod tests {
         assert_eq!(export.files.len(), 2);
 
         let first = &export.files[0];
-        assert_eq!(first.hour, hour / super::HOUR_MS);
+        assert_eq!(first.hour, hour / HOUR_MS);
         assert_eq!(
             (first.min_logged_at, first.max_logged_at, first.rows),
             (hour + 5, hour + 9, 2)

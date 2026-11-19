@@ -44,7 +44,8 @@ start. Put TLS in front of it with a reverse proxy.
 | `ARCHIVE_ENDPOINT` | No | AWS | The S3 API URL of the bucket. For Cloudflare R2 it is `https://<account-id>.r2.cloudflarestorage.com`. |
 | `ARCHIVE_REGION` | No | `auto` | The bucket region. R2 uses `auto`. |
 | `ARCHIVE_ACCESS_KEY_ID` / `ARCHIVE_SECRET_ACCESS_KEY` | No | – | A key that can read, write, list and delete objects in the bucket. |
-| `ARCHIVE_CACHE_DIR` | No | `data/archive-cache` | A local folder for files before they are uploaded. |
+| `ARCHIVE_RETENTION_DAYS` | No | `90` | Days that log files stay in the bucket. |
+| `ARCHIVE_CACHE_DIR` | No | `data/archive-cache` | A local folder for files before they are uploaded and while they are merged. |
 | `OTLP_LOG_BUDGET_KB` | No | `1024` | The most OpenTelemetry log data each ingest token can send per minute, in KB. Batches over it get `429` with `Retry-After`, so SDKs retry them. Settings → Telemetry counts them. |
 | `TRUSTED_PROXIES` | No | `127.0.0.1,::1` | CIDRs allowed to set the real-client-IP header. See the warning below. |
 | `CLIENT_IP_HEADER` | No | `cf-connecting-ip` | Header your proxy sets with the real client IP. Use `x-forwarded-for` for most proxies. |
@@ -261,6 +262,17 @@ becomes its own column, named `a.<key>`, and each resource attribute is named
 `r.<key>`. A file has at most 1,000 of these columns. The other keys go into the
 `_rest_attributes` and `_rest_resource` columns.
 
+Once an hour, the API also does upkeep on the bucket:
+
+- It merges the files of each day into one file, 6 hours after the day ends.
+  A day with more than 512 MB of files is merged into one file per hour.
+  Files that name or type a column differently are not merged, so no value
+  changes. Late lines for a merged day are merged again only when they reach
+  24 files or a tenth of the day's size.
+- It deletes files that are older than `ARCHIVE_RETENTION_DAYS`. It removes a
+  file from its list first and deletes the object 2 hours later, so a search
+  that already started can finish.
+
 When the archive is on, the API does not delete a log from DuckDB until it is
 in the bucket. If `DUCKDB_MAX_SIZE_GB` is reached first, the API deletes the
 logs anyway and writes an error with the number of logs it lost.
@@ -271,8 +283,12 @@ To set up R2:
 2. Create an R2 API token with "Object Read & Write" access to that bucket.
 3. Set `ARCHIVE_URL=s3://daroyan-logs`, `ARCHIVE_ENDPOINT`,
    `ARCHIVE_ACCESS_KEY_ID` and `ARCHIVE_SECRET_ACCESS_KEY`.
-4. Add a lifecycle rule on the `logs/` prefix that deletes objects after the
-   number of days you want to keep, for example 90.
+4. Optional: add a lifecycle rule on the `logs/` prefix that deletes objects a
+   week after `ARCHIVE_RETENTION_DAYS`, for example after 97 days. The API
+   deletes old files itself, so the rule only catches what it missed. Add a
+   rule that ends unfinished multipart uploads after 7 days too. R2 has this
+   rule by default. Do not
+   set the rule to fewer days than `ARCHIVE_RETENTION_DAYS`.
 
 At startup, the API writes and deletes a small `.daroyan-check` object. If
 that fails, it writes an error and keeps running, and the logs stay in DuckDB.
