@@ -45,7 +45,9 @@ start. Put TLS in front of it with a reverse proxy.
 | `ARCHIVE_REGION` | No | `auto` | The bucket region. R2 uses `auto`. |
 | `ARCHIVE_ACCESS_KEY_ID` / `ARCHIVE_SECRET_ACCESS_KEY` | No | – | A key that can read, write, list and delete objects in the bucket. |
 | `ARCHIVE_RETENTION_DAYS` | No | `90` | Days that log files stay in the bucket. |
-| `ARCHIVE_CACHE_DIR` | No | `data/archive-cache` | A local folder for files before they are uploaded and while they are merged. |
+| `ARCHIVE_CACHE_DIR` | No | `data/archive-cache` | A local folder for files before they are uploaded, while they are merged, and after a search downloads them. |
+| `ARCHIVE_CACHE_GB` | No | `2` | The most space, in GB, that downloaded log files use in `ARCHIVE_CACHE_DIR`. |
+| `ARCHIVE_RANGE_READS` | No | `false` | Set to `true` to read only the needed parts of each file from the bucket, not the whole file. The API then needs to download the DuckDB `httpfs` extension once. If it cannot, it downloads whole files. |
 | `OTLP_LOG_BUDGET_KB` | No | `1024` | The most OpenTelemetry log data each ingest token can send per minute, in KB. Batches over it get `429` with `Retry-After`, so SDKs retry them. Settings → Telemetry counts them. |
 | `TRUSTED_PROXIES` | No | `127.0.0.1,::1` | CIDRs allowed to set the real-client-IP header. See the warning below. |
 | `CLIENT_IP_HEADER` | No | `cf-connecting-ip` | Header your proxy sets with the real client IP. Use `x-forwarded-for` for most proxies. |
@@ -272,6 +274,12 @@ Once an hour, the API also does upkeep on the bucket:
 - It deletes files that are older than `ARCHIVE_RETENTION_DAYS`. It removes a
   file from its list first and deletes the object 2 hours later, so a search
   that already started can finish.
+
+Search reads DuckDB first. When it needs lines that are older than
+`LOG_RETENTION_DAYS`, it reads the files in the bucket, one day at a time, newest
+first. After each day, it checks whether it has read 2 GB of files or run for
+20 seconds. If it has, it returns the lines it found and a `next` value to
+search further. One day is always read in full, so a busy day can take longer.
 
 When the archive is on, the API does not delete a log from DuckDB until it is
 in the bucket. If `DUCKDB_MAX_SIZE_GB` is reached first, the API deletes the

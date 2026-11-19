@@ -1,3 +1,4 @@
+mod search;
 mod upkeep;
 
 use std::path::PathBuf;
@@ -22,6 +23,7 @@ use crate::analytics::archive::{
 use crate::config::ArchiveConfig;
 use crate::error::Result;
 
+pub use search::{count_any_log_buckets, list_any_log_context, search_logs};
 pub use upkeep::Upkeep;
 
 pub const TENANT: &str = "default";
@@ -31,6 +33,9 @@ const UPKEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const UPKEEP_DELAY: Duration = Duration::from_secs(10 * 60);
 const CHECK_OBJECT: &str = ".daroyan-check";
 const DEFAULT_RETENTION_DAYS: u32 = 90;
+const DEFAULT_LOG_RETENTION_DAYS: u32 = 7;
+const DEFAULT_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const RANGE_SECRET: &str = "daroyan_archive";
 
 #[derive(Clone)]
 pub struct Archive {
@@ -38,6 +43,9 @@ pub struct Archive {
     root: String,
     work_dir: PathBuf,
     retention_days: u32,
+    log_retention_days: u32,
+    cache_bytes: u64,
+    range_bucket: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -72,7 +80,8 @@ impl TryFrom<&ArchiveConfig> for Archive {
             &config.prefix,
             config.cache_dir.clone(),
         )
-        .with_retention_days(config.retention_days))
+        .with_retention_days(config.retention_days)
+        .with_cache_bytes(config.cache_bytes))
     }
 }
 
@@ -83,11 +92,41 @@ impl Archive {
             root: prefix.trim_matches('/').to_string(),
             work_dir,
             retention_days: DEFAULT_RETENTION_DAYS,
+            log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
+            cache_bytes: DEFAULT_CACHE_BYTES,
+            range_bucket: None,
         }
     }
 
     pub fn with_retention_days(mut self, retention_days: u32) -> Self {
         self.retention_days = retention_days;
+        self
+    }
+
+    pub fn with_log_retention_days(mut self, log_retention_days: u32) -> Self {
+        self.log_retention_days = log_retention_days;
+        self
+    }
+
+    pub fn with_cache_bytes(mut self, cache_bytes: u64) -> Self {
+        self.cache_bytes = cache_bytes;
+        self
+    }
+
+    pub async fn with_range_reads(
+        mut self,
+        analytics: &Analytics,
+        config: &ArchiveConfig,
+    ) -> Self {
+        let sql = create_range_secret(config);
+        match analytics.write(move |conn| conn.execute_batch(&sql)).await {
+            Ok(()) => self.range_bucket = Some(config.bucket.clone()),
+            Err(error) => tracing::warn!(
+                %error,
+                "cannot read the archive with httpfs, so archived files are downloaded instead"
+            ),
+        }
+
         self
     }
 
@@ -197,6 +236,35 @@ impl Archive {
 
         Ok(())
     }
+}
+
+fn create_range_secret(config: &ArchiveConfig) -> String {
+    let quote = |text: &str| text.replace('\'', "''");
+    let mut options = vec![
+        "TYPE s3".to_string(),
+        "URL_STYLE 'path'".to_string(),
+        format!("REGION '{}'", quote(&config.region)),
+        format!("SCOPE 's3://{}'", quote(&config.bucket)),
+    ];
+    if let (Some(key_id), Some(secret)) =
+        (&config.access_key_id, &config.secret_access_key)
+    {
+        options.push(format!("KEY_ID '{}'", quote(key_id)));
+        options.push(format!("SECRET '{}'", quote(secret)));
+    }
+    if let Some(endpoint) = &config.endpoint {
+        let host = endpoint
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_end_matches('/');
+        options.push(format!("ENDPOINT '{}'", quote(host)));
+        options.push(format!("USE_SSL {}", !endpoint.starts_with("http://")));
+    }
+
+    format!(
+        "INSTALL httpfs; LOAD httpfs; CREATE OR REPLACE SECRET {RANGE_SECRET} ({})",
+        options.join(", ")
+    )
 }
 
 async fn reset_dir(dir: PathBuf) -> Result<PathBuf> {

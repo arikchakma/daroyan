@@ -11,6 +11,7 @@ use std::sync::Arc;
 use daroyan_core::agents::Agents;
 use daroyan_core::alerts::connect::ConnectStates;
 use daroyan_core::analytics::Analytics;
+use daroyan_core::archive::Archive;
 use daroyan_core::config::Config;
 use daroyan_core::crons::Crons;
 use daroyan_core::db::Database;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub database: Database,
     pub analytics: Analytics,
+    pub archive: Option<Archive>,
     pub agents: Agents,
     pub limits: Limits,
     pub log_budgets: LogBudgets,

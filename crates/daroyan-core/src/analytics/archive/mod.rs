@@ -1,4 +1,5 @@
 pub mod export;
+pub mod search;
 pub mod upkeep;
 
 use std::path::PathBuf;
@@ -144,7 +145,7 @@ fn quote_literal(text: &str) -> String {
     text.replace('\'', "''")
 }
 
-fn quote_identifier(name: &str) -> String {
+pub fn quote_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
@@ -155,6 +156,7 @@ pub fn create_log_tables(conn: &Connection) -> duckdb::Result<()> {
         include_str!("../../../../daroyan-migration/duckdb/0003_log_raw.sql"),
         include_str!("../../../../daroyan-migration/duckdb/0011_log_resource.sql"),
         include_str!("../../../../daroyan-migration/duckdb/0012_log_archive.sql"),
+        include_str!("../../../../daroyan-migration/duckdb/0014_log_volume.sql"),
     ] {
         conn.execute_batch(sql)?;
     }

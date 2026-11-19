@@ -117,7 +117,7 @@ fn list_tool_defs() -> Vec<ToolDef> {
             "search_logs",
             GET,
             "/v1/logs",
-            "Search log lines from servers and OpenTelemetry, newest first. Page with offset while keeping until the same."
+            "Search log lines from servers and OpenTelemetry, newest first. To get the next page, pass the next value as before. When the archive is on, older lines come from the archive, and scanned says how much of it was read."
         ),
         tool!(
             "get_log_context",
