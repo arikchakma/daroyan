@@ -248,8 +248,8 @@ a copy that is not on the server. If `DUCKDB_BACKUP_DIR` is empty, the API
 still makes a backup every 6 hours, writes it to `ARCHIVE_CACHE_DIR`, uploads
 it and then deletes the local copy.
 
-The API stops writing to DuckDB while it makes a backup, so new metrics and
-logs wait until it is done.
+The API copies DuckDB from a snapshot, so new metrics and logs are still
+written while the backup runs.
 
 To restore, stop the API, download the newest file from `<prefix>/backups/`,
 save it as the file in `DUCKDB_PATH` and start the API. The log archive file

@@ -413,7 +413,7 @@ impl Analytics {
         let path = dir.join(&name);
         let partial = dir.join(format!("{name}.partial"));
         let target = partial.to_string_lossy().replace('\'', "''");
-        self.write(move |conn| {
+        self.read(move |conn| {
             let source: String =
                 conn.query_row("SELECT current_database()", [], |row| row.get(0))?;
             let source = source.replace('"', "\"\"");
