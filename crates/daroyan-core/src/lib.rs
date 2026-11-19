@@ -3,6 +3,7 @@ pub mod alerts;
 pub mod analytics;
 pub mod archive;
 pub mod auth;
+pub mod backup;
 pub mod commands;
 pub mod config;
 pub mod crons;

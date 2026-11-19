@@ -36,7 +36,7 @@ start. Put TLS in front of it with a reverse proxy.
 | `PORT` | No | `8900` | Listen port. |
 | `DATABASE_URL` | No | `sqlite://data/daroyan.db?mode=rwc` | SQLite app database. Point it at your persistent volume. |
 | `DUCKDB_PATH` | No | `data/daroyan.duckdb` | DuckDB metrics/logs/traces store. Put it on the same volume. |
-| `DUCKDB_BACKUP_DIR` | No | – | If set, a DuckDB backup is written here every 6 hours and the newest 8 are kept. Use a different disk from `DUCKDB_PATH`, see [Data and backups](#8-data-and-backups). |
+| `DUCKDB_BACKUP_DIR` | No | – | If set, a DuckDB backup is written here every 6 hours and the newest 8 are kept. Use a different disk from `DUCKDB_PATH`. With `ARCHIVE_URL` set, each backup is also uploaded to the bucket, see [Data and backups](#8-data-and-backups). |
 | `DUCKDB_MAX_SIZE_GB` | No | – | The most data DuckDB keeps, in GB. When the data passes it, the API deletes the oldest logs and traces, even if they are newer than the retention days, but it keeps the newest hour. Leave it empty or `0` for no limit. |
 | `RETENTION_DAYS` | No | `30` | Days of metrics/traces kept. |
 | `LOG_RETENTION_DAYS` | No | `7` | Days of logs kept. |
@@ -241,6 +241,20 @@ Back up the whole data directory. For the Docker setup, back up the mounted
 
 The backup folder holds up to 8 full copies of the DuckDB file, so put
 `DUCKDB_BACKUP_DIR` on another disk.
+
+When `ARCHIVE_URL` is set, the API also uploads each backup to
+`<prefix>/backups/` in the bucket and keeps the newest 2 there. This gives you
+a copy that is not on the server. If `DUCKDB_BACKUP_DIR` is empty, the API
+still makes a backup every 6 hours, writes it to `ARCHIVE_CACHE_DIR`, uploads
+it and then deletes the local copy.
+
+The API copies DuckDB from a snapshot, so new metrics and logs are still
+written while the backup runs.
+
+To restore, stop the API, download the newest file from `<prefix>/backups/`,
+save it as the file in `DUCKDB_PATH` and start the API. The log archive file
+list is matched to the bucket at startup, so files exported after the backup
+are found again.
 
 A `daroyan.duckdb` file made by 0.0.29 or older is not compressed. To get a
 compressed file, stop the API, delete `daroyan.duckdb` and `daroyan.duckdb.wal`,

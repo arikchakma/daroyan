@@ -48,7 +48,7 @@ export default function BackupsPage() {
             {status && !status.is_enabled && (
               <>
                 <span className="font-medium">Backups are off</span>
-                <span className="text-text-secondary">Set DUCKDB_BACKUP_DIR on the API to turn them on.</span>
+                <span className="text-text-secondary">Set DUCKDB_BACKUP_DIR or ARCHIVE_URL on the API to turn them on.</span>
               </>
             )}
             {status?.is_enabled && (
