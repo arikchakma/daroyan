@@ -6,8 +6,8 @@ use object_store::path::Path;
 
 use crate::analytics::Analytics;
 use crate::analytics::archive::upkeep::{
-    Merge, expire_files, forget_files, list_deleted, merge_files, plan_merges,
-    replace_files,
+    Merge, expire_files, forget_files, list_deleted, merge_files, open_merge_db,
+    plan_merges, replace_files,
 };
 use crate::analytics::archive::{DAY_MS, FileKind, HOUR_MS};
 use crate::archive::{Archive, TENANT, meta_path, reset_dir};
@@ -79,9 +79,12 @@ impl Archive {
         };
         let target =
             dir.join(format!("{prefix}{now_ms}-{:08x}.parquet", rand::random::<u32>()));
-        let file = analytics
-            .read(move |conn| merge_files(conn, &merge, &sources, &target))
-            .await?;
+        let temp_dir = dir.join("tmp");
+        let file = tokio::task::spawn_blocking(move || {
+            let conn = open_merge_db(&temp_dir)?;
+            merge_files(&conn, &merge, &sources, &target)
+        })
+        .await??;
         let Some(file) = file else { return Ok(false) };
 
         let merged = self.publish(file, now_ms).await?;

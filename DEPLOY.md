@@ -284,7 +284,8 @@ Once an hour, the API also does upkeep on the bucket:
   A day with more than 512 MB of files is merged into one file per hour.
   Files that name or type a column differently are not merged, so no value
   changes. Late lines for a merged day are merged again only when they reach
-  24 files or a tenth of the day's size.
+  24 files or a tenth of the day's size. A merge runs in its own small DuckDB
+  with 1 thread and 256 MB of memory, so it does not slow down other queries.
 - It deletes files that are older than `ARCHIVE_RETENTION_DAYS`. It removes a
   file from its list first and deletes the object 2 hours later, so a search
   that already started can finish.

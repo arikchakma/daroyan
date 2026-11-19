@@ -17,7 +17,7 @@ pub const DAY_MS: i64 = 24 * HOUR_MS;
 pub const MAX_COLUMNS: usize = 1_000;
 pub const REST_PREFIX: &str = "_rest_";
 const PARQUET_OPTIONS: &str =
-    "FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 3, ROW_GROUP_SIZE 122880";
+    "FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 3, ROW_GROUP_SIZE 30720";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
