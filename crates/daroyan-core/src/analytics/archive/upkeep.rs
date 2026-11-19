@@ -12,6 +12,7 @@ use crate::analytics::archive::{
 
 pub const MAX_DAY_BYTES: u64 = 512 * 1024 * 1024;
 const LATE_FILES: usize = 24;
+const MERGE_MEMORY: &str = "256MB";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredFile {
@@ -27,6 +28,7 @@ pub struct Merge {
     pub kind: FileKind,
     pub hour: i64,
     pub files: Vec<StoredFile>,
+    pub exported_until: i64,
 }
 
 impl Merge {
@@ -37,7 +39,7 @@ impl Merge {
             FileKind::Hour => hour,
         };
 
-        Self { kind, hour, files }
+        Self { kind, hour, files, exported_until: 0 }
     }
 
     fn fits(files: &[StoredFile], max_columns: usize) -> bool {
@@ -134,10 +136,23 @@ fn plan_merges_with(
             .push(file);
     }
 
+    let exported_until = read_watermark(conn)?;
+
     Ok(days
         .into_values()
         .flat_map(|files| Merge::plan(files, max_bytes, max_columns))
+        .map(|merge| Merge { exported_until, ..merge })
         .collect())
+}
+
+pub fn open_merge_db(temp_dir: &Path) -> duckdb::Result<Connection> {
+    let conn = Connection::open_in_memory()?;
+    conn.execute_batch(&format!(
+        "SET memory_limit = '{MERGE_MEMORY}'; SET threads = 1; SET temp_directory = '{}';",
+        quote_literal(&temp_dir.to_string_lossy())
+    ))?;
+
+    Ok(conn)
 }
 
 pub fn merge_files(
@@ -161,8 +176,8 @@ pub fn merge_files(
         .collect::<Vec<_>>()
         .join(", ");
     conn.execute_batch(&format!(
-        "COPY (SELECT * FROM read_parquet([{sources}], union_by_name = true) \
-         ORDER BY service, logged_at) TO '{target_text}' ({PARQUET_OPTIONS})"
+        "COPY (SELECT * FROM read_parquet([{sources}], union_by_name = true)) \
+         TO '{target_text}' ({PARQUET_OPTIONS})"
     ))?;
 
     let (min_logged_at, max_logged_at, rows, services) = conn.query_row(
@@ -195,7 +210,7 @@ pub fn merge_files(
         rows,
         services: read_json_list(&services),
         columns,
-        exported_until: read_watermark(conn)?,
+        exported_until: merge.exported_until,
         replaces: merge.paths(),
     }))
 }
@@ -450,6 +465,7 @@ mod tests {
             kind: FileKind::Day,
             hour: DAY / HOUR_MS,
             files: Vec::new(),
+            exported_until: 0,
         };
         let target = dir.join("day-1.parquet");
         let clash = dir.join("clash.parquet");
@@ -488,7 +504,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(order, "api,web");
+        assert_eq!(order, "web,api");
 
         let mut meta = FileMeta::new(file, 15, 600);
         meta.replaces = vec!["first".into(), "second".into()];
