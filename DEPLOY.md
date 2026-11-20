@@ -47,7 +47,7 @@ start. Put TLS in front of it with a reverse proxy.
 | `ARCHIVE_RETENTION_DAYS` | No | `90` | Days that log files stay in the bucket. |
 | `ARCHIVE_CACHE_DIR` | No | `data/archive-cache` | A local folder for files before they are uploaded, while they are merged, and after a search downloads them. |
 | `ARCHIVE_CACHE_GB` | No | `2` | The most space, in GB, that downloaded log files use in `ARCHIVE_CACHE_DIR`. |
-| `ARCHIVE_RANGE_READS` | No | `false` | Set to `true` to read only the needed parts of each file from the bucket, not the whole file. The API then needs to download the DuckDB `httpfs` extension once. If it cannot, it downloads whole files. |
+| `ARCHIVE_RANGE_READS` | No | `false` | Set to `true` to read only the needed parts of each file from the bucket, not the whole file. The API then downloads the DuckDB `httpfs` extension once, into a `duckdb_extensions` folder next to `DUCKDB_PATH`. If it cannot, it downloads whole files. |
 | `OTLP_LOG_BUDGET_KB` | No | `1024` | The most OpenTelemetry log data each ingest token can send per minute, in KB. Batches over it get `429` with `Retry-After`, so SDKs retry them. Settings → Telemetry counts them. |
 | `TRUSTED_PROXIES` | No | `127.0.0.1,::1` | CIDRs allowed to set the real-client-IP header. See the warning below. |
 | `CLIENT_IP_HEADER` | No | `cf-connecting-ip` | Header your proxy sets with the real client IP. Use `x-forwarded-for` for most proxies. |
