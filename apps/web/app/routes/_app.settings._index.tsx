@@ -53,7 +53,11 @@ export default function GeneralSettingsPage() {
           </SettingsRow>
           {instance?.archive && (
             <SettingsRow label="Archived Logs">
-              <span className={cn(instance.archive.last_error && 'text-tone-critical-fg')}>
+              <span
+                className={cn(
+                  (instance.archive.last_error || instance.archive.upkeep_error) && 'text-tone-critical-fg'
+                )}
+              >
                 {getArchiveStatus(instance.archive)}
               </span>
             </SettingsRow>

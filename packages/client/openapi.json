@@ -3288,6 +3288,12 @@
             "format": "int32",
             "minimum": 0
           },
+          "upkeep_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "url": {
             "type": "string"
           }

@@ -51,7 +51,10 @@ impl Archive {
             match self.merge(analytics, merge, &dir, now_ms).await {
                 Ok(true) => merged += 1,
                 Ok(false) => {}
-                Err(error) => tracing::warn!(%error, "merge archived log files"),
+                Err(error) => {
+                    self.remember_upkeep_error(Some(error.to_string()));
+                    tracing::warn!(%error, "merge archived log files");
+                }
             }
             tokio::fs::remove_dir_all(&dir).await.ok();
         }
@@ -104,7 +107,10 @@ impl Archive {
         for path in paths {
             match self.delete_file(&path).await {
                 Ok(()) => gone.push(path),
-                Err(error) => tracing::warn!(%error, path, "delete an archived log file"),
+                Err(error) => {
+                    self.remember_upkeep_error(Some(error.to_string()));
+                    tracing::warn!(%error, path, "delete an archived log file");
+                }
             }
         }
 
@@ -221,6 +227,44 @@ mod tests {
         let gone = short.tidy_at(&analytics, now + TimeDelta::hours(3)).await.unwrap();
         assert_eq!(gone, Upkeep { deleted: 1, ..Upkeep::default() });
         assert_eq!(list(&store).await, [stray.to_string()]);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn remembers_a_merge_that_failed() {
+        let dir = std::env::temp_dir()
+            .join(format!("daroyan-archive-upkeep-error-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let now = Utc::now();
+        let day = (now.timestamp_millis() - 3 * DAY_MS).div_euclid(DAY_MS) * DAY_MS;
+        let analytics = Analytics::open(&dir.join("daroyan.duckdb")).unwrap();
+        analytics
+            .run(move |conn| {
+                create_log_tables(conn)?;
+                conn.execute(
+                    "INSERT INTO log_lines (server_id, logged_at, service, stream, severity, message, ingested_at) \
+                     VALUES ('srv_1', ?, 'api', 'otlp', 9, 'one', 1), ('srv_1', ?, 'api', 'otlp', 9, 'two', 1)",
+                    [day + HOUR_MS, day + 5 * HOUR_MS],
+                )?;
+
+                Ok(())
+            })
+            .unwrap();
+
+        let store = Arc::new(InMemory::new());
+        let archive = Archive::new(store.clone(), "prod", dir.join("work"));
+        archive.export_logs(&analytics).await.unwrap();
+        assert_eq!(archive.read_upkeep_error(), None);
+
+        let broken = Path::from(list(&store).await[0].as_str());
+        store.put(&broken, "not parquet".into()).await.unwrap();
+
+        let upkeep = archive.tidy_at(&analytics, now).await.unwrap();
+        assert_eq!(upkeep, Upkeep::default());
+        assert!(archive.read_upkeep_error().is_some());
 
         std::fs::remove_dir_all(dir).ok();
     }

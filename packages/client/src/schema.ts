@@ -1326,6 +1326,7 @@ export interface components {
             oldest_at?: number | null;
             /** Format: int32 */
             retention_days: number;
+            upkeep_error?: string | null;
             url: string;
         };
         BacktestAlertRuleBody: {

@@ -22,6 +22,9 @@ export function getArchiveStatus(archive: Schemas['Archive']) {
   if (archive.last_error) {
     return `Export failed: ${archive.last_error}`;
   }
+  if (archive.upkeep_error) {
+    return `Upkeep failed: ${archive.upkeep_error}`;
+  }
   if (!archive.exported_at) {
     return 'Not exported yet';
   }
