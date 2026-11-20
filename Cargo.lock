@@ -1134,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-agent"
-version = "0.0.32"
+version = "0.0.33"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-api"
-version = "0.0.32"
+version = "0.0.33"
 dependencies = [
  "anyhow",
  "axum",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-core"
-version = "0.0.32"
+version = "0.0.33"
 dependencies = [
  "anyhow",
  "axum",
@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-migration"
-version = "0.0.32"
+version = "0.0.33"
 dependencies = [
  "async-trait",
  "clap",
@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "daroyan-protocol"
-version = "0.0.32"
+version = "0.0.33"
 dependencies = [
  "serde",
  "serde_json",
