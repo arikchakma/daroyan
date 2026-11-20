@@ -32,6 +32,7 @@ const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_NAME_BYTES: usize = 200;
 const AGENT_SERVICE: &str = "Daroyan agent";
 const LINE_OVERHEAD: u64 = 64;
+const VOLUME_CHUNK: usize = 1_000;
 pub const MINUTE_MS: i64 = 60_000;
 pub const OTLP_SERVER_ID: &str = "otlp";
 pub const OTLP_SERVER_NAME: &str = "OpenTelemetry";
@@ -359,12 +360,28 @@ pub fn append_volume(conn: &Connection, rows: &[LogRow]) -> duckdb::Result<()> {
             .or_default() += 1;
     }
 
-    let mut statement = conn.prepare(
-        "INSERT INTO log_volume (minute, server_id, service, severity, lines) VALUES (?, ?, ?, ?, ?) \
-         ON CONFLICT DO UPDATE SET lines = lines + excluded.lines",
-    )?;
-    for ((minute, server_id, service, severity), lines) in counts {
-        statement.execute(params![minute, server_id, service, severity, lines])?;
+    let counts: Vec<_> = counts.into_iter().collect();
+    for chunk in counts.chunks(VOLUME_CHUNK) {
+        let marks = vec!["(?, ?, ?, ?, ?)"; chunk.len()].join(", ");
+        let values =
+            chunk
+                .iter()
+                .flat_map(|((minute, server_id, service, severity), lines)| {
+                    [
+                        SqlValue::BigInt(*minute),
+                        SqlValue::Text(server_id.to_string()),
+                        SqlValue::Text(service.to_string()),
+                        SqlValue::UTinyInt(*severity),
+                        SqlValue::BigInt(*lines),
+                    ]
+                });
+        conn.execute(
+            &format!(
+                "INSERT INTO log_volume (minute, server_id, service, severity, lines) VALUES {marks} \
+                 ON CONFLICT DO UPDATE SET lines = lines + excluded.lines"
+            ),
+            params_from_iter(values),
+        )?;
     }
 
     Ok(())

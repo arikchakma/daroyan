@@ -3,6 +3,7 @@ use std::path::Path;
 use duckdb::{Config, Connection};
 
 const STORAGE_VERSION: &str = "v1.2.0";
+const EXTENSION_DIR: &str = "duckdb_extensions";
 
 const MIGRATIONS: [(&str, &str); 14] = [
     ("0001_server_states.sql", include_str!("../duckdb/0001_server_states.sql")),
@@ -22,8 +23,10 @@ const MIGRATIONS: [(&str, &str); 14] = [
 ];
 
 pub fn open_duckdb(path: &Path) -> duckdb::Result<Connection> {
-    let config =
-        Config::default().with("storage_compatibility_version", STORAGE_VERSION)?;
+    let extensions = path.with_file_name(EXTENSION_DIR);
+    let config = Config::default()
+        .with("storage_compatibility_version", STORAGE_VERSION)?
+        .with("extension_directory", extensions.to_string_lossy())?;
     let conn = Connection::open_with_flags(path, config)?;
     run_migrations(&conn)?;
 
