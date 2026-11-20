@@ -50,6 +50,7 @@ pub struct Archive {
     cache_bytes: u64,
     range_bucket: Option<String>,
     last_error: Arc<Mutex<Option<String>>>,
+    upkeep_error: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -100,6 +101,7 @@ impl Archive {
             cache_bytes: DEFAULT_CACHE_BYTES,
             range_bucket: None,
             last_error: Arc::default(),
+            upkeep_error: Arc::default(),
         }
     }
 
@@ -141,6 +143,17 @@ impl Archive {
 
     fn remember_error(&self, error: Option<String>) {
         *self.last_error.lock().unwrap_or_else(PoisonError::into_inner) = error;
+    }
+
+    pub fn read_upkeep_error(&self) -> Option<String> {
+        self.upkeep_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn remember_upkeep_error(&self, error: Option<String>) {
+        *self.upkeep_error.lock().unwrap_or_else(PoisonError::into_inner) = error;
     }
 
     fn object_path(&self, relative: &str) -> Path {
@@ -363,6 +376,7 @@ impl Archive {
     }
 
     async fn run_upkeep(&self, analytics: &Analytics) {
+        self.remember_upkeep_error(None);
         let tidied = async {
             self.catch_up(analytics).await?;
             self.tidy(analytics).await
@@ -375,7 +389,10 @@ impl Archive {
                 deleted = done.deleted,
                 "tidied the log archive"
             ),
-            Err(error) => tracing::error!(%error, "tidy the log archive"),
+            Err(error) => {
+                self.remember_upkeep_error(Some(error.to_string()));
+                tracing::error!(%error, "tidy the log archive");
+            }
         }
     }
 }

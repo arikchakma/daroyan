@@ -41,6 +41,7 @@ async fn get_instance(
                 oldest_at: summary.oldest_at,
                 exported_at: summary.exported_at,
                 last_error: archive.read_last_error(),
+                upkeep_error: archive.read_upkeep_error(),
             })
         }
         _ => None,

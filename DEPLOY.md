@@ -290,6 +290,10 @@ Once an hour, the API also does upkeep on the bucket:
   file from its list first and deletes the object 2 hours later, so a search
   that already started can finish.
 
+If an export, a merge or a delete fails, Settings shows the error in the
+Archived Logs row. A merge or delete error clears after the next upkeep that
+runs without one.
+
 Next to each Parquet file, the API writes a small `<file>.parquet.json` file.
 It holds the time range, row count, services and columns of the file, and the
 files that it replaces. The API writes it after the Parquet file is uploaded,

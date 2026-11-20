@@ -20,4 +20,5 @@ pub struct ArchiveView {
     pub oldest_at: Option<i64>,
     pub exported_at: Option<i64>,
     pub last_error: Option<String>,
+    pub upkeep_error: Option<String>,
 }
