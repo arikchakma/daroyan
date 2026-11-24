@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router';
 
 import { AlertBadge, AlertBanners } from '~/components/alerts/alert-banners';
 import { MetricOverTime } from '~/components/metrics/metric-over-time';
@@ -9,15 +8,18 @@ import { MetricSpecGrid } from '~/components/metrics/metric-spec-grid';
 import { MetricTopBar } from '~/components/metrics/metric-top-bar';
 import { MetricTracesCard } from '~/components/metrics/metric-traces-card';
 import type { ChartSeries } from '~/components/servers/metric-chart';
+import { Skeleton } from '~/components/ui/skeleton';
 import { useFiringAlerts } from '~/hooks/use-firing-alerts';
+import { useListParams } from '~/hooks/use-list-params';
 import { useMetricRules } from '~/hooks/use-metric-rules';
 import { metricQueries } from '~/queries/metrics';
-import { readMetricCondition } from '~/utils/alerts';
+import { isMetricRuleInView, readMetricCondition } from '~/utils/alerts';
 import {
   getAggregations,
-  getGroupLabel,
   getDefaultAggregation,
+  getGroupLabel,
   getKindLabel,
+  getMetricTracesLink,
   getMetricUnitLabel,
   getSeriesColor,
   readMetricFilters,
@@ -34,7 +36,7 @@ export function meta(props: Route.MetaArgs) {
 export default function MetricPage(props: Route.ComponentProps) {
   const { name } = props.params;
 
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { searchParams, setParams } = useListParams();
   const range = readMetricRange(searchParams.get('range'));
   const service = searchParams.get('service') || undefined;
   const serverId = searchParams.get('server') || undefined;
@@ -42,7 +44,7 @@ export default function MetricPage(props: Route.ComponentProps) {
   const filters = readMetricFilters(searchParams.get('filter') ?? '');
   const filter = writeMetricFilters(filters) || undefined;
 
-  const { data: metrics, isSuccess } = useQuery(metricQueries.list());
+  const { data: metrics, isSuccess, isLoading, isError } = useQuery(metricQueries.list());
   const metric = metrics?.find((item) => item.name === name);
   const aggregations = metric ? getAggregations(metric) : [];
   const aggregation =
@@ -65,9 +67,10 @@ export default function MetricPage(props: Route.ComponentProps) {
   const { rules, ruleIds } = useMetricRules(name);
   const { active } = useFiringAlerts({ ruleIds });
   const firingRuleIds = active.map((alert) => alert.rule_id);
-  const limitRule =
-    rules.find((rule) => firingRuleIds.includes(rule.id) && readMetricCondition(rule.condition)?.aggregation === aggregation) ??
-    rules.find((rule) => (readMetricCondition(rule.condition)?.aggregation ?? (metric && getDefaultAggregation(metric))) === aggregation);
+  const viewRules = metric
+    ? rules.filter((rule) => isMetricRuleInView(rule, metric, { aggregation, service, serverId, filter, groupBy }))
+    : [];
+  const limitRule = viewRules.find((rule) => firingRuleIds.includes(rule.id)) ?? viewRules[0];
   const limit = limitRule ? readMetricCondition(limitRule.condition)?.threshold : undefined;
 
   const shown = result?.name === name ? result : undefined;
@@ -77,20 +80,33 @@ export default function MetricPage(props: Route.ComponentProps) {
     color: getSeriesColor(index),
   }));
 
-  const setParams = (changes: Record<string, string | null>) =>
-    setSearchParams(
-      (params) => {
-        for (const [key, value] of Object.entries(changes)) {
-          if (value) {
-            params.set(key, value);
-          } else {
-            params.delete(key);
-          }
-        }
-        return params;
-      },
-      { replace: true }
+  if (isLoading) {
+    return (
+      <div className="flex min-h-full flex-col bg-surface-page">
+        <MetricTopBar />
+        <div className="flex flex-1 justify-center px-10 pt-3 pb-12">
+          <div className="flex w-full max-w-240 min-w-0 flex-col gap-3">
+            <Skeleton className="h-8 w-80" />
+            <Skeleton className="h-4 w-60" />
+            <Skeleton size="block" className="mt-3 h-40 w-full rounded-2xl" />
+            <Skeleton size="block" className="h-61 w-full rounded-2xl" />
+          </div>
+        </div>
+      </div>
     );
+  }
+
+  if (isError && !metrics) {
+    return (
+      <div className="flex h-full flex-col bg-surface-page">
+        <MetricTopBar />
+        <div className="flex flex-1 flex-col items-center justify-center gap-1 pb-20">
+          <p className="text-title-section font-medium text-text-primary">Metric Not Loaded</p>
+          <p className="text-body text-text-secondary">The metrics list could not be loaded. Try again in a moment.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (isSuccess && !metric) {
     return (
@@ -104,8 +120,6 @@ export default function MetricPage(props: Route.ComponentProps) {
     );
   }
 
-  const traceService = service ?? (metric?.services.length === 1 ? metric.services[0] : undefined);
-  const tracesLink = traceService ? `/traces?${new URLSearchParams({ service: traceService })}` : '/traces';
   const unit = metric ? getMetricUnitLabel(metric.unit) : '';
   const subtitle = [metric?.description.replace(/\.$/, ''), unit].filter(Boolean).join(' · ');
 
@@ -138,9 +152,9 @@ export default function MetricPage(props: Route.ComponentProps) {
             <div className="flex flex-col gap-4 lg:flex-row">
               <MetricSpecGrid metric={metric} />
               {metric.kind === 'histogram' ? (
-                <MetricTracesCard exemplars={shown?.exemplars} tracesLink={tracesLink} />
+                <MetricTracesCard exemplars={shown?.exemplars} tracesLink={getMetricTracesLink(metric, service)} />
               ) : (
-                <MetricRulesCard rules={rules} firingRuleIds={firingRuleIds} />
+                <MetricRulesCard metric={metric} rules={rules} firingRuleIds={firingRuleIds} />
               )}
             </div>
 

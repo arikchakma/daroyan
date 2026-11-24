@@ -10,7 +10,7 @@ import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
 import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
-import { formatLogStamp, formatLogTime } from '~/utils/format';
+import { formatRowTime } from '~/utils/format';
 import { describeSpans, formatMicros, getServiceColor, getTraceLink, getTraceStatus } from '~/utils/traces';
 import type { TraceSummary } from '~/utils/traces';
 
@@ -56,10 +56,6 @@ function TraceServer(props: TraceServerProps) {
       {server.name}
     </Link>
   );
-}
-
-function formatTraceTime(ms: number) {
-  return new Date(ms).toDateString() === new Date().toDateString() ? formatLogTime(ms) : formatLogStamp(ms);
 }
 
 const columns = helper.columns([
@@ -129,7 +125,7 @@ const columns = helper.columns([
     sortFn: 'basic',
     meta: { width: 126, align: 'right', hideBelow: 'sm' },
     cell: ({ getValue }) => (
-      <span className="text-caption text-text-secondary tabular-nums">{formatTraceTime(getValue() / 1_000)}</span>
+      <span className="text-caption text-text-secondary tabular-nums">{formatRowTime(getValue() / 1_000)}</span>
     ),
   }),
 ]);

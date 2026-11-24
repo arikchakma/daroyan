@@ -113,6 +113,11 @@ export function formatLogStamp(value: number) {
   return `${formatDate(value)} ${LOG_TIME_FORMAT.format(new Date(value))}`;
 }
 
+export function formatRowTime(value: number, now = Date.now()) {
+  const isToday = new Date(value).toDateString() === new Date(now).toDateString();
+  return isToday ? LOG_TIME_FORMAT.format(new Date(value)) : formatLogStamp(value);
+}
+
 const LOG_CLOCK_FORMAT = new Intl.DateTimeFormat('en-GB', {
   hour: '2-digit',
   minute: '2-digit',
@@ -125,6 +130,16 @@ export function formatLogClock(value: number, now = Date.now()) {
   const clock = LOG_CLOCK_FORMAT.format(new Date(value));
   const isToday = new Date(value).toDateString() === new Date(now).toDateString();
   return isToday ? clock : `${formatDate(value)} ${clock}`;
+}
+
+export function getUnitSuffix(unit: string) {
+  if (!unit) {
+    return '';
+  }
+  if (unit.startsWith('%') || unit.startsWith('/')) {
+    return unit;
+  }
+  return ` ${unit}`;
 }
 
 export function joinNames(names: string[]) {

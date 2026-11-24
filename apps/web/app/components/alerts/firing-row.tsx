@@ -32,6 +32,7 @@ function getOpenAction(alert: Schemas['Alert']): { icon: IconName; label: string
 
 type FiringRowProps = {
   alert: Schemas['Alert'];
+  rule?: Schemas['AlertRule'];
   deliveries: Schemas['AlertDelivery'][];
   mute?: Schemas['AlertMute'];
   onMute: () => void;
@@ -39,7 +40,7 @@ type FiringRowProps = {
 };
 
 export function FiringRow(props: FiringRowProps) {
-  const { alert, deliveries, mute, onMute, onUnmute } = props;
+  const { alert, rule, deliveries, mute, onMute, onUnmute } = props;
 
   const openAction = getOpenAction(alert);
   const names = [...new Set(deliveries.map((delivery) => delivery.integration_name))];
@@ -81,7 +82,7 @@ export function FiringRow(props: FiringRowProps) {
           </Button>
           <Button
             nativeButton={false}
-            render={<Link to={getAlertTargetPath(alert)} />}
+            render={<Link to={getAlertTargetPath(alert, rule)} />}
             variant="secondary"
             className="w-fit"
           >

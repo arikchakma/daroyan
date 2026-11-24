@@ -15,6 +15,7 @@ use crate::extract::CurrentUser;
 
 const CATALOG_WINDOW_MS: i64 = 30 * 86_400_000;
 const QUERY_WINDOW_MS: i64 = 3_600_000;
+const MAX_QUERY_RANGE_MS: i64 = 400 * 86_400_000;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -95,9 +96,19 @@ async fn get_metric_query(
     Query(params): Query<MetricQueryParams>,
 ) -> Result<Json<MetricResult>> {
     let until = params.until.unwrap_or_else(|| Utc::now().timestamp_millis());
-    let since = params.since.unwrap_or(until - QUERY_WINDOW_MS);
+    let since = params.since.unwrap_or(until.saturating_sub(QUERY_WINDOW_MS));
     if since >= until {
         return Err(Error::new(ErrorName::ValidationError, "since must be before until"));
+    }
+
+    if until
+        .checked_sub(since)
+        .is_none_or(|range| range > MAX_QUERY_RANGE_MS)
+    {
+        return Err(Error::new(
+            ErrorName::ValidationError,
+            "The range can be at most 400 days",
+        ));
     }
 
     let query = MetricQuery {

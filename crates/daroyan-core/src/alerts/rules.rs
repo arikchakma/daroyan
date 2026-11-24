@@ -95,15 +95,17 @@ pub enum Condition {
         within_secs: u32,
         service: Option<String>,
         filter: Option<String>,
-        group_by: Option<String>,
+        #[schema(value_type = Option<String>)]
+        group_by: Option<GroupBy>,
     },
 }
-
-pub const MAX_METRIC_WINDOW_SECS: u32 = 3600;
 
 pub const DEFAULT_MIN_REQUESTS: u32 = 10;
 pub const MAX_TRACE_WINDOW_SECS: u32 = 3600;
 const MAX_TRACE_FILTER: usize = 200;
+pub const MAX_METRIC_WINDOW_SECS: u32 = 3600;
+const MAX_METRIC_NAME: usize = 255;
+const MAX_METRIC_FILTER: usize = 200;
 const ROUTE_SEPARATOR: &str = " · ";
 
 fn default_min_requests() -> u32 {
@@ -411,7 +413,7 @@ impl Condition {
             aggregation: *aggregation,
             service: service.clone(),
             filters: filter.as_deref().map(MetricFilter::read_all).unwrap_or_default(),
-            group_by: group_by.as_deref().and_then(GroupBy::read),
+            group_by: group_by.clone(),
             since: now_ms - i64::from(*within_secs) * 1000,
             until: now_ms,
             ..MetricQuery::default()
@@ -704,7 +706,9 @@ pub fn validate_options(
         Condition::TraceLatency { above, .. } if !(1.0..=600_000.0).contains(above) => {
             return invalid("The latency must be between 1 ms and 10 minutes");
         }
-        Condition::Metric { name, .. } if name.trim().is_empty() || name.len() > 255 => {
+        Condition::Metric { name, .. }
+            if name.trim().is_empty() || name.len() > MAX_METRIC_NAME =>
+        {
             return invalid("Pick a metric");
         }
         Condition::Metric { threshold, .. } if !threshold.is_finite() => {
@@ -716,14 +720,23 @@ pub fn validate_options(
             return invalid("The window must be between 1 minute and 1 hour");
         }
         Condition::Metric { service, filter, group_by, .. }
-            if [service, filter, group_by]
-                .into_iter()
-                .flatten()
-                .any(|text| text.trim().is_empty() || text.len() > MAX_TRACE_FILTER) =>
+            if [
+                service.as_deref(),
+                filter.as_deref(),
+                group_by.as_ref().and_then(GroupBy::attribute),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|text| text.trim().is_empty() || text.len() > MAX_METRIC_FILTER) =>
         {
             return invalid(
                 "Leave the service, filter and grouping out to match any, or give up to 200 characters",
             );
+        }
+        Condition::Metric { filter: Some(filter), .. }
+            if filter.split(',').count() != MetricFilter::read_all(filter).len() =>
+        {
+            return invalid("Write each filter as key=value or key!=value");
         }
         _ => {}
     }
@@ -1208,5 +1221,27 @@ mod tests {
             describe_rule(&Condition::Memory { above: 90.0 }, &windowed, 0),
             "Max memory above 90% over 1m"
         );
+    }
+
+    #[test]
+    fn validates_metric_rules() {
+        let read = |extra: &str| -> Condition {
+            serde_json::from_str(&format!(
+                r#"{{"kind":"metric","name":"queue.depth","threshold":5,"within_secs":300{extra}}}"#
+            ))
+            .unwrap()
+        };
+
+        let condition = read(r#","filter":"$env=prod","group_by":"server_id""#);
+        assert!(validate_rule(&condition, &Scope::All, 0).is_ok());
+        assert!(matches!(
+            condition,
+            Condition::Metric { group_by: Some(GroupBy::Server), .. }
+        ));
+
+        assert!(validate_rule(&read(r#","filter":"route""#), &Scope::All, 0).is_err());
+        assert!(validate_rule(&read(r#","group_by":"  ""#), &Scope::All, 0).is_err());
+        let long = format!(r#","group_by":"{}""#, "k".repeat(MAX_METRIC_FILTER + 1));
+        assert!(validate_rule(&read(&long), &Scope::All, 0).is_err());
     }
 }

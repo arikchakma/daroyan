@@ -650,7 +650,7 @@ async fn fires_metric_alerts_per_group() {
             )
         })
         .collect();
-    assert_eq!(summary, [("metrics", "Metrics", "email", "1200 jobs")]);
+    assert_eq!(summary, [("metrics", "Metrics", "email", "1,200 jobs")]);
 
     for _ in 0..50 {
         if !received.lock().unwrap().is_empty() {
@@ -681,7 +681,102 @@ async fn fires_metric_alerts_per_group() {
         .iter()
         .map(|hit| (hit["subject"].as_str().unwrap(), hit["value"].as_str().unwrap()))
         .collect();
-    assert_eq!(hits, [("email", "1200 jobs")]);
+    assert_eq!(hits, [("email", "1,200 jobs")]);
+
+    let misread = http
+        .post(format!("{base}/v1/alert-rules"))
+        .json(&json!({
+            "name": "Queue Rate",
+            "condition": { "kind": "metric", "name": "queue.depth", "aggregation": "rate", "threshold": 1, "within_secs": 300 },
+            "scope": { "kind": "all" },
+            "integration_ids": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(misread.status(), StatusCode::BAD_REQUEST);
+
+    let endless = http
+        .get(format!("{base}/v1/metrics/queue.depth/query?since=0&until={}", i64::MAX))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(endless.status(), StatusCode::BAD_REQUEST);
+
+    let now = now_nanos();
+    let flipped = request(
+        "worker-2",
+        vec![
+            Metric {
+                name: "queue.depth".to_string(),
+                data: Some(Data::Sum(Sum {
+                    data_points: vec![NumberDataPoint {
+                        attributes: vec![text("queue", "email")],
+                        start_time_unix_nano: now - MINUTE_NANOS,
+                        time_unix_nano: now,
+                        value: Some(NumberValue::AsInt(5)),
+                        ..Default::default()
+                    }],
+                    aggregation_temporality: AggregationTemporality::Delta as i32,
+                    is_monotonic: true,
+                })),
+                ..Default::default()
+            },
+            Metric {
+                name: "pool.size".to_string(),
+                data: Some(Data::Gauge(Gauge {
+                    data_points: vec![NumberDataPoint {
+                        time_unix_nano: now,
+                        value: Some(NumberValue::AsDouble(9.0)),
+                        ..Default::default()
+                    }],
+                })),
+                ..Default::default()
+            },
+        ],
+    );
+    send(&anonymous, &format!("{base}/v1/otlp/v1/metrics"), &token, &flipped).await;
+    analytics.flush().await.unwrap();
+
+    let broken = http
+        .get(format!("{base}/v1/metrics/queue.depth/query?agg=last"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(broken.status(), StatusCode::BAD_REQUEST);
+
+    let pool: Value = http
+        .post(format!("{base}/v1/alert-rules"))
+        .json(&json!({
+            "name": "Pool Too Big",
+            "condition": { "kind": "metric", "name": "pool.size", "threshold": 5, "within_secs": 300 },
+            "scope": { "kind": "all" },
+            "integration_ids": []
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(pool["id"].is_string(), "{pool}");
+
+    engine.check_alerts(chrono::Utc::now()).await.unwrap();
+
+    let firing: Vec<Value> = http
+        .get(format!("{base}/v1/alerts?status=firing"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut subjects: Vec<&str> = firing
+        .iter()
+        .map(|alert| alert["subject"].as_str().unwrap())
+        .collect();
+    subjects.sort_unstable();
+    assert_eq!(subjects, ["email", "pool.size"]);
 
     std::fs::remove_dir_all(&dir).ok();
 }

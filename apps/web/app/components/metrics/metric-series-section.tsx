@@ -39,20 +39,19 @@ export function MetricSeriesSection(props: MetricSeriesSectionProps) {
     ),
   });
 
+  const shown = results.map((result) => (result.data?.name === metric.name ? result.data : undefined));
+  const isLoading = results.some((result, index) => !shown[index] && result.isFetching);
+
   const labels =
     series.length > 0
       ? series.map((line) => line.label)
-      : (results[0]?.data?.series ?? []).map((line) => getGroupLabel(line.group));
+      : (shown[0]?.series ?? []).map((line) => getGroupLabel(line.group));
   const rows: MetricSeriesRow[] = labels.map((label, index) => ({
     id: label,
     color: series.find((line) => line.label === label)?.color ?? getSeriesColor(index),
-    values: results.map(
-      (result) =>
-        result.data?.series.find((line) => getGroupLabel(line.group) === label)?.values.at(-1) ?? undefined
-    ),
+    values: shown.map((data) => data?.series.find((line) => getGroupLabel(line.group) === label)?.values.at(-1) ?? undefined),
   }));
   const table = useMetricSeriesTable({ rows, groupLabel: groupBy ?? 'Series', reads, unit: metric.unit });
-  const isLoading = results.some((result) => result.isLoading);
 
   return (
     <DetailSection title="Series" summary={rows.length > 0 ? pluralize(rows.length, 'series', 'series') : undefined}>

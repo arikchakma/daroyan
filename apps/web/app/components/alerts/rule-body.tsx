@@ -42,30 +42,29 @@ import {
   CONDITION_OPTIONS,
   describeMuteEnd,
   describeResolve,
-  describeScope,
   formatForSecs,
   formatLimit,
   getAlertMute,
+  getCoveredCount,
   getMutedService,
+  getRuleScopeLabel,
   getRuleState,
   INTEGRATION_KINDS,
-  getTraceScopeLabel,
-  getValueHint,
   isCheckKind,
   isCronKind,
   isIntegrationKind,
   isTraceKind,
-  readMetricCondition,
   isProcessKind,
   isWholeRuleMute,
+  readMetricCondition,
   readSubjectName,
   readThreshold,
   readTraceCondition,
 } from '~/utils/alerts';
 import { DAY_MS, formatClock, formatDate, formatRelative, pluralize } from '~/utils/format';
 import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
-import { readTargetNoun, readTargetNouns } from '~/utils/rule-form';
 import { METRICS_TARGET_ID, METRICS_TARGET_NAME } from '~/utils/metrics';
+import { readTargetNoun, readTargetNouns } from '~/utils/rule-form';
 import { TRACES_TARGET_ID, TRACES_TARGET_NAME } from '~/utils/traces';
 
 const RECENT_MS = 30 * 86_400_000;
@@ -139,26 +138,14 @@ export function RuleBody(props: RuleBodyProps) {
   const metricServices = (metrics.find((metric) => metric.name === metricCondition?.name)?.services ?? []).filter(
     (service) => !metricCondition?.service || service === metricCondition.service
   );
-  const scopeLabel = getRuleScopeLabel();
-  const coveredCount = getCoveredCount();
-
-  function getRuleScopeLabel() {
-    if (metricCondition) {
-      return metricCondition.service ?? 'All services';
-    }
-    if (isTrace) {
-      return getTraceScopeLabel(traceCondition);
-    }
-    return describeScope(rule.scope, servers, checks, isCheck, crons, isCron);
-  }
-
-  function getCoveredCount() {
-    if (metricCondition) {
-      return metricServices.length;
-    }
-    return isTrace ? coveredServices.length : covered.length;
-  }
-  const table = useAlertHistoryTable(history, mutes, getValueHint(rule.condition));
+  const scopeLabel = getRuleScopeLabel({ rule, servers, checks, crons });
+  const coveredCount = getCoveredCount({
+    kind: rule.condition.kind,
+    metricServices: metricServices.length,
+    traceServices: coveredServices.length,
+    targets: covered.length,
+  });
+  const table = useAlertHistoryTable(history, mutes, rule);
   const unmute = useMutation({
     ...deleteAlertMuteOptions(),
     meta: { errorMessage: 'The alert could not be unmuted' },
@@ -347,6 +334,7 @@ export function RuleBody(props: RuleBodyProps) {
                   <FiringRow
                     key={alert.id}
                     alert={alert}
+                    rule={rule}
                     mute={getAlertMute(mutes, alert)}
                     onMute={() =>
                       setMuting({

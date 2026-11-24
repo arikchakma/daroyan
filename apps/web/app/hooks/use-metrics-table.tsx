@@ -7,7 +7,7 @@ import { Badge } from '~/components/ui/badge';
 import { Dash } from '~/components/ui/dash';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
-import { formatCount, formatLogStamp, formatLogTime } from '~/utils/format';
+import { formatCount, formatRowTime } from '~/utils/format';
 import { getKindLabel, getMetricLink } from '~/utils/metrics';
 import type { MetricSummary } from '~/utils/metrics';
 
@@ -22,10 +22,6 @@ export const METRIC_COLUMN_LABELS: Record<string, string> = {
   series: 'Series',
   last_seen_at: 'Last Seen',
 };
-
-function formatSeenTime(ms: number) {
-  return new Date(ms).toDateString() === new Date().toDateString() ? formatLogTime(ms) : formatLogStamp(ms);
-}
 
 const columns = helper.columns([
   helper.accessor('name', {
@@ -73,7 +69,7 @@ const columns = helper.columns([
     enableSorting: false,
     meta: { width: 126, align: 'right', hideBelow: 'sm' },
     cell: ({ getValue }) => (
-      <span className="text-caption text-text-secondary tabular-nums">{formatSeenTime(getValue())}</span>
+      <span className="text-caption text-text-secondary tabular-nums">{formatRowTime(getValue())}</span>
     ),
   }),
 ]);

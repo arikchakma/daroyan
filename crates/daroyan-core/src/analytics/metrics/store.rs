@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use duckdb::{Connection, params};
 
 use crate::analytics::metrics::ingest::{
@@ -6,7 +8,8 @@ use crate::analytics::metrics::ingest::{
 use crate::analytics::metrics::series::{KnownSeries, LastPoint, PointRow};
 
 pub const HOUR_MS: i64 = 60 * 60 * 1000;
-const LOAD_WINDOW_MS: i64 = 24 * HOUR_MS;
+const REROLL_MS: i64 = 2 * HOUR_MS;
+const MAX_COUNT: &str = "18446744073709551615";
 
 pub fn append_metrics(
     conn: &Connection,
@@ -16,6 +19,8 @@ pub fn append_metrics(
     if series.is_empty() && points.is_empty() {
         return Ok(());
     }
+
+    let transaction = conn.unchecked_transaction()?;
 
     let mut appender = conn.appender("metric_series_staging")?;
     for row in series {
@@ -66,7 +71,11 @@ pub fn append_metrics(
 
     conn.execute_batch(
         "INSERT INTO metric_series
-            SELECT * REPLACE (CAST(bounds AS DOUBLE[]) AS bounds) FROM metric_series_staging;
+            SELECT DISTINCT ON (staged.series_id)
+                staged.* REPLACE (CAST(staged.bounds AS DOUBLE[]) AS bounds)
+            FROM metric_series_staging staged
+            ANTI JOIN metric_series known USING (series_id)
+            ORDER BY staged.series_id, staged.first_seen;
          DELETE FROM metric_series_staging;
          INSERT INTO metric_points
             SELECT * REPLACE (
@@ -74,63 +83,66 @@ pub fn append_metrics(
                 CAST(bucket_deltas AS UBIGINT[]) AS bucket_deltas
             ) FROM metric_points_staging;
          DELETE FROM metric_points_staging;",
-    )
+    )?;
+
+    transaction.commit()
 }
 
-fn to_list_text<T: ToString>(values: &[T]) -> String {
-    let values: Vec<String> = values.iter().map(ToString::to_string).collect();
+fn to_list_text<T: std::fmt::Display>(values: &[T]) -> String {
+    let mut text = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            text.push(',');
+        }
+        write!(text, "{value}").ok();
+    }
+    text.push(']');
 
-    format!("[{}]", values.join(","))
+    text
 }
 
 pub fn list_known_series(
     conn: &Connection,
-    now: i64,
+    since: i64,
 ) -> duckdb::Result<Vec<KnownSeries>> {
     let mut statement = conn.prepare(
-        "SELECT s.series_id, s.token_id, s.name, greatest(s.last_seen, coalesce(p.taken_at, 0)),
+        "SELECT s.series_id, s.token_id, s.name,
                 p.taken_at, p.start_at, p.value, p.count, p.sum, CAST(p.buckets AS VARCHAR)
          FROM metric_series s
-         LEFT JOIN (
-            SELECT series_id, max(taken_at) AS taken_at,
-                   arg_max(start_at, taken_at) AS start_at,
-                   arg_max(value, taken_at) AS value,
-                   arg_max(count, taken_at) AS count,
-                   arg_max(sum, taken_at) AS sum,
-                   arg_max(buckets, taken_at) AS buckets
+         JOIN (
+            SELECT DISTINCT ON (series_id)
+                   series_id, taken_at, start_at, value, count, sum, buckets
             FROM metric_points
             WHERE taken_at >= ?
-            GROUP BY series_id
+            ORDER BY series_id, taken_at DESC
          ) p USING (series_id)",
     )?;
 
-    let rows = statement.query_map([now - LOAD_WINDOW_MS], |row| {
-        let at: Option<i64> = row.get(4)?;
-        let value: Option<f64> = row.get(6)?;
-        let count: Option<u64> = row.get(7)?;
-        let buckets: Option<String> = row.get(9)?;
+    let rows = statement.query_map([since], |row| {
+        let at: i64 = row.get(3)?;
+        let value: Option<f64> = row.get(5)?;
+        let count: Option<u64> = row.get(6)?;
+        let buckets: Option<String> = row.get(8)?;
+
         let reading = match (value, count) {
             (Some(value), _) => Some(Reading::Number(value)),
             (None, Some(count)) => Some(Reading::Histogram(HistogramReading {
                 count,
-                sum: row.get(8)?,
+                sum: row.get(7)?,
                 min: None,
                 max: None,
                 buckets: buckets.as_deref().map(read_list).unwrap_or_default(),
             })),
             (None, None) => None,
         };
+        let start_at: Option<i64> = row.get(4)?;
 
         Ok(KnownSeries {
             series_id: row.get(0)?,
             token_id: row.get::<_, String>(1)?.into(),
             name: row.get::<_, String>(2)?.into(),
-            last_seen: row.get(3)?,
-            last: at.zip(reading).map(|(at, reading)| LastPoint {
-                at,
-                start_at: row.get(5).ok().flatten(),
-                reading,
-            }),
+            last_seen: at,
+            last: reading.map(|reading| LastPoint { at, start_at, reading }),
         })
     })?;
 
@@ -146,16 +158,23 @@ fn read_list(text: &str) -> Vec<u64> {
 
 pub fn roll_up_metrics(conn: &Connection, now: i64) -> duckdb::Result<()> {
     let end = now / HOUR_MS * HOUR_MS;
-    let start: Option<i64> = conn.query_row(
-        "SELECT coalesce(
-            (SELECT max(hour) + ? FROM metric_rollups),
-            (SELECT min(taken_at) // ? * ? FROM metric_points)
-         )",
+    let (rolled_until, first_hour): (Option<i64>, Option<i64>) = conn.query_row(
+        "SELECT (SELECT max(hour) + ? FROM metric_rollups),
+                (SELECT min(taken_at) // ? * ? FROM metric_points)",
         params![HOUR_MS, HOUR_MS, HOUR_MS],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
+    let start = match rolled_until {
+        Some(rolled_until) => Some(rolled_until.min(end - REROLL_MS)),
+        None => first_hour,
+    };
     let Some(start) = start.filter(|start| *start < end) else { return Ok(()) };
 
+    let transaction = conn.unchecked_transaction()?;
+    conn.execute(
+        "DELETE FROM metric_rollups WHERE hour >= ? AND hour < ?",
+        [start, end],
+    )?;
     conn.execute(
         &format!(
             "INSERT INTO metric_rollups {}",
@@ -164,7 +183,7 @@ pub fn roll_up_metrics(conn: &Connection, now: i64) -> duckdb::Result<()> {
         [],
     )?;
 
-    Ok(())
+    transaction.commit()
 }
 
 pub fn to_rollup_select(start: &str, end: &str) -> String {
@@ -176,7 +195,8 @@ pub fn to_rollup_select(start: &str, end: &str) -> String {
          buckets AS (
             SELECT series_id, hour, list(total ORDER BY slot) AS bucket_deltas
             FROM (
-                SELECT series_id, hour, slot, sum(count) AS total
+                SELECT series_id, hour, slot,
+                       CAST(least(sum(count), {MAX_COUNT}) AS UBIGINT) AS total
                 FROM (
                     SELECT series_id, hour,
                            generate_subscripts(bucket_deltas, 1) AS slot,
@@ -194,7 +214,7 @@ pub fn to_rollup_select(start: &str, end: &str) -> String {
                 max(coalesce(max, value)) AS max,
                 avg(value) AS avg,
                 sum(delta) AS delta,
-                sum(count_delta) AS count_delta,
+                CAST(least(sum(count_delta), {MAX_COUNT}) AS UBIGINT) AS count_delta,
                 sum(sum_delta) AS sum_delta,
                 any_value(buckets.bucket_deltas) AS bucket_deltas
          FROM window_points
@@ -322,7 +342,7 @@ mod tests {
         )
         .unwrap();
 
-        let known = list_known_series(&conn, 3_000).unwrap();
+        let known = list_known_series(&conn, 0).unwrap();
 
         assert_eq!(known.len(), 1);
         assert_eq!(known[0].last_seen, 2_000);
@@ -330,6 +350,134 @@ mod tests {
         assert_eq!(last.at, 2_000);
         let Reading::Histogram(histogram) = &last.reading else { panic!() };
         assert_eq!(histogram.buckets, [0, 3, 1]);
+    }
+
+    #[test]
+    fn loads_the_whole_newest_row() {
+        let conn = open();
+        let counter = SeriesRow {
+            kind: MetricKind::Sum,
+            is_monotonic: true,
+            temporality: Some(Temporality::Cumulative),
+            bounds: None,
+            ..series(1)
+        };
+        let number = |at, start_at, value| PointRow {
+            series_id: 1,
+            at,
+            start_at,
+            value: Some(value),
+            ..PointRow::default()
+        };
+        append_metrics(
+            &conn,
+            &[counter],
+            &[number(1_000, Some(500), 5.0), number(2_000, None, 7.0)],
+        )
+        .unwrap();
+
+        let known = list_known_series(&conn, 0).unwrap();
+        let last = known[0].last.as_ref().unwrap();
+
+        assert_eq!((last.at, last.start_at), (2_000, None));
+        assert_eq!(last.reading, Reading::Number(7.0));
+        assert!(list_known_series(&conn, 3_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn writes_each_series_once() {
+        let conn = open();
+        append_metrics(&conn, &[series(1), series(1)], &[]).unwrap();
+        append_metrics(&conn, &[series(1), series(2)], &[]).unwrap();
+
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM metric_series", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
+    }
+
+    #[test]
+    fn writes_nothing_when_a_batch_fails() {
+        let conn = open();
+        conn.execute_batch(
+            "DROP TABLE metric_points_staging;
+             CREATE TABLE metric_points_staging (series_id BIGINT CHECK (series_id > 5));",
+        )
+        .unwrap();
+
+        let result = append_metrics(&conn, &[series(1)], &[point(1_000, vec![1, 0, 0])]);
+
+        assert!(result.is_err());
+        let rows: i64 = conn
+            .query_row(
+                "SELECT (SELECT count(*) FROM metric_series)
+                      + (SELECT count(*) FROM metric_series_staging)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn rolls_up_huge_counts_without_failing() {
+        let conn = open();
+        let huge = 1_u64 << 63;
+        append_metrics(
+            &conn,
+            &[series(1)],
+            &[point(1_000, vec![huge, 0, 0]), point(2_000, vec![huge, 0, 0])],
+        )
+        .unwrap();
+
+        roll_up_metrics(&conn, HOUR_MS + 5).unwrap();
+
+        let (count, buckets): (u64, String) = conn
+            .query_row(
+                "SELECT count_delta, CAST(bucket_deltas AS VARCHAR) FROM metric_rollups",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, u64::MAX);
+        assert_eq!(buckets, format!("[{}, 0, 0]", u64::MAX));
+    }
+
+    #[test]
+    fn rolls_up_points_that_arrive_late() {
+        let conn = open();
+        append_metrics(&conn, &[series(1)], &[point(1_000, vec![1, 0, 0])]).unwrap();
+        roll_up_metrics(&conn, HOUR_MS + 5).unwrap();
+
+        append_metrics(&conn, &[], &[point(2_000, vec![0, 2, 0])]).unwrap();
+        roll_up_metrics(&conn, HOUR_MS + 10).unwrap();
+
+        let rows: Vec<(i64, i64, String)> = conn
+            .prepare(
+                "SELECT hour, points, CAST(bucket_deltas AS VARCHAR)
+                 FROM metric_rollups ORDER BY hour",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<duckdb::Result<_>>()
+            .unwrap();
+        assert_eq!(rows, [(0, 2, "[1, 2, 0]".to_string())]);
+    }
+
+    #[test]
+    fn rolls_up_old_hours_on_the_first_run() {
+        let conn = open();
+        append_metrics(&conn, &[series(1)], &[point(1_000, vec![1, 0, 0])]).unwrap();
+
+        roll_up_metrics(&conn, 10 * HOUR_MS).unwrap();
+
+        let hours: i64 = conn
+            .query_row("SELECT count(*) FROM metric_rollups WHERE hour = 0", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(hours, 1);
     }
 
     #[test]

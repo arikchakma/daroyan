@@ -1,6 +1,6 @@
 import type { Schemas } from '@daroyan/client';
 
-import { DAY_MS, formatBytes, HOUR_MS } from '~/utils/format';
+import { DAY_MS, formatBytes, getUnitSuffix, HOUR_MS } from '~/utils/format';
 import { formatMicros } from '~/utils/traces';
 
 export const METRICS_TARGET_ID = 'metrics';
@@ -187,51 +187,110 @@ export function getKindLabel(metric: Pick<MetricSummary, 'kind' | 'is_monotonic'
   return 'Gauge';
 }
 
+const UNIT_WORDS: Record<string, string> = {
+  '1': '',
+  '%': '%',
+  s: 's',
+  ms: 'ms',
+  us: 'µs',
+  ns: 'ns',
+  min: 'min',
+  h: 'h',
+  d: 'd',
+  By: 'bytes',
+  KiBy: 'KiB',
+  MiBy: 'MiB',
+  GiBy: 'GiB',
+  TiBy: 'TiB',
+  KBy: 'kB',
+  MBy: 'MB',
+  GBy: 'GB',
+  bit: 'bits',
+  'By/s': 'B/s',
+  Cel: '°C',
+};
+
+const BYTE_SIZES: Record<string, number> = {
+  By: 1,
+  KiBy: 1_024,
+  MiBy: 1_024 ** 2,
+  GiBy: 1_024 ** 3,
+  TiBy: 1_024 ** 4,
+  KBy: 1_000,
+  MBy: 1_000 ** 2,
+  GBy: 1_000 ** 3,
+};
+
+const TIME_MICROS: Record<string, number> = {
+  s: 1_000_000,
+  ms: 1_000,
+  us: 1,
+  ns: 0.001,
+};
+
 export function getMetricUnitWord(unit: string) {
-  const word = unit.replace(/[{}]/g, '').trim();
-  if (!word || word === '1') {
-    return '';
+  const known = UNIT_WORDS[unit];
+  if (known !== undefined) {
+    return known;
   }
-  return word.endsWith('s') ? word : `${word}s`;
+
+  const annotation = unit.match(/^\{(.+)\}$/)?.[1]?.trim();
+  if (annotation) {
+    return annotation.endsWith('s') ? annotation : `${annotation}s`;
+  }
+
+  return unit.replace(/[{}]/g, '').trim();
+}
+
+export function getMetricLimitUnit(unit: string, aggregation: MetricAggregation) {
+  if (aggregation === 'count_rate') {
+    return '/s';
+  }
+
+  const word = getMetricUnitWord(unit);
+  if (aggregation === 'rate') {
+    return `${word}/s`;
+  }
+  if (aggregation === 'rate_per_minute') {
+    return `${word}/min`;
+  }
+  return word;
 }
 
 function formatNumber(value: number) {
   return Math.abs(value) >= 10_000 ? COMPACT_FORMAT.format(value) : PLAIN_FORMAT.format(value);
 }
 
-function formatAmount(value: number, unit: string) {
-  if (unit === 's') {
-    return formatMicros(value * 1_000_000);
-  }
-  if (unit === 'ms') {
-    return formatMicros(value * 1_000);
-  }
-  if (unit === 'us') {
-    return formatMicros(value);
-  }
-  if (unit === 'By') {
-    return formatBytes(value);
-  }
-  if (unit === '1') {
-    return `${formatNumber(value * 100)}%`;
-  }
-  if (unit === '%') {
-    return `${formatNumber(value)}%`;
+function formatMetricAmount(value: number, unit: string) {
+  const micros = TIME_MICROS[unit];
+  if (micros !== undefined && value >= 0) {
+    return formatMicros(value * micros);
   }
 
-  const word = getMetricUnitWord(unit);
-  return word ? `${formatNumber(value)} ${word}` : formatNumber(value);
+  const bytes = BYTE_SIZES[unit];
+  if (bytes !== undefined && value >= 0) {
+    return formatBytes(value * bytes);
+  }
+
+  return `${formatNumber(value)}${getUnitSuffix(getMetricUnitWord(unit))}`;
 }
 
 export function formatMetricValue(value: number, unit: string, aggregation: MetricAggregation) {
+  if (aggregation === 'count_rate') {
+    return `${formatNumber(value)}/s`;
+  }
+  if (aggregation === 'rate') {
+    return `${formatMetricAmount(value, unit)}/s`;
+  }
   if (aggregation === 'rate_per_minute') {
-    return `${formatAmount(value, unit)}/min`;
+    return `${formatMetricAmount(value, unit)}/min`;
   }
-  if (aggregation === 'rate' || aggregation === 'count_rate') {
-    const amount = aggregation === 'count_rate' ? formatNumber(value) : formatAmount(value, unit);
-    return `${amount}/s`;
-  }
-  return formatAmount(value, unit);
+  return formatMetricAmount(value, unit);
+}
+
+export function getMetricTracesLink(metric: Pick<MetricSummary, 'services'>, service?: string) {
+  const traceService = service ?? (metric.services.length === 1 ? metric.services[0] : undefined);
+  return traceService ? `/traces?${new URLSearchParams({ service: traceService })}` : '/traces';
 }
 
 export function readMetricFilters(text: string): MetricFilter[] {
@@ -260,15 +319,4 @@ const SERIES_COLORS = ['var(--color-chart-primary)', 'var(--color-chart-secondar
 
 export function getSeriesColor(index: number) {
   return SERIES_COLORS[index] ?? `oklch(0.66 0.15 ${(250 + index * 137.5) % 360})`;
-}
-
-export function getMetricRuleText(condition: { threshold: number; below?: boolean }, forSecs: number) {
-  const side = `${condition.below ? 'below' : 'above'} ${PLAIN_FORMAT.format(condition.threshold)}`;
-  if (forSecs <= 0) {
-    return side;
-  }
-  if (forSecs % 3_600 === 0) {
-    return `${side} for ${forSecs / 3_600}h`;
-  }
-  return `${side} for ${Math.round(forSecs / 60)}m`;
 }

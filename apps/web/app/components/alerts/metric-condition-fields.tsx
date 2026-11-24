@@ -8,7 +8,7 @@ import { FieldRow } from '~/components/ui/field-row';
 import { Input } from '~/components/ui/input';
 import { metricQueries } from '~/queries/metrics';
 import { TRACE_WINDOW_OPTIONS } from '~/utils/alerts';
-import { getAggregations, getDefaultAggregation, getMetricUnitWord } from '~/utils/metrics';
+import { getAggregations, getDefaultAggregation, getMetricLimitUnit } from '~/utils/metrics';
 import { getMetricLimitHint, isLimitValid, isOptionalNumber } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState } from '~/utils/rule-form';
 
@@ -33,13 +33,22 @@ export function MetricConditionFields(props: MetricConditionFieldsProps) {
 
   const metric = metrics.find((item) => item.name === form.metricName);
   const aggregations = metric ? getAggregations(metric) : [];
-  const unit = metric ? getMetricUnitWord(metric.unit) : '';
+  const aggregation = form.metricAggregation || (metric ? getDefaultAggregation(metric) : null);
+  const unit = metric && aggregation ? getMetricLimitUnit(metric.unit, aggregation) : '';
   const isLimitWrong = form.critical !== '' && !isLimitValid(form);
   const groupItems = [
     { value: 'none', label: 'Nothing' },
     { value: 'service', label: 'Each service' },
     { value: 'server', label: 'Each server' },
     ...attributes.map((attribute) => ({ value: attribute.key, label: `Each ${attribute.key}` })),
+  ];
+  const services = metric?.services ?? [];
+  const serviceItems = [
+    { value: 'any', label: 'Any service' },
+    ...(form.metricService && !services.includes(form.metricService)
+      ? [{ value: form.metricService, label: form.metricService }]
+      : []),
+    ...services.map((service) => ({ value: service, label: service })),
   ];
   const metricItems = [
     ...(form.metricName && !metric ? [{ value: form.metricName, label: form.metricName }] : []),
@@ -53,14 +62,20 @@ export function MetricConditionFields(props: MetricConditionFieldsProps) {
           label="Metric"
           value={form.metricName || null}
           onValueChange={(value) =>
-            onChange({ metricName: value ?? '', metricAggregation: '', metricFilter: '', metricGroupBy: '' })
+            onChange({
+              metricName: value ?? '',
+              metricAggregation: '',
+              metricService: '',
+              metricFilter: '',
+              metricGroupBy: '',
+            })
           }
           items={metricItems}
           placeholder={metrics.length === 0 ? 'No metrics yet' : 'Pick a metric'}
         />
         <SelectField
           label="Read As"
-          value={form.metricAggregation || (metric ? getDefaultAggregation(metric) : null)}
+          value={aggregation}
           onValueChange={(value) =>
             onChange({ metricAggregation: aggregations.find((item) => item.value === value)?.value ?? '' })
           }
@@ -72,10 +87,7 @@ export function MetricConditionFields(props: MetricConditionFieldsProps) {
           label="Service"
           value={form.metricService || 'any'}
           onValueChange={(value) => onChange({ metricService: !value || value === 'any' ? '' : value })}
-          items={[
-            { value: 'any', label: 'Any service' },
-            ...(metric?.services ?? []).map((service) => ({ value: service, label: service })),
-          ]}
+          items={serviceItems}
         />
         <SelectField
           label="Group By"
@@ -109,6 +121,7 @@ export function MetricConditionFields(props: MetricConditionFieldsProps) {
           value={form.critical}
           onValueChange={(critical) => onChange({ critical })}
           isInvalid={isLimitWrong}
+          isSigned
         />
         {form.isWarningOpen && (
           <UnitField
@@ -118,6 +131,7 @@ export function MetricConditionFields(props: MetricConditionFieldsProps) {
             onValueChange={(warning) => onChange({ warning })}
             placeholder="Off"
             isInvalid={!isOptionalNumber(form.warning)}
+            isSigned
           />
         )}
       </FieldGrid>
