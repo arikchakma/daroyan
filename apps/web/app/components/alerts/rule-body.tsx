@@ -34,6 +34,7 @@ import {
   updateAlertRuleOptions,
 } from '~/queries/alerts';
 import { cronQueries } from '~/queries/crons';
+import { metricQueries } from '~/queries/metrics';
 import { serverQueries } from '~/queries/servers';
 import { traceQueries } from '~/queries/traces';
 import { uptimeCheckQueries } from '~/queries/uptime';
@@ -54,6 +55,7 @@ import {
   isCronKind,
   isIntegrationKind,
   isTraceKind,
+  readMetricCondition,
   isProcessKind,
   isWholeRuleMute,
   readSubjectName,
@@ -63,6 +65,7 @@ import {
 import { DAY_MS, formatClock, formatDate, formatRelative, pluralize } from '~/utils/format';
 import { OTLP_SERVER_ID, OTLP_SERVER_NAME } from '~/utils/logs';
 import { readTargetNoun, readTargetNouns } from '~/utils/rule-form';
+import { METRICS_TARGET_ID, METRICS_TARGET_NAME } from '~/utils/metrics';
 import { TRACES_TARGET_ID, TRACES_TARGET_NAME } from '~/utils/traces';
 
 const RECENT_MS = 30 * 86_400_000;
@@ -84,6 +87,8 @@ export function RuleBody(props: RuleBodyProps) {
   const { data: allMutes = [] } = useQuery(alertMuteQueries.list());
   const isTrace = isTraceKind(rule.condition.kind);
   const { data: traceServices = [] } = useQuery({ ...traceQueries.services(DAY_MS), enabled: isTrace });
+  const metricCondition = readMetricCondition(rule.condition);
+  const { data: metrics = [] } = useQuery({ ...metricQueries.list(), enabled: !!metricCondition });
   const isAdmin = useIsAdmin();
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [muting, setMuting] = useState<{ target?: MuteTarget } | undefined>();
@@ -131,10 +136,28 @@ export function RuleBody(props: RuleBodyProps) {
             : rule.scope.kind === 'servers' && rule.scope.server_ids.includes(server.id)
       );
   const notified = integrations.filter((integration) => rule.integration_ids.includes(integration.id));
-  const scopeLabel = isTrace
-    ? getTraceScopeLabel(traceCondition)
-    : describeScope(rule.scope, servers, checks, isCheck, crons, isCron);
-  const coveredCount = isTrace ? coveredServices.length : covered.length;
+  const metricServices = (metrics.find((metric) => metric.name === metricCondition?.name)?.services ?? []).filter(
+    (service) => !metricCondition?.service || service === metricCondition.service
+  );
+  const scopeLabel = getRuleScopeLabel();
+  const coveredCount = getCoveredCount();
+
+  function getRuleScopeLabel() {
+    if (metricCondition) {
+      return metricCondition.service ?? 'All services';
+    }
+    if (isTrace) {
+      return getTraceScopeLabel(traceCondition);
+    }
+    return describeScope(rule.scope, servers, checks, isCheck, crons, isCron);
+  }
+
+  function getCoveredCount() {
+    if (metricCondition) {
+      return metricServices.length;
+    }
+    return isTrace ? coveredServices.length : covered.length;
+  }
   const table = useAlertHistoryTable(history, mutes, getValueHint(rule.condition));
   const unmute = useMutation({
     ...deleteAlertMuteOptions(),
@@ -153,6 +176,9 @@ export function RuleBody(props: RuleBodyProps) {
     }
     if (mute.server_id === TRACES_TARGET_ID) {
       return TRACES_TARGET_NAME;
+    }
+    if (mute.server_id === METRICS_TARGET_ID) {
+      return METRICS_TARGET_NAME;
     }
     if (mute.server_id) {
       return servers.find((server) => server.id === mute.server_id)?.name ?? 'A server';

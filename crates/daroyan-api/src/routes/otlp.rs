@@ -9,12 +9,18 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use chrono::Utc;
 use daroyan_core::analytics::log_lines::{LogRow, count_otlp_records, to_otlp_log_rows};
+use daroyan_core::analytics::metrics::ingest::{count_metric_points, to_metric_samples};
+use daroyan_core::analytics::metrics::series::{Admission, SeriesLimits};
 use daroyan_core::analytics::spans::to_span_rows;
 use daroyan_core::db::entities::ingest_tokens::Model as IngestToken;
 use daroyan_core::error::{Error, ErrorName};
 use daroyan_core::token::hash_token;
 use opentelemetry_proto::tonic::collector::logs::v1::{
     ExportLogsServiceRequest, ExportLogsServiceResponse,
+};
+use opentelemetry_proto::tonic::collector::metrics::v1::{
+    ExportMetricsPartialSuccess, ExportMetricsServiceRequest,
+    ExportMetricsServiceResponse,
 };
 use opentelemetry_proto::tonic::collector::trace::v1::{
     ExportTraceServiceRequest, ExportTraceServiceResponse,
@@ -28,6 +34,7 @@ use crate::AppState;
 
 const MAX_BODY: usize = 16 * 1024 * 1024;
 const MAX_LOG_RECORDS: usize = 10_000;
+const MAX_METRIC_POINTS: u64 = 50_000;
 const PROTOBUF: &str = "application/x-protobuf";
 const JSON: &str = "application/json";
 const TOUCH_AFTER_SECS: i64 = 60;
@@ -37,6 +44,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/otlp/v1/traces", post(export_traces))
         .route("/v1/otlp/v1/logs", post(export_logs))
+        .route("/v1/otlp/v1/metrics", post(export_metrics))
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .layer(RequestDecompressionLayer::new())
 }
@@ -310,4 +318,77 @@ async fn accept_logs(
     state.analytics.buffer_log_rows(rows)?;
 
     Ok(encoding.encode(StatusCode::OK, &ExportLogsServiceResponse::default()))
+}
+
+async fn export_metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let Some(encoding) = Encoding::read(&headers) else {
+        return unsupported_media_type();
+    };
+
+    accept_metrics(&state, &headers, encoding, body)
+        .await
+        .unwrap_or_else(|error| error.into_response(encoding))
+}
+
+async fn accept_metrics(
+    state: &AppState,
+    headers: &HeaderMap,
+    encoding: Encoding,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, OtlpError> {
+    let token = authorize(state, headers).await?;
+    let request: ExportMetricsServiceRequest = encoding.decode(body?)?;
+
+    let count = count_metric_points(&request);
+    if count > MAX_METRIC_POINTS {
+        return Err(OtlpError::TooLarge(format!(
+            "Send at most {MAX_METRIC_POINTS} metric points a request, not {count}"
+        )));
+    }
+
+    let hosts = state.hosts.read(&state.database).await.map_err(Error::from)?;
+    let parsed =
+        to_metric_samples(&request, &hosts, &token.id, Utc::now().timestamp_millis());
+    let limits = SeriesLimits::from(&state.config.metrics);
+    let admission = state.analytics.accept_metrics(parsed.samples, limits).await?;
+
+    if admission.rejected > 0
+        && let Err(error) = state
+            .database
+            .add_rejected_metric_points(&token.id, admission.rejected)
+            .await
+    {
+        tracing::warn!(token_id = %token.id, %error, "count rejected metric points");
+    }
+
+    let rejected = admission.rejected + parsed.skipped;
+    let response = ExportMetricsServiceResponse {
+        partial_success: (rejected > 0).then(|| ExportMetricsPartialSuccess {
+            rejected_data_points: i64::try_from(rejected).unwrap_or(i64::MAX),
+            error_message: rejection_message(&admission, parsed.skipped, limits),
+        }),
+    };
+
+    Ok(encoding.encode(StatusCode::OK, &response))
+}
+
+fn rejection_message(
+    admission: &Admission,
+    skipped: u64,
+    limits: SeriesLimits,
+) -> String {
+    if let Some(metric) = &admission.full_metric {
+        return format!(
+            "Dropped {} points of new series. {metric} or this token reached its limit of {} series per metric or {} per token",
+            admission.rejected, limits.per_metric, limits.per_token
+        );
+    }
+
+    format!(
+        "Dropped {skipped} points. Daroyan does not store summaries or points without a value"
+    )
 }

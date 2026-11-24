@@ -1,6 +1,7 @@
 import { useSearchParams } from 'react-router';
 
 import { RuleForm } from '~/components/alerts/rule-form';
+import type { MetricAggregation } from '~/utils/metrics';
 import type { RuleDraft } from '~/utils/rule-form';
 
 export function meta() {
@@ -46,8 +47,29 @@ function readCronDraft(params: URLSearchParams): RuleDraft | undefined {
   };
 }
 
+function readMetricDraft(params: URLSearchParams): RuleDraft | undefined {
+  const name = params.get('metricName');
+  if (!name) {
+    return undefined;
+  }
+  return {
+    name: `${name} Limit`,
+    condition: {
+      kind: 'metric',
+      name,
+      aggregation: (params.get('metricAggregation') as MetricAggregation | null) || null,
+      threshold: 0,
+      within_secs: 300,
+      service: params.get('metricService') || null,
+      filter: params.get('metricFilter') || null,
+      group_by: params.get('metricGroupBy') || null,
+    },
+    critical: '',
+  };
+}
+
 export default function NewRulePage() {
   const [searchParams] = useSearchParams();
 
-  return <RuleForm draft={readCheckDraft(searchParams) ?? readCronDraft(searchParams) ?? readLogDraft(searchParams)} />;
+  return <RuleForm draft={readCheckDraft(searchParams) ?? readCronDraft(searchParams) ?? readLogDraft(searchParams) ?? readMetricDraft(searchParams)} />;
 }

@@ -25,7 +25,7 @@ const TIME_ARGS: [&str; 3] = ["since", "until", "at"];
 const BAD_CRON_STATUSES: [&str; 3] = ["failed", "missed", "late"];
 const OVERVIEW_ISSUES: usize = 10;
 
-const INSTRUCTIONS: &str = "Daroyan monitors servers through an agent, uptime checks, crons, alerts, incidents, and OpenTelemetry traces, issues and logs. Times in results are ISO 8601 in UTC. The since, until and at inputs take a duration back from now like 15m, 1h or 7d, an ISO 8601 time, or Unix milliseconds. Start with get_overview to see what is broken right now, then narrow down with search_logs, list_issues and get_trace. Read a check, cron or rule before you replace it, because update_uptime_check and update_cron replace every field. Confirm with the user before you delete anything or run a server command.";
+const INSTRUCTIONS: &str = "Daroyan monitors servers through an agent, uptime checks, crons, alerts, incidents, and OpenTelemetry traces, issues, logs and metrics. Times in results are ISO 8601 in UTC. The since, until and at inputs take a duration back from now like 15m, 1h or 7d, an ISO 8601 time, or Unix milliseconds. Start with get_overview to see what is broken right now, then narrow down with search_logs, list_issues and get_trace. Read a check, cron or rule before you replace it, because update_uptime_check and update_cron replace every field. Confirm with the user before you delete anything or run a server command.";
 
 struct ToolDef {
     name: &'static str,
@@ -148,6 +148,24 @@ fn list_tool_defs() -> Vec<ToolDef> {
             GET,
             "/v1/traces/services",
             "Services that sent spans, with span and error counts."
+        ),
+        tool!(
+            "list_metrics",
+            GET,
+            "/v1/metrics",
+            "OpenTelemetry metrics apps sent, with kind (sum, gauge or histogram), unit, services and series count."
+        ),
+        tool!(
+            "list_metric_attributes",
+            GET,
+            "/v1/metrics/{name}/attributes",
+            "Attribute keys of one metric and their most common values, to filter or group a query."
+        ),
+        tool!(
+            "query_metric",
+            GET,
+            "/v1/metrics/{name}/query",
+            "One metric over time: a counter as a rate, a gauge as its value, a histogram as a percentile. Filter by attributes and group by service, server or an attribute."
         ),
         tool!(
             "list_issues",
@@ -583,7 +601,7 @@ fn tidy(value: &mut Value, app_url: &str) {
                     if let Some(time) = to_iso(item) {
                         *item = time;
                     }
-                } else if key == "next_runs"
+                } else if (key == "next_runs" || key == "times")
                     && let Value::Array(items) = item
                 {
                     for run in items {

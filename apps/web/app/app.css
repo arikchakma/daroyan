@@ -86,6 +86,7 @@
 
   --color-chart-primary: #2ea3f2;
   --color-chart-secondary: #9dd3f8;
+  --color-chart-tertiary: #14579a;
   --color-chart-grid: #ebebeb;
 
   --color-highlight-note: #fff4b8;
@@ -270,6 +271,7 @@ html {
   --color-filter-value-hover: #3a1414;
   --color-chart-grid: #1c1c1c;
   --color-chart-secondary: #1c4f73;
+  --color-chart-tertiary: #8cc8f5;
   --color-highlight-note: #2b2706;
   --color-sidebar-bg: #000000;
   --color-editor-border: #ffffff14;
@@ -343,6 +345,7 @@ html {
   --color-filter-value-hover: #ffd6d1;
   --color-chart-grid: #ebebeb;
   --color-chart-secondary: #9dd3f8;
+  --color-chart-tertiary: #14579a;
   --color-highlight-note: #fff4b8;
   --color-sidebar-bg: #0b0b0b;
   --color-editor-border: #e5e7ebb2;

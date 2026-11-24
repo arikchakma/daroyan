@@ -1,6 +1,7 @@
 import { FieldGrid } from '~/components/alerts/field-grid';
 import { ForField } from '~/components/alerts/for-field';
 import { LogConditionFields } from '~/components/alerts/log-condition-fields';
+import { MetricConditionFields } from '~/components/alerts/metric-condition-fields';
 import { TraceConditionFields } from '~/components/alerts/trace-condition-fields';
 import { UnitField } from '~/components/alerts/unit-field';
 import { FieldRow } from '~/components/ui/field-row';
@@ -26,6 +27,10 @@ export function ConditionFields(props: ConditionFieldsProps) {
 
   if (isTraceKind(kind)) {
     return <TraceConditionFields form={form} onChange={onChange} />;
+  }
+
+  if (kind === 'metric') {
+    return <MetricConditionFields form={form} onChange={onChange} />;
   }
 
   if (hasThreshold(kind)) {
