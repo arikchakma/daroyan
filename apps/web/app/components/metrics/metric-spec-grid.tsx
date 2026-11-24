@@ -30,11 +30,15 @@ export function MetricSpecGrid(props: MetricSpecGridProps) {
 
   const specs: SpecProps[] = [
     ...reads.map((read, index) => {
-      const value = results[index]?.data?.series[0]?.values.at(-1);
+      const result = results[index];
+      const data = result?.data?.name === metric.name ? result.data : undefined;
+      const value = data?.series[0]?.values.at(-1);
+
       return {
         label: read.label,
         value: value === undefined || value === null ? '—' : formatMetricValue(value, metric.unit, read.aggregation),
         detail: read.detail,
+        isLoading: !data && !!result?.isFetching,
       };
     }),
     { label: 'Series', value: formatCount(metric.series), detail: pluralize(metric.services.length, 'service') },

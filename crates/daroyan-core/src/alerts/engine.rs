@@ -28,7 +28,7 @@ use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source,
 };
-use crate::analytics::metrics::query::{MetricQuery, measure_metric};
+use crate::analytics::metrics::query::{MetricQuery, Ranking, measure_metric};
 use crate::analytics::metrics::{METRICS_TARGET_ID, METRICS_TARGET_NAME};
 use crate::analytics::server_states::aggregate_server_metric;
 use crate::analytics::spans::{
@@ -55,6 +55,7 @@ const TICK: Duration = Duration::from_secs(15);
 const DAY_MS: f64 = 86_400_000.0;
 const LIMIT_WINDOW_SECS: i64 = 3600;
 const MAX_TRACE_GROUPS: u32 = 200;
+const MAX_METRIC_GROUPS: usize = 200;
 
 type AlertKey = (String, String, String);
 
@@ -272,10 +273,17 @@ impl AlertEngine {
         })
     }
 
-    async fn read_metric_target(&self, query: MetricQuery) -> Result<TargetReadings> {
+    async fn read_metric_target(
+        &self,
+        query: MetricQuery,
+        is_below: bool,
+    ) -> Result<TargetReadings> {
         let name = query.name.clone();
-        let measure =
-            measure_metric(&self.analytics, query, MAX_TRACE_GROUPS as usize).await?;
+        let ranking = Ranking {
+            max_groups: MAX_METRIC_GROUPS,
+            is_lowest_first: is_below,
+        };
+        let measure = measure_metric(&self.analytics, query, ranking).await?;
         let readings = measure.and_then(|measure| find_metric_readings(&name, &measure));
 
         Ok(TargetReadings {
@@ -347,7 +355,8 @@ impl AlertEngine {
         }
 
         if let Some(query) = parsed.condition.metric_query(now.timestamp_millis()) {
-            return Ok(vec![self.read_metric_target(query).await?]);
+            let is_below = parsed.condition.is_below();
+            return Ok(vec![self.read_metric_target(query, is_below).await?]);
         }
 
         if parsed.condition.target() == Target::Cron {
@@ -532,6 +541,7 @@ impl AlertEngine {
 
         let mut in_scope = HashSet::new();
         let mut evaluated = HashSet::new();
+        let mut unread = HashSet::new();
         let mut breaching = HashSet::new();
         let mut values: HashMap<AlertKey, f64> = HashMap::new();
         let mut names: HashMap<String, String> = HashMap::new();
@@ -541,7 +551,7 @@ impl AlertEngine {
                 continue;
             };
             let for_secs = rule.for_secs;
-            for target in self
+            let targets = match self
                 .read_targets(
                     &parsed,
                     &facts,
@@ -551,8 +561,17 @@ impl AlertEngine {
                     &cron_failures,
                     now,
                 )
-                .await?
+                .await
             {
+                Ok(targets) => targets,
+                Err(error) => {
+                    tracing::warn!(rule_id = %rule.id, error = ?error, "skipped an alert rule that could not be read");
+                    unread.insert(rule.id.clone());
+                    continue;
+                }
+            };
+
+            for target in targets {
                 names.insert(target.id.clone(), target.name.clone());
                 let pair = (rule.id.clone(), target.id.clone());
                 in_scope.insert(pair.clone());
@@ -631,6 +650,10 @@ impl AlertEngine {
         }
 
         for alert in &firing {
+            if unread.contains(&alert.rule_id) {
+                continue;
+            }
+
             let key = to_alert_key(alert);
             let pair = (key.0.clone(), key.1.clone());
             let rule = rules.iter().find(|rule| rule.id == alert.rule_id && rule.enabled);
@@ -668,7 +691,8 @@ impl AlertEngine {
         }
 
         self.send_deploy_notes(&rules, &facts, &integrations, now);
-        self.pending.retain(|key, _| breaching.contains(key));
+        self.pending
+            .retain(|key, _| breaching.contains(key) || unread.contains(&key.0));
         let open: HashSet<AlertKey> = firing.iter().map(to_alert_key).collect();
         self.clearing.retain(|key, _| open.contains(key));
         Ok(())

@@ -1,4 +1,4 @@
-import { areaY, defineChart, lineY, ruleY, text } from '@tanstack/charts';
+import { areaY, defineChart, dot, lineY, ruleY, text } from '@tanstack/charts';
 import { crosshair } from '@tanstack/charts/crosshair';
 import { Chart } from '@tanstack/charts/react/tooltip';
 import { scaleLinear } from '@tanstack/charts/scales/linear';
@@ -77,6 +77,12 @@ function buildRows(series: ChartSeries[], times: number[], bucketMs: number) {
     }
   });
   return rows;
+}
+
+function getLoneRows(rows: ChartRow[]) {
+  return rows.filter(
+    (row, index) => row.value !== null && (rows[index - 1]?.value ?? null) === null && (rows[index + 1]?.value ?? null) === null
+  );
 }
 
 export function MetricChart(props: MetricChartProps) {
@@ -172,6 +178,15 @@ export function MetricChart(props: MetricChartProps) {
               curve: SMOOTH_CURVE,
             }
           )
+        ),
+        ...lines.map((line) =>
+          dot(getLoneRows(rows.filter((row) => row.series === line.label)), {
+            id: `${line.label}-dot`,
+            x: 'at',
+            y: 'value',
+            r: 2,
+            fill: getLineColor(line),
+          })
         ),
       ],
       scales: {

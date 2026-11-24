@@ -14,6 +14,7 @@ use crate::alerts::rules::{
     format_moment, format_ms, parse_runbook_url, read_time_zone,
 };
 use crate::analytics::log_lines::read_level;
+use crate::analytics::metrics::query::GroupBy;
 use crate::analytics::spans::SpanStat;
 use crate::db::entities::alert_rules::Model as AlertRule;
 use crate::db::entities::alerts::Model as Alert;
@@ -850,12 +851,14 @@ impl AlertMessage<'_> {
         let mut filters: Vec<String> = filter.iter().cloned().collect();
         let mut service = service.clone();
         let mut server = None;
-        match (group_by.as_deref(), subject) {
-            (Some("service"), Some(subject)) => service = Some(subject.to_string()),
-            (Some("server" | "server_id"), Some(subject)) => {
-                server = Some(subject.to_string());
+        match (group_by, subject) {
+            (Some(GroupBy::Service), Some(subject)) => {
+                service = Some(subject.to_string());
             }
-            (Some(key), Some(subject)) => filters.push(format!("{key}={subject}")),
+            (Some(GroupBy::Server), Some(subject)) => server = Some(subject.to_string()),
+            (Some(GroupBy::Attribute(key)), Some(subject)) => {
+                filters.push(format!("{key}={subject}"));
+            }
             _ => {}
         }
 

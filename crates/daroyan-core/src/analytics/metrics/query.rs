@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 
-use duckdb::types::Value as SqlValue;
-use duckdb::{Connection, OptionalExt, params_from_iter};
+use duckdb::types::{Type, Value as SqlValue};
+use duckdb::{Connection, OptionalExt, Row, params_from_iter};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -13,6 +15,9 @@ use crate::error::{Error, ErrorName, Result};
 
 const RAW_RANGE_MS: i64 = 24 * HOUR_MS;
 const MINUTE_MS: i64 = 60_000;
+const DAY_MS: i64 = 24 * HOUR_MS;
+const SETTLING_MS: i64 = 3 * HOUR_MS;
+const STALE_MS: i64 = 5 * MINUTE_MS;
 const TARGET_BUCKETS: i64 = 120;
 const MAX_BUCKETS: i64 = 1_500;
 const MAX_GROUPS: usize = 50;
@@ -26,7 +31,7 @@ const STEPS_MS: [i64; 8] = [
     HOUR_MS,
     3 * HOUR_MS,
     6 * HOUR_MS,
-    24 * HOUR_MS,
+    DAY_MS,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -123,7 +128,8 @@ impl Aggregation {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
 pub enum GroupBy {
     Service,
     Server,
@@ -132,13 +138,55 @@ pub enum GroupBy {
 
 impl GroupBy {
     pub fn read(text: &str) -> Option<Self> {
-        match text.trim() {
-            "" => None,
-            "service" => Some(Self::Service),
-            "server" | "server_id" => Some(Self::Server),
-            key => Some(Self::Attribute(key.to_string())),
+        let text = text.trim();
+
+        (!text.is_empty()).then(|| Self::from(text))
+    }
+
+    pub fn attribute(&self) -> Option<&str> {
+        match self {
+            Self::Attribute(key) => Some(key),
+            Self::Service | Self::Server => None,
         }
     }
+}
+
+impl From<&str> for GroupBy {
+    fn from(text: &str) -> Self {
+        match text.trim() {
+            "service" => Self::Service,
+            "server" | "server_id" => Self::Server,
+            key => Self::Attribute(key.to_string()),
+        }
+    }
+}
+
+impl From<String> for GroupBy {
+    fn from(text: String) -> Self {
+        Self::from(text.as_str())
+    }
+}
+
+impl From<GroupBy> for String {
+    fn from(group_by: GroupBy) -> Self {
+        group_by.to_string()
+    }
+}
+
+impl fmt::Display for GroupBy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Service => formatter.write_str("service"),
+            Self::Server => formatter.write_str("server"),
+            Self::Attribute(key) => formatter.write_str(key),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ranking {
+    pub max_groups: usize,
+    pub is_lowest_first: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -265,16 +313,13 @@ pub async fn list_metrics(
                  ORDER BY name",
             )?;
             let rows = statement.query_map([since, since], |row| {
-                let kind: String = row.get(1)?;
-                let services: String = row.get(5)?;
-
                 Ok(MetricSummary {
                     name: row.get(0)?,
-                    kind: MetricKind::read(&kind).unwrap_or(MetricKind::Gauge),
+                    kind: read_kind(row, 1)?,
                     is_monotonic: row.get(2)?,
                     unit: row.get(3)?,
                     description: row.get(4)?,
-                    services: serde_json::from_str(&services).unwrap_or_default(),
+                    services: read_json(row, 5)?,
                     series: row.get(6)?,
                     last_seen_at: row.get(7)?,
                 })
@@ -293,7 +338,7 @@ pub async fn list_metric_attributes(
         .read(move |conn| {
             let mut statement = conn.prepare(
                 "WITH pairs AS (
-                    SELECT key, attributes ->> key AS value
+                    SELECT key, attributes ->> ('/' || replace(replace(key, '~', '~0'), '/', '~1')) AS value
                     FROM (
                         SELECT unnest(json_keys(attributes)) AS key, attributes
                         FROM metric_series WHERE name = ?
@@ -332,6 +377,30 @@ struct Shape {
     is_monotonic: bool,
     unit: String,
     bounds: Option<String>,
+    edges: Vec<f64>,
+}
+
+impl Shape {
+    fn pick(&self, name: &str, wanted: Option<Aggregation>) -> Result<Aggregation> {
+        let aggregation = wanted
+            .unwrap_or_else(|| Aggregation::default_for(self.kind, self.is_monotonic));
+        if aggregation.fits(self.kind, self.is_monotonic) {
+            return Ok(aggregation);
+        }
+
+        Err(Error::new(
+            ErrorName::ValidationError,
+            format!(
+                "{name} is a {} metric, so it cannot be read with {}",
+                self.kind.as_str(),
+                aggregation.as_str()
+            ),
+        ))
+    }
+}
+
+fn to_json_pointer(key: &str) -> String {
+    format!("/{}", key.replace('~', "~0").replace('/', "~1"))
 }
 
 struct Selection {
@@ -347,7 +416,7 @@ impl Selection {
             Some(GroupBy::Service) => "s.service".to_string(),
             Some(GroupBy::Server) => "s.server_id".to_string(),
             Some(GroupBy::Attribute(key)) => {
-                params.push(SqlValue::Text(key.clone()));
+                params.push(SqlValue::Text(to_json_pointer(key)));
                 "s.attributes ->> ?".to_string()
             }
         };
@@ -370,7 +439,7 @@ impl Selection {
         for filter in &query.filters {
             let operator = if filter.is_negated { "IS DISTINCT FROM" } else { "=" };
             conditions.push(format!("(s.attributes ->> ?) {operator} ?"));
-            params.push(SqlValue::Text(filter.key.clone()));
+            params.push(SqlValue::Text(to_json_pointer(&filter.key)));
             params.push(SqlValue::Text(filter.value.clone()));
         }
 
@@ -387,6 +456,7 @@ impl Selection {
 struct Source {
     table: String,
     time: &'static str,
+    grain_ms: i64,
     last: &'static str,
     avg: &'static str,
     min: &'static str,
@@ -398,6 +468,7 @@ impl Source {
         Self {
             table: "metric_points".to_string(),
             time: "taken_at",
+            grain_ms: 0,
             last: "arg_max(value, taken_at)",
             avg: "avg(value)",
             min: "min(coalesce(min, value))",
@@ -406,21 +477,27 @@ impl Source {
     }
 
     fn rollups() -> Self {
-        let fresh = to_rollup_select(
-            &format!("(SELECT coalesce(max(hour) + {HOUR_MS}, 0) FROM metric_rollups)"),
-            &i64::MAX.to_string(),
+        let settled = format!(
+            "(SELECT coalesce(max(hour) + {HOUR_MS}, 0) - {SETTLING_MS} FROM metric_rollups)"
         );
+        let fresh = to_rollup_select(&settled, &i64::MAX.to_string());
 
         Self {
             table: format!(
-                "(SELECT * FROM metric_rollups UNION ALL BY NAME ({fresh})) AS rolled"
+                "(SELECT * FROM metric_rollups WHERE hour < {settled}
+                  UNION ALL BY NAME ({fresh})) AS rolled"
             ),
             time: "hour",
+            grain_ms: HOUR_MS,
             last: "arg_max(last, hour)",
-            avg: "avg(avg)",
+            avg: "sum(avg * points) / nullif(sum(points) FILTER (WHERE avg IS NOT NULL), 0)",
             min: "min(min)",
             max: "max(max)",
         }
+    }
+
+    fn is_hourly(&self) -> bool {
+        self.grain_ms == HOUR_MS
     }
 }
 
@@ -449,35 +526,45 @@ pub async fn query_metric(
     analytics: &Analytics,
     query: MetricQuery,
 ) -> Result<MetricResult> {
-    analytics.read(move |conn| run_query(conn, &query)).await?
-}
-
-fn resolve(
-    conn: &Connection,
-    query: &MetricQuery,
-) -> duckdb::Result<Result<(Shape, Aggregation)>> {
-    let Some(shape) = read_shape(conn, query)? else {
-        return Ok(Err(Error::new(
+    let Some((shape, aggregation)) = resolve(analytics, &query).await? else {
+        return Err(Error::new(
             ErrorName::NotFound,
             format!("No metric is called {}", query.name),
-        )));
+        ));
     };
 
-    let aggregation = query
-        .aggregation
-        .unwrap_or_else(|| Aggregation::default_for(shape.kind, shape.is_monotonic));
-    if !aggregation.fits(shape.kind, shape.is_monotonic) {
-        return Ok(Err(Error::new(
-            ErrorName::ValidationError,
-            format!(
-                "{} is a {} metric, so it cannot be read with {aggregation:?}",
-                query.name,
-                shape.kind.as_str()
-            ),
-        )));
-    }
+    analytics
+        .read(move |conn| run_query(conn, &query, shape, aggregation))
+        .await
+}
 
-    Ok(Ok((shape, aggregation)))
+pub async fn check_aggregation(
+    analytics: &Analytics,
+    name: &str,
+    aggregation: Aggregation,
+) -> Result<()> {
+    let query = MetricQuery {
+        name: name.to_string(),
+        aggregation: Some(aggregation),
+        ..MetricQuery::default()
+    };
+    resolve(analytics, &query).await?;
+
+    Ok(())
+}
+
+async fn resolve(
+    analytics: &Analytics,
+    query: &MetricQuery,
+) -> Result<Option<(Shape, Aggregation)>> {
+    let name = query.name.clone();
+    let Some(shape) = analytics.read(move |conn| read_shape(conn, &name)).await? else {
+        return Ok(None);
+    };
+
+    let aggregation = shape.pick(&query.name, query.aggregation)?;
+
+    Ok(Some((shape, aggregation)))
 }
 
 fn read_cells(
@@ -496,26 +583,24 @@ fn read_cells(
 fn run_query(
     conn: &Connection,
     query: &MetricQuery,
-) -> duckdb::Result<Result<MetricResult>> {
-    let (shape, aggregation) = match resolve(conn, query)? {
-        Ok(resolved) => resolved,
-        Err(error) => return Ok(Err(error)),
-    };
-
-    let range = (query.until - query.since).max(MINUTE_MS);
+    shape: Shape,
+    aggregation: Aggregation,
+) -> duckdb::Result<MetricResult> {
+    let range = query.until.saturating_sub(query.since).max(MINUTE_MS);
     let source = if range > RAW_RANGE_MS { Source::rollups() } else { Source::points() };
     let is_single = query.step_ms.is_some_and(|wanted| wanted >= range);
     let step_ms = if is_single {
         range
     } else {
-        pick_step(range, query.step_ms, source.time == "hour")
+        pick_step(range, query.step_ms, source.is_hourly())
     };
     let origin = if is_single { query.since } else { 0 };
-    let since = if is_single { query.since } else { query.since / step_ms * step_ms };
-    let times: Vec<i64> = (0..)
-        .map(|index| since + index * step_ms)
-        .take_while(|time| *time < query.until)
-        .collect();
+    let since =
+        if is_single { query.since } else { query.since.div_euclid(step_ms) * step_ms };
+    let times: Vec<i64> =
+        std::iter::successors(Some(since), |time| time.checked_add(step_ms))
+            .take_while(|time| *time < query.until)
+            .collect();
 
     let window = Window {
         source: &source,
@@ -528,7 +613,7 @@ fn run_query(
     let (series, is_truncated) = to_lines(cells, &times);
     let exemplars = read_exemplars(conn, query)?;
 
-    Ok(Ok(MetricResult {
+    Ok(MetricResult {
         name: query.name.clone(),
         kind: shape.kind,
         is_monotonic: shape.is_monotonic,
@@ -539,7 +624,7 @@ fn run_query(
         series,
         is_truncated,
         exemplars,
-    }))
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -558,35 +643,40 @@ pub struct MetricMeasure {
 pub async fn measure_metric(
     analytics: &Analytics,
     query: MetricQuery,
-    max_groups: usize,
+    ranking: Ranking,
 ) -> Result<Option<MetricMeasure>> {
-    analytics
-        .read(move |conn| {
-            let (shape, aggregation) = match resolve(conn, &query)? {
-                Ok(resolved) => resolved,
-                Err(error) if error.name() == ErrorName::NotFound => return Ok(Ok(None)),
-                Err(error) => return Ok(Err(error)),
-            };
+    let Some((shape, aggregation)) = resolve(analytics, &query).await? else {
+        return Ok(None);
+    };
 
+    let unit = shape.unit.clone();
+    let cells = analytics
+        .read(move |conn| {
             let source = Source::points();
             let window = Window {
                 source: &source,
                 origin: query.since,
-                step_ms: (query.until - query.since).max(1),
+                step_ms: query.until.saturating_sub(query.since).max(1),
                 since: query.since,
                 until: query.until,
             };
-            let mut readings: Vec<MetricReading> =
-                read_cells(conn, &query, &shape, aggregation, &window)?
-                    .into_iter()
-                    .map(|cell| MetricReading { group: cell.group, value: cell.value })
-                    .collect();
-            readings.sort_by(|a, b| b.value.total_cmp(&a.value));
-            readings.truncate(max_groups);
 
-            Ok(Ok(Some(MetricMeasure { aggregation, unit: shape.unit, readings })))
+            read_cells(conn, &query, &shape, aggregation, &window)
         })
-        .await?
+        .await?;
+
+    let mut readings: Vec<MetricReading> = cells
+        .into_iter()
+        .map(|cell| MetricReading { group: cell.group, value: cell.value })
+        .collect();
+    if ranking.is_lowest_first {
+        readings.sort_by(|a, b| a.value.total_cmp(&b.value));
+    } else {
+        readings.sort_by(|a, b| b.value.total_cmp(&a.value));
+    }
+    readings.truncate(ranking.max_groups);
+
+    Ok(Some(MetricMeasure { aggregation, unit, readings }))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -608,82 +698,207 @@ pub async fn measure_metric_windows(
     query: MetricQuery,
     window_ms: i64,
 ) -> Result<Option<MetricWindows>> {
-    analytics
-        .read(move |conn| {
-            let (shape, aggregation) = match resolve(conn, &query)? {
-                Ok(resolved) => resolved,
-                Err(error) if error.name() == ErrorName::NotFound => return Ok(Ok(None)),
-                Err(error) => return Ok(Err(error)),
-            };
+    let Some((shape, aggregation)) = resolve(analytics, &query).await? else {
+        return Ok(None);
+    };
 
+    let unit = shape.unit.clone();
+    let step_ms = window_ms.max(MINUTE_MS);
+    let offset = query.since.rem_euclid(step_ms);
+    let since = if offset == 0 {
+        query.since
+    } else {
+        query.since.saturating_add(step_ms - offset)
+    };
+    let cells = analytics
+        .read(move |conn| {
             let source = Source::points();
             let window = Window {
                 source: &source,
                 origin: 0,
-                step_ms: window_ms.max(MINUTE_MS),
-                since: query.since,
+                step_ms,
+                since,
                 until: query.until,
             };
-            let mut windows: Vec<MetricWindow> =
-                read_cells(conn, &query, &shape, aggregation, &window)?
-                    .into_iter()
-                    .map(|cell| MetricWindow {
-                        at: cell.bucket,
-                        group: cell.group,
-                        value: cell.value,
-                    })
-                    .collect();
-            windows.sort_by_key(|window| window.at);
 
-            Ok(Ok(Some(MetricWindows { aggregation, unit: shape.unit, windows })))
+            read_cells(conn, &query, &shape, aggregation, &window)
         })
-        .await?
+        .await?;
+
+    let mut windows: Vec<MetricWindow> = cells
+        .into_iter()
+        .map(|cell| MetricWindow {
+            at: cell.bucket,
+            group: cell.group,
+            value: cell.value,
+        })
+        .collect();
+    windows.sort_by_key(|window| window.at);
+
+    Ok(Some(MetricWindows { aggregation, unit, windows }))
 }
 
-pub fn format_metric_value(value: f64, unit: &str, aggregation: Aggregation) -> String {
-    let amount = format_amount(value, unit);
+const BYTE_UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+const COMPACT_UNITS: [(f64, &str); 4] = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")];
 
+pub fn format_metric_value(value: f64, unit: &str, aggregation: Aggregation) -> String {
     match aggregation {
-        Aggregation::RatePerMinute => format!("{amount}/min"),
-        Aggregation::Rate => format!("{amount}/s"),
         Aggregation::CountRate => format!("{}/s", format_number(value)),
-        Aggregation::P50 | Aggregation::P90 | Aggregation::P95 | Aggregation::P99 => {
-            format!("{} {amount}", aggregation.label())
-        }
-        _ => amount,
+        Aggregation::Rate => format!("{}/s", format_amount(value, unit)),
+        Aggregation::RatePerMinute => format!("{}/min", format_amount(value, unit)),
+        _ => format_amount(value, unit),
     }
 }
 
 fn format_amount(value: f64, unit: &str) -> String {
-    match unit {
-        "s" => format_seconds(value),
-        "ms" => format_seconds(value / 1_000.0),
-        "By" => format!("{} B", format_number(value)),
-        "1" => format!("{}%", format_number(value * 100.0)),
-        "%" => format!("{}%", format_number(value)),
-        _ => {
-            let word = unit.trim_matches(['{', '}']).trim();
-            if word.is_empty() {
-                return format_number(value);
-            }
+    if let Some(micros) = to_micros(unit).filter(|_| value >= 0.0) {
+        return format_micros(value * micros);
+    }
 
-            let plural = if word.ends_with('s') { "" } else { "s" };
-            format!("{} {word}{plural}", format_number(value))
-        }
+    if let Some(size) = to_byte_size(unit).filter(|_| value >= 0.0) {
+        return format_bytes(value * size);
+    }
+
+    let word = to_unit_word(unit);
+    if word.is_empty() {
+        return format_number(value);
+    }
+
+    if word.starts_with('%') || word.starts_with('/') {
+        return format!("{}{word}", format_number(value));
+    }
+
+    format!("{} {word}", format_number(value))
+}
+
+fn to_micros(unit: &str) -> Option<f64> {
+    match unit {
+        "s" => Some(1_000_000.0),
+        "ms" => Some(1_000.0),
+        "us" => Some(1.0),
+        "ns" => Some(0.001),
+        _ => None,
     }
 }
 
-fn format_seconds(seconds: f64) -> String {
-    if seconds < 1.0 {
-        return format!("{} ms", format_number(seconds * 1_000.0));
+fn to_byte_size(unit: &str) -> Option<f64> {
+    match unit {
+        "By" => Some(1.0),
+        "KiBy" => Some(1_024.0),
+        "MiBy" => Some(1_024_f64.powi(2)),
+        "GiBy" => Some(1_024_f64.powi(3)),
+        "TiBy" => Some(1_024_f64.powi(4)),
+        "KBy" => Some(1_000.0),
+        "MBy" => Some(1_000_f64.powi(2)),
+        "GBy" => Some(1_000_f64.powi(3)),
+        _ => None,
+    }
+}
+
+fn to_unit_word(unit: &str) -> String {
+    let known = match unit {
+        "1" => Some(""),
+        "%" => Some("%"),
+        "us" => Some("µs"),
+        "By" => Some("bytes"),
+        "KiBy" => Some("KiB"),
+        "MiBy" => Some("MiB"),
+        "GiBy" => Some("GiB"),
+        "TiBy" => Some("TiB"),
+        "KBy" => Some("kB"),
+        "MBy" => Some("MB"),
+        "GBy" => Some("GB"),
+        "bit" => Some("bits"),
+        "By/s" => Some("B/s"),
+        "Cel" => Some("°C"),
+        _ => None,
+    };
+    if let Some(word) = known {
+        return word.to_string();
     }
 
-    format!("{} s", format_number(seconds))
+    let annotation = unit
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+        .map(str::trim)
+        .filter(|annotation| !annotation.is_empty());
+    match annotation {
+        Some(word) if word.ends_with('s') => word.to_string(),
+        Some(word) => format!("{word}s"),
+        None => unit.replace(['{', '}'], "").trim().to_string(),
+    }
+}
+
+fn format_micros(micros: f64) -> String {
+    if micros < 1_000.0 {
+        return format!("{} µs", micros.round());
+    }
+
+    if micros < 1_000_000.0 {
+        let ms = micros / 1_000.0;
+        let text =
+            if ms < 10.0 { trim_zeros(format!("{ms:.1}")) } else { format!("{ms:.0}") };
+        return format!("{text} ms");
+    }
+
+    let seconds = micros / 1_000_000.0;
+    let text = if seconds < 10.0 {
+        trim_zeros(format!("{seconds:.2}"))
+    } else {
+        format!("{seconds:.1}")
+    };
+
+    format!("{text} s")
+}
+
+fn format_bytes(bytes: f64) -> String {
+    let mut value = bytes;
+    let mut index = 0;
+    while value >= 1_024.0 && index < BYTE_UNITS.len() - 1 {
+        value /= 1_024.0;
+        index += 1;
+    }
+
+    let text = if value >= 10.0 || value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.1}")
+    };
+
+    format!("{text} {}", BYTE_UNITS[index])
 }
 
 fn format_number(value: f64) -> String {
-    let text =
-        if value.abs() >= 100.0 { format!("{value:.0}") } else { format!("{value:.2}") };
+    if value.abs() >= 10_000.0 {
+        let (size, suffix) = COMPACT_UNITS
+            .into_iter()
+            .find(|(size, _)| value.abs() >= *size)
+            .unwrap_or((1.0, ""));
+        let text = trim_zeros(format!("{:.1}", value / size));
+
+        return format!("{text}{suffix}");
+    }
+
+    let text = trim_zeros(format!("{:.2}", value.abs()));
+    let (whole, fraction) = text
+        .split_once('.')
+        .map_or((text.as_str(), None), |(whole, fraction)| (whole, Some(fraction)));
+    let mut grouped = String::new();
+    for (index, digit) in whole.chars().enumerate() {
+        if index > 0 && (whole.len() - index) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+
+    let sign = if value < 0.0 && text != "0" { "-" } else { "" };
+    match fraction {
+        Some(fraction) => format!("{sign}{grouped}.{fraction}"),
+        None => format!("{sign}{grouped}"),
+    }
+}
+
+fn trim_zeros(text: String) -> String {
     if !text.contains('.') {
         return text;
     }
@@ -691,20 +906,45 @@ fn format_number(value: f64) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-fn read_shape(conn: &Connection, query: &MetricQuery) -> duckdb::Result<Option<Shape>> {
+fn read_kind(row: &Row, column: usize) -> duckdb::Result<MetricKind> {
+    let text: String = row.get(column)?;
+
+    MetricKind::read(&text).ok_or_else(|| {
+        duckdb::Error::FromSqlConversionFailure(
+            column,
+            Type::Text,
+            format!("unknown metric kind {text}").into(),
+        )
+    })
+}
+
+fn read_json<T: DeserializeOwned>(row: &Row, column: usize) -> duckdb::Result<T> {
+    let text: String = row.get(column)?;
+
+    serde_json::from_str(&text).map_err(|error| {
+        duckdb::Error::FromSqlConversionFailure(column, Type::Text, Box::new(error))
+    })
+}
+
+fn read_shape(conn: &Connection, name: &str) -> duckdb::Result<Option<Shape>> {
     conn.query_row(
         "SELECT arg_max(kind, last_seen), bool_or(is_monotonic), arg_max(unit, last_seen),
                 arg_max(CAST(bounds AS VARCHAR), last_seen)
          FROM metric_series WHERE name = ? HAVING count(*) > 0",
-        [&query.name],
+        [name],
         |row| {
-            let kind: String = row.get(0)?;
+            let bounds: Option<String> = row.get(3)?;
+            let edges = match bounds {
+                Some(_) => read_json(row, 3)?,
+                None => Vec::new(),
+            };
 
             Ok(Shape {
-                kind: MetricKind::read(&kind).unwrap_or(MetricKind::Gauge),
+                kind: read_kind(row, 0)?,
                 is_monotonic: row.get(1)?,
                 unit: row.get(2)?,
-                bounds: row.get(3)?,
+                bounds,
+                edges,
             })
         },
     )
@@ -712,8 +952,8 @@ fn read_shape(conn: &Connection, query: &MetricQuery) -> duckdb::Result<Option<S
 }
 
 fn pick_step(range: i64, wanted: Option<i64>, is_hourly: bool) -> i64 {
-    let floor = if is_hourly { HOUR_MS } else { MINUTE_MS };
-    let floor = floor.max(range / MAX_BUCKETS);
+    let grain = if is_hourly { HOUR_MS } else { MINUTE_MS };
+    let floor = (range / (MAX_BUCKETS - 1) / grain + 1) * grain;
     if let Some(wanted) = wanted {
         return wanted.max(floor);
     }
@@ -723,7 +963,7 @@ fn pick_step(range: i64, wanted: Option<i64>, is_hourly: bool) -> i64 {
     STEPS_MS
         .into_iter()
         .find(|step| *step >= ideal && *step >= floor)
-        .unwrap_or(24 * HOUR_MS)
+        .unwrap_or(floor.max(DAY_MS))
 }
 
 struct Cell {
@@ -740,7 +980,7 @@ fn read_values(
     window: &Window,
 ) -> duckdb::Result<Vec<Cell>> {
     let selection = Selection::new(query, None);
-    let Source { table, time, .. } = window.source;
+    let Source { table, time, grain_ms, .. } = window.source;
     let step_secs = window.step_ms as f64 / 1_000.0;
 
     let value = match aggregation {
@@ -764,21 +1004,29 @@ fn read_values(
             sel = selection.sql
         ),
         None => {
-            let (inner, outer) = match aggregation {
-                Aggregation::Avg => (window.source.avg, "avg"),
-                Aggregation::Min => (window.source.min, "min"),
-                Aggregation::Max => (window.source.max, "max"),
-                _ => (window.source.last, "sum"),
+            let (inner, outer, fresh) = match aggregation {
+                Aggregation::Avg => (window.source.avg, "avg", String::new()),
+                Aggregation::Min => (window.source.min, "min", String::new()),
+                Aggregation::Max => (window.source.max, "max", String::new()),
+                _ => (
+                    window.source.last,
+                    "sum",
+                    format!(
+                        "AND seen + {grain_ms} >= least(bucket + {}, {}) - {STALE_MS}",
+                        window.step_ms, window.until
+                    ),
+                ),
             };
             format!(
                 "WITH {sel}
                  SELECT g, bucket, {outer}(v) FROM (
-                    SELECT series_id, g, ({time} - ?) // ? * ? + ? AS bucket, {inner} AS v
+                    SELECT series_id, g, ({time} - ?) // ? * ? + ? AS bucket, {inner} AS v,
+                           max({time}) AS seen
                     FROM {table} JOIN sel USING (series_id)
                     WHERE {time} >= ? AND {time} < ?
                     GROUP BY series_id, g, bucket
                  )
-                 WHERE v IS NOT NULL
+                 WHERE v IS NOT NULL {fresh}
                  GROUP BY g, bucket",
                 sel = selection.sql
             )
@@ -797,18 +1045,12 @@ fn read_values(
         ))
     })?;
 
-    let is_rate = matches!(
-        aggregation,
-        Aggregation::Rate | Aggregation::RatePerMinute | Aggregation::CountRate
-    );
     let mut cells = Vec::new();
     for row in rows {
         let (group, bucket, value) = row?;
-        let Some(value) = value.filter(|value| value.is_finite()) else { continue };
-        let covered = (window.until - bucket).clamp(1, window.step_ms);
-        let value =
-            if is_rate { value * window.step_ms as f64 / covered as f64 } else { value };
-        cells.push(Cell { group, bucket, value });
+        if let Some(value) = value.filter(|value| value.is_finite()) {
+            cells.push(Cell { group, bucket, value });
+        }
     }
 
     Ok(cells)
@@ -821,11 +1063,6 @@ fn read_quantiles(
     window: &Window,
     quantile: f64,
 ) -> duckdb::Result<Vec<Cell>> {
-    let bounds: Vec<f64> = shape
-        .bounds
-        .as_deref()
-        .and_then(|bounds| serde_json::from_str(bounds).ok())
-        .unwrap_or_default();
     let selection = Selection::new(query, shape.bounds.as_deref());
     let Source { table, time, .. } = window.source;
     let sql = format!(
@@ -848,14 +1085,17 @@ fn read_quantiles(
 
     let mut statement = conn.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(params), |row| {
-        Ok((row.get::<_, Option<String>>(0)?, row.get(1)?, row.get::<_, String>(2)?))
+        Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, i64>(1)?,
+            read_json::<Vec<u64>>(row, 2)?,
+        ))
     })?;
 
     let mut cells = Vec::new();
     for row in rows {
         let (group, bucket, buckets) = row?;
-        let buckets: Vec<u64> = serde_json::from_str(&buckets).unwrap_or_default();
-        if let Some(value) = quantile_of(&bounds, &buckets, quantile) {
+        if let Some(value) = quantile_of(&shape.edges, &buckets, quantile) {
             cells.push(Cell { group, bucket, value });
         }
     }
@@ -944,8 +1184,6 @@ mod tests {
     use crate::analytics::metrics::ingest::{SeriesRow, Temporality};
     use crate::analytics::metrics::series::PointRow;
     use crate::analytics::metrics::store::{append_metrics, roll_up_metrics};
-
-    const DAY_MS: i64 = 24 * HOUR_MS;
 
     fn series(series_id: i64, name: &str, kind: MetricKind, route: &str) -> SeriesRow {
         SeriesRow {
@@ -1181,5 +1419,310 @@ mod tests {
             Aggregation::default_for(MetricKind::Histogram, false),
             Aggregation::P95
         );
+    }
+
+    fn open(name: &str) -> (std::path::PathBuf, Analytics) {
+        let dir = std::env::temp_dir()
+            .join(format!("daroyan-metric-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let analytics = Analytics::open(&dir.join("live.duckdb")).unwrap();
+        analytics.run(run_migrations).unwrap();
+
+        (dir, analytics)
+    }
+
+    fn gauge_point(series_id: i64, at: i64, value: f64) -> PointRow {
+        PointRow {
+            series_id,
+            at,
+            value: Some(value),
+            ..PointRow::default()
+        }
+    }
+
+    fn delta_point(series_id: i64, at: i64, delta: f64) -> PointRow {
+        PointRow {
+            series_id,
+            at,
+            value: Some(delta),
+            delta: Some(delta),
+            ..PointRow::default()
+        }
+    }
+
+    fn values(result: &MetricResult, line: usize) -> Vec<f64> {
+        result.series[line].values.iter().flatten().copied().collect()
+    }
+
+    #[tokio::test]
+    async fn caps_buckets_for_huge_ranges() {
+        let (dir, analytics) = open("huge");
+        let rows = [series(1, "emails.sent", MetricKind::Sum, "/a")];
+        let points = [delta_point(1, 10 * DAY_MS, 1.0)];
+        analytics.run(|conn| append_metrics(conn, &rows, &points)).unwrap();
+
+        for step_ms in [None, Some(1)] {
+            let query = MetricQuery {
+                name: "emails.sent".into(),
+                since: 0,
+                until: i64::MAX,
+                step_ms,
+                ..MetricQuery::default()
+            };
+            let result = query_metric(&analytics, query).await.unwrap();
+            assert!(result.times.len() as i64 <= MAX_BUCKETS, "{}", result.times.len());
+        }
+
+        for range in [HOUR_MS, 400 * DAY_MS, i64::MAX] {
+            let step = pick_step(range, None, true);
+            assert!(range / step < MAX_BUCKETS, "{range}");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn does_not_stretch_the_last_partial_bucket() {
+        let (dir, analytics) = open("edge");
+        let start = 10 * DAY_MS;
+        let rows = [series(1, "emails.sent", MetricKind::Sum, "/a")];
+        let points: Vec<PointRow> = (1..=5)
+            .map(|minute| delta_point(1, start + minute * MINUTE_MS, 60.0))
+            .collect();
+        analytics.run(|conn| append_metrics(conn, &rows, &points)).unwrap();
+
+        let query = MetricQuery {
+            name: "emails.sent".into(),
+            aggregation: Some(Aggregation::Rate),
+            since: start,
+            until: start + 5 * MINUTE_MS + 1_000,
+            step_ms: Some(MINUTE_MS),
+            ..MetricQuery::default()
+        };
+        let result = query_metric(&analytics, query).await.unwrap();
+        assert_eq!(values(&result, 0), [1.0; 5]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn ranks_the_lowest_groups_first_for_below_rules() {
+        let (dir, analytics) = open("ranking");
+        let until = 10 * DAY_MS;
+        let rows = [
+            series(1, "pool.free", MetricKind::Gauge, "/a"),
+            series(2, "pool.free", MetricKind::Gauge, "/b"),
+            series(3, "pool.free", MetricKind::Gauge, "/c"),
+        ];
+        let points = [
+            gauge_point(1, until - MINUTE_MS, 1.0),
+            gauge_point(2, until - MINUTE_MS, 2.0),
+            gauge_point(3, until - MINUTE_MS, 3.0),
+        ];
+        analytics.run(|conn| append_metrics(conn, &rows, &points)).unwrap();
+
+        let query = MetricQuery {
+            name: "pool.free".into(),
+            group_by: GroupBy::read("route"),
+            since: until - 5 * MINUTE_MS,
+            until,
+            ..MetricQuery::default()
+        };
+        let lowest = Ranking { max_groups: 1, is_lowest_first: true };
+        let measure = measure_metric(&analytics, query.clone(), lowest)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            measure.readings,
+            [MetricReading { group: Some("/a".into()), value: 1.0 }]
+        );
+
+        let highest = Ranking { max_groups: 1, is_lowest_first: false };
+        let measure = measure_metric(&analytics, query, highest).await.unwrap().unwrap();
+        assert_eq!(measure.readings[0].group.as_deref(), Some("/c"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn leaves_stale_series_out_of_the_last_value() {
+        let (dir, analytics) = open("stale");
+        let until = 10 * DAY_MS;
+        let mut restarted = series(2, "queue.depth", MetricKind::Gauge, "/a");
+        restarted.instance = Some("worker-2".into());
+        let rows = [series(1, "queue.depth", MetricKind::Gauge, "/a"), restarted];
+        let points = [
+            gauge_point(1, until - 30 * MINUTE_MS, 100.0),
+            gauge_point(2, until - MINUTE_MS, 5.0),
+        ];
+        analytics.run(|conn| append_metrics(conn, &rows, &points)).unwrap();
+
+        let query = MetricQuery {
+            name: "queue.depth".into(),
+            aggregation: Some(Aggregation::Last),
+            since: until - HOUR_MS,
+            until,
+            ..MetricQuery::default()
+        };
+        let ranking = Ranking { max_groups: 10, is_lowest_first: false };
+        let measure = measure_metric(&analytics, query.clone(), ranking)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(measure.readings[0].value, 5.0);
+
+        let chart = MetricQuery { step_ms: Some(HOUR_MS), ..query };
+        let result = query_metric(&analytics, chart).await.unwrap();
+        assert_eq!(values(&result, 0), [5.0]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn reads_late_points_and_weights_rollup_averages() {
+        let (dir, analytics) = open("late");
+        let start = 10 * DAY_MS;
+        let rows = [
+            series(1, "queue.depth", MetricKind::Gauge, "/a"),
+            series(2, "jobs.done", MetricKind::Sum, "/a"),
+        ];
+        let mut points: Vec<PointRow> = (0..60)
+            .map(|minute| gauge_point(1, start + minute * MINUTE_MS, 1.0))
+            .collect();
+        points.extend([
+            gauge_point(1, start + HOUR_MS, 100.0),
+            gauge_point(1, start + 6 * HOUR_MS, 1.0),
+            delta_point(2, start + 30 * MINUTE_MS, 2.0),
+            delta_point(2, start + 5 * HOUR_MS, 1.0),
+        ]);
+        analytics
+            .run(|conn| {
+                append_metrics(conn, &rows, &points)?;
+                roll_up_metrics(conn, start + 2 * HOUR_MS)?;
+                roll_up_metrics(conn, start + 7 * HOUR_MS)
+            })
+            .unwrap();
+
+        let late = [delta_point(2, start + 5 * HOUR_MS + 30 * MINUTE_MS, 4.0)];
+        analytics.run(|conn| append_metrics(conn, &[], &late)).unwrap();
+
+        let query = |name: &str, aggregation, step_ms| MetricQuery {
+            name: name.into(),
+            aggregation: Some(aggregation),
+            since: start - DAY_MS,
+            until: start + DAY_MS,
+            step_ms: Some(step_ms),
+            ..MetricQuery::default()
+        };
+
+        let done =
+            query_metric(&analytics, query("jobs.done", Aggregation::Increase, HOUR_MS))
+                .await
+                .unwrap();
+        assert_eq!(values(&done, 0), [2.0, 5.0]);
+
+        let depth =
+            query_metric(&analytics, query("queue.depth", Aggregation::Avg, 2 * HOUR_MS))
+                .await
+                .unwrap();
+        let first = depth.series[0].values
+            [depth.times.iter().position(|at| *at == start).unwrap()];
+        assert_eq!(first, Some(160.0 / 61.0));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn starts_backtest_windows_on_a_boundary() {
+        let (dir, analytics) = open("windows");
+        let start = 10 * DAY_MS;
+        let rows = [series(1, "queue.depth", MetricKind::Gauge, "/a")];
+        let points = [
+            gauge_point(1, start + 2 * MINUTE_MS, 9.0),
+            gauge_point(1, start + 6 * MINUTE_MS, 1.0),
+        ];
+        analytics.run(|conn| append_metrics(conn, &rows, &points)).unwrap();
+
+        let query = MetricQuery {
+            name: "queue.depth".into(),
+            aggregation: Some(Aggregation::Max),
+            since: start + 90_000,
+            until: start + 10 * MINUTE_MS,
+            ..MetricQuery::default()
+        };
+        let measured = measure_metric_windows(&analytics, query, 5 * MINUTE_MS)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            measured.windows,
+            [MetricWindow { at: start + 5 * MINUTE_MS, group: None, value: 1.0 }]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn reads_attribute_keys_that_look_like_json_paths() {
+        let (dir, analytics) = open("keys");
+        let until = 10 * DAY_MS;
+        let mut row = series(1, "queue.depth", MetricKind::Gauge, "/a");
+        row.attributes = r#"{"$env":"prod","a/b":"x","t~":"y"}"#.into();
+        let points = [gauge_point(1, until - MINUTE_MS, 7.0)];
+        analytics.run(|conn| append_metrics(conn, &[row], &points)).unwrap();
+
+        let query = MetricQuery {
+            name: "queue.depth".into(),
+            filters: MetricFilter::read_all("$env=prod,t~=y"),
+            group_by: GroupBy::read("a/b"),
+            since: until - HOUR_MS,
+            until,
+            step_ms: Some(HOUR_MS),
+            ..MetricQuery::default()
+        };
+        let result = query_metric(&analytics, query).await.unwrap();
+        assert_eq!(result.series[0].group.as_deref(), Some("x"));
+        assert_eq!(values(&result, 0), [7.0]);
+
+        let attributes = list_metric_attributes(&analytics, "queue.depth".into())
+            .await
+            .unwrap();
+        let keys: Vec<(&str, &str)> = attributes
+            .iter()
+            .map(|attribute| (attribute.key.as_str(), attribute.values[0].value.as_str()))
+            .collect();
+        assert_eq!(keys, [("$env", "prod"), ("a/b", "x"), ("t~", "y")]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn formats_values_like_the_web_app() {
+        assert_eq!(format_metric_value(0.5, "1", Aggregation::Last), "0.5");
+        assert_eq!(format_metric_value(42.0, "1", Aggregation::Last), "42");
+        assert_eq!(format_metric_value(2_048.0, "By", Aggregation::Last), "2 KB");
+        assert_eq!(format_metric_value(512.0, "By", Aggregation::Last), "512 B");
+        assert_eq!(
+            format_metric_value(3.0, "{request}", Aggregation::Rate),
+            "3 requests/s"
+        );
+        assert_eq!(
+            format_metric_value(1_200.0, "{job}", Aggregation::RatePerMinute),
+            "1,200 jobs/min"
+        );
+        assert_eq!(format_metric_value(0.25, "s", Aggregation::P95), "250 ms");
+        assert_eq!(format_metric_value(250.0, "us", Aggregation::Avg), "250 µs");
+        assert_eq!(format_metric_value(12.5, "%", Aggregation::Last), "12.5%");
+        assert_eq!(format_metric_value(25_000.0, "", Aggregation::Last), "25K");
+    }
+
+    #[test]
+    fn group_by_round_trips_as_text() {
+        let parsed: Option<GroupBy> = serde_json::from_str(r#""server_id""#).unwrap();
+        assert_eq!(parsed, Some(GroupBy::Server));
+        assert_eq!(serde_json::to_string(&GroupBy::from("route")).unwrap(), r#""route""#);
+        assert_eq!(GroupBy::read("  "), None);
     }
 }

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnVisibilityState } from '@tanstack/react-table';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
 
 import { AlertBanners } from '~/components/alerts/alert-banners';
 import { Icon } from '~/components/icons/icon';
@@ -11,6 +11,7 @@ import { EmptyState, NoResults } from '~/components/ui/empty-state';
 import { PageBar } from '~/components/ui/page-bar';
 import { RadioMenu } from '~/components/ui/radio-menu';
 import { ViewsToolbar } from '~/components/ui/views-toolbar';
+import { useListParams } from '~/hooks/use-list-params';
 import { METRIC_COLUMN_LABELS, useMetricsTable } from '~/hooks/use-metrics-table';
 import { useStoredState } from '~/hooks/use-stored-state';
 import { metricQueries } from '~/queries/metrics';
@@ -32,10 +33,9 @@ export function meta() {
 }
 
 export default function MetricsPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { searchParams, search, setParams, reset } = useListParams();
   const range = readMetricRange(searchParams.get('range'));
   const view = VIEWS.find((item) => item.value === searchParams.get('view'))?.value ?? 'all';
-  const search = searchParams.get('q') ?? '';
 
   const [hiddenColumns, setHiddenColumns] = useStoredState<ColumnVisibilityState>(COLUMNS_KEY, {});
 
@@ -48,21 +48,6 @@ export default function MetricsPage() {
         metric.services.some((service) => service.toLowerCase().includes(text)))
   );
   const table = useMetricsTable({ metrics: shown, columnVisibility: hiddenColumns });
-
-  const setParams = (changes: Record<string, string | null>) =>
-    setSearchParams(
-      (params) => {
-        for (const [key, value] of Object.entries(changes)) {
-          if (value) {
-            params.set(key, value);
-          } else {
-            params.delete(key);
-          }
-        }
-        return params;
-      },
-      { replace: true }
-    );
 
   if (metrics && metrics.length === 0 && !searchParams.get('range')) {
     return (
@@ -105,12 +90,12 @@ export default function MetricsPage() {
           search={search}
           onSearchChange={(next) => setParams({ q: next || null })}
           isViewChanged={view !== 'all' || !!search}
-          onReset={() => setSearchParams({}, { replace: true })}
+          onReset={reset}
           actions={<ColumnMenu labels={METRIC_COLUMN_LABELS} hidden={hiddenColumns} onChange={setHiddenColumns} />}
         />
         <DataTable table={table} label="Metrics" size="sm" isLoading={isLoading} />
         {metrics && shown.length === 0 && (
-          <NoResults title="No metrics found" onReset={() => setSearchParams({}, { replace: true })} />
+          <NoResults title="No metrics found" onReset={reset} />
         )}
       </div>
     </div>

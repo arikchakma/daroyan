@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { Icon } from '~/components/icons/icon';
 import { Button } from '~/components/ui/button';
 import { PageBar } from '~/components/ui/page-bar';
-import { getDefaultAggregation } from '~/utils/metrics';
+import { getDefaultAggregation, getMetricTracesLink } from '~/utils/metrics';
 import type { MetricAggregation, MetricSummary } from '~/utils/metrics';
 
 type MetricTopBarProps = {
@@ -34,15 +34,13 @@ export function MetricTopBar(props: MetricTopBarProps) {
   if (groupBy) {
     alertParams.set('metricGroupBy', groupBy);
   }
-  const traceService = service ?? (metric.services.length === 1 ? metric.services[0] : undefined);
-  const tracesLink = traceService ? `/traces?${new URLSearchParams({ service: traceService })}` : '/traces';
 
   return (
     <PageBar backTo="/metrics" icon="chart-line" title="Metrics">
       <Button nativeButton={false} variant="secondary" render={<Link to={`/alerts/new?${alertParams}`} />} className="w-fit">
         Create Alert
       </Button>
-      <Button nativeButton={false} render={<Link to={tracesLink} />} className="w-fit">
+      <Button nativeButton={false} render={<Link to={getMetricTracesLink(metric, service)} />} className="w-fit">
         <Icon name="layers" />
         View Traces
       </Button>

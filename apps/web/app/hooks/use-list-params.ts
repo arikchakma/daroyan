@@ -4,23 +4,27 @@ export function useListParams() {
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.get('q') ?? '';
 
-  const setParam = (key: string, value: string | null) =>
+  const setParams = (changes: Record<string, string | null>) =>
     setSearchParams(
       (params) => {
-        if (value) {
-          params.set(key, value);
-        } else {
-          params.delete(key);
+        for (const [key, value] of Object.entries(changes)) {
+          if (value) {
+            params.set(key, value);
+          } else {
+            params.delete(key);
+          }
         }
         return params;
       },
       { replace: true }
     );
 
+  const setParam = (key: string, value: string | null) => setParams({ [key]: value });
+
   const setSearch = (next: string) => setParam('q', next || null);
   const reset = () => setSearchParams({}, { replace: true });
 
-  return { searchParams, search, setParam, setSearch, reset };
+  return { searchParams, search, setParam, setParams, setSearch, reset };
 }
 
 export function useViewParams<TView extends string>(views: readonly TView[]) {

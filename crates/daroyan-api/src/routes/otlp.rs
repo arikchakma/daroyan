@@ -365,7 +365,7 @@ async fn accept_metrics(
         tracing::warn!(token_id = %token.id, %error, "count rejected metric points");
     }
 
-    let rejected = admission.rejected + parsed.skipped;
+    let rejected = admission.rejected + admission.out_of_order + parsed.skipped;
     let response = ExportMetricsServiceResponse {
         partial_success: (rejected > 0).then(|| ExportMetricsPartialSuccess {
             rejected_data_points: i64::try_from(rejected).unwrap_or(i64::MAX),
@@ -385,6 +385,13 @@ fn rejection_message(
         return format!(
             "Dropped {} points of new series. {metric} or this token reached its limit of {} series per metric or {} per token",
             admission.rejected, limits.per_metric, limits.per_token
+        );
+    }
+
+    if skipped == 0 {
+        return format!(
+            "Dropped {} points that were not newer than the last point of their series",
+            admission.out_of_order
         );
     }
 

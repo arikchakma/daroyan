@@ -18,8 +18,8 @@ import {
   RESOLVE_OPTIONS,
   WINDOW_OPTIONS,
 } from '~/utils/alerts';
-import { joinNames, pluralize } from '~/utils/format';
-import { getAggregations, getDefaultAggregation, getMetricUnitWord } from '~/utils/metrics';
+import { getUnitSuffix, joinNames, pluralize } from '~/utils/format';
+import { getAggregations, getDefaultAggregation, getMetricLimitUnit } from '~/utils/metrics';
 import type { MetricAggregation, MetricSummary } from '~/utils/metrics';
 
 export type ScopeKind = 'all' | 'label' | 'picked';
@@ -185,14 +185,21 @@ export function isOptionalNumber(value: string) {
   return number === null || Number.isFinite(number);
 }
 
+function readLimitValue(kind: ConditionKind, text: string) {
+  const value = readNumber(text);
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+  return kind === 'metric' || value > 0 ? value : null;
+}
+
 export function readLimit(form: RuleFormState) {
-  const value = readNumber(form.critical);
-  return value !== null && Number.isFinite(value) && value > 0 ? value : null;
+  return readLimitValue(form.kind, form.critical);
 }
 
 function readRecoveryLimit(form: RuleFormState) {
-  const warning = readNumber(form.warning);
-  if (hasWarning(form.kind) && form.isWarningOpen && warning !== null && Number.isFinite(warning) && warning > 0) {
+  const warning = readLimitValue(form.kind, form.warning);
+  if (hasWarning(form.kind) && form.isWarningOpen && warning !== null) {
     return warning;
   }
   return readLimit(form);
@@ -228,11 +235,11 @@ export function getTraceLimitHint(form: RuleFormState) {
 }
 
 export function getMetricLimitHint(form: RuleFormState, metric: MetricSummary) {
-  const aggregation = getAggregations(metric).find((item) => item.value === (form.metricAggregation || getDefaultAggregation(metric)));
+  const value = form.metricAggregation || getDefaultAggregation(metric);
+  const aggregation = getAggregations(metric).find((item) => item.value === value);
   const side = form.metricBelow ? 'below' : 'above';
   const group = form.metricGroupBy ? ` for each ${form.metricGroupBy}` : '';
-  const unit = getMetricUnitWord(metric.unit);
-  const limit = unit ? `${form.critical} ${unit}` : form.critical;
+  const limit = formatAmount(form.critical, getMetricLimitUnit(metric.unit, value));
 
   return `Fires when the ${aggregation?.label.toLowerCase() ?? 'value'} of ${metric.name} is ${side} ${limit} within ${formatSpan(form.metricWithin)}${group}.`;
 }
@@ -287,11 +294,8 @@ export function hasWarning(kind: ConditionKind) {
   return hasThreshold(kind) && kind !== 'logs';
 }
 
-export function formatAmount(value: number, unit: string) {
-  if (unit === '%') {
-    return `${value}%`;
-  }
-  return unit ? `${value} ${unit}` : `${value}`;
+export function formatAmount(value: number | string, unit: string) {
+  return `${value}${getUnitSuffix(unit)}`;
 }
 
 export function formatSpan(seconds: number) {
@@ -305,6 +309,16 @@ export function getMatchesText(names: string[], noun: string) {
 
   const count = pluralize(names.length, noun);
   return `Matches ${count}: ${joinNames(names)}.`;
+}
+
+function getInitialCritical(initial?: Schemas['Condition'], draft?: RuleDraft) {
+  if (draft?.critical !== undefined) {
+    return draft.critical;
+  }
+  if (initial) {
+    return readThreshold(initial)?.toString() ?? '';
+  }
+  return DEFAULT_THRESHOLDS.cpu ?? '';
 }
 
 type ReadInitialRuleFormOptions = {
@@ -326,7 +340,7 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
   return {
     name: rule?.name ?? draft?.name ?? '',
     kind: initial?.kind ?? 'cpu',
-    critical: draft?.critical ?? (initial ? (readThreshold(initial)?.toString() ?? '') : (DEFAULT_THRESHOLDS.cpu ?? '')),
+    critical: getInitialCritical(initial, draft),
     warning: saved?.warning?.toString() ?? '',
     isWarningOpen: saved?.warning != null,
     recovery: saved?.resolve_at?.toString() ?? '',

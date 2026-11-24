@@ -8,7 +8,7 @@ import { Badge } from '~/components/ui/badge';
 import { Tooltip } from '~/components/ui/tooltip';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
-import { formatAlertDuration, getAlertMute, getAlertTargetPath } from '~/utils/alerts';
+import { formatAlertDuration, getAlertMute, getAlertTargetPath, getValueHint } from '~/utils/alerts';
 import { formatDate, formatClock } from '~/utils/format';
 
 const helper = createColumnHelper<DataTableFeatures, Schemas['Alert']>();
@@ -16,8 +16,9 @@ const helper = createColumnHelper<DataTableFeatures, Schemas['Alert']>();
 export function useAlertHistoryTable(
   alerts: Schemas['Alert'][],
   mutes: Schemas['AlertMute'][] = [],
-  valueHint?: string
+  rule?: Schemas['AlertRule']
 ) {
+  const valueHint = getValueHint(rule?.condition);
   const columns = useMemo(
     () =>
       helper.columns([
@@ -26,7 +27,7 @@ export function useAlertHistoryTable(
           enableSorting: false,
           cell: ({ row }) => (
             <Link
-              to={getAlertTargetPath(row.original)}
+              to={getAlertTargetPath(row.original, rule)}
               className="block truncate outline-none hover:underline focus-visible:underline"
             >
               {row.original.target_name}
@@ -83,7 +84,7 @@ export function useAlertHistoryTable(
             ),
         }),
       ]),
-    [mutes, valueHint]
+    [mutes, rule, valueHint]
   );
 
   return useDataTable({ columns, data: alerts });

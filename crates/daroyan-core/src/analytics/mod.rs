@@ -26,7 +26,9 @@ use crate::analytics::log_lines::{
     LogRow, OTLP_SERVER_ID, append_logs, append_volume, to_log_rows,
 };
 use crate::analytics::metrics::ingest::{MetricSample, SeriesRow};
-use crate::analytics::metrics::series::{Admission, PointRow, SeriesCache, SeriesLimits};
+use crate::analytics::metrics::series::{
+    Admission, IDLE_MS, PointRow, SeriesCache, SeriesLimits,
+};
 use crate::analytics::metrics::store::{
     append_metrics, list_known_series, purge_metrics, roll_up_metrics,
 };
@@ -119,7 +121,9 @@ impl Purge {
             now_ms,
             cutoff_ms: before(retention.days),
             log_cutoff_ms: before(retention.log_days),
-            volume_cutoff_ms: before(retention.archive_days.unwrap_or(retention.log_days)),
+            volume_cutoff_ms: before(
+                retention.archive_days.unwrap_or(retention.log_days),
+            ),
             point_cutoff_ms: before(retention.metric_days),
             rollup_cutoff_ms: before(retention.metric_rollup_days),
             keep_unarchived: retention.archive_days.is_some(),
@@ -324,40 +328,64 @@ impl Analytics {
 
         let now = Utc::now().timestamp_millis();
         if !lock(&self.metric_series).is_loaded() {
-            let known = self.read(move |conn| list_known_series(conn, now)).await?;
+            let since = now - IDLE_MS;
+            let known = self.read(move |conn| list_known_series(conn, since)).await?;
             lock(&self.metric_series).load(known);
         }
 
-        let mut admission = lock(&self.metric_series).admit(samples, limits, now);
+        let admitted = lock(&self.metric_series).admit(samples, limits, now);
         let mut pending = lock(&self.pending);
-        pending.metric_series.append(&mut admission.series);
-        pending.metric_points.append(&mut admission.points);
+        pending.metric_series.extend(admitted.series);
+        pending.metric_points.extend(admitted.points);
 
-        Ok(admission)
+        Ok(admitted.admission)
     }
 
     pub async fn flush(&self) -> Result<()> {
-        let pending = std::mem::take(&mut *lock(&self.pending));
+        let mut pending = std::mem::take(&mut *lock(&self.pending));
+        let series = std::mem::take(&mut pending.metric_series);
+        let points = std::mem::take(&mut pending.metric_points);
+        let metrics = self.flush_metrics(series, points).await;
+
         if pending.states.is_empty()
             && pending.events.is_empty()
             && pending.logs.is_empty()
             && pending.spans.is_empty()
             && pending.exceptions.is_empty()
-            && pending.metric_series.is_empty()
-            && pending.metric_points.is_empty()
         {
+            return metrics;
+        }
+
+        let others = self
+            .write(move |conn| {
+                append_states(conn, &pending.states)?;
+                append_disks(conn, &pending.disks)?;
+                append_events(conn, &pending.events)?;
+                append_logs(conn, &pending.logs, Utc::now().timestamp_millis())?;
+                append_volume(conn, &pending.logs)?;
+                append_spans(conn, &pending.spans, &pending.exceptions)
+            })
+            .await;
+
+        metrics.and(others)
+    }
+
+    async fn flush_metrics(
+        &self,
+        series: Vec<SeriesRow>,
+        points: Vec<PointRow>,
+    ) -> Result<()> {
+        if series.is_empty() && points.is_empty() {
             return Ok(());
         }
-        self.write(move |conn| {
-            append_states(conn, &pending.states)?;
-            append_disks(conn, &pending.disks)?;
-            append_events(conn, &pending.events)?;
-            append_logs(conn, &pending.logs, Utc::now().timestamp_millis())?;
-            append_volume(conn, &pending.logs)?;
-            append_spans(conn, &pending.spans, &pending.exceptions)?;
-            append_metrics(conn, &pending.metric_series, &pending.metric_points)
-        })
-        .await
+
+        let series_ids: Vec<i64> = series.iter().map(|row| row.series_id).collect();
+        let result = self.write(move |conn| append_metrics(conn, &series, &points)).await;
+        if result.is_err() {
+            lock(&self.metric_series).forget(&series_ids);
+        }
+
+        result
     }
 
     pub async fn purge(&self, purge: Purge) -> Result<()> {
@@ -370,11 +398,16 @@ impl Analytics {
             rollup_cutoff_ms,
             keep_unarchived,
         } = purge;
-        lock(&self.metric_series).forget_before(rollup_cutoff_ms);
+        lock(&self.metric_series).forget_idle(now_ms);
 
         self.write(move |conn| {
-            roll_up_metrics(conn, now_ms)?;
-            purge_metrics(conn, point_cutoff_ms, rollup_cutoff_ms)?;
+            if let Err(error) = roll_up_metrics(conn, now_ms) {
+                tracing::error!(%error, "roll up metrics");
+            }
+            if let Err(error) = purge_metrics(conn, point_cutoff_ms, rollup_cutoff_ms) {
+                tracing::error!(%error, "purge metrics");
+            }
+
             conn.execute("DELETE FROM server_states WHERE taken_at < ?", [cutoff_ms])?;
             conn.execute("DELETE FROM disk_states WHERE taken_at < ?", [cutoff_ms])?;
             conn.execute("DELETE FROM server_events WHERE occurred_at < ?", [cutoff_ms])?;
@@ -636,10 +669,16 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use chrono::Utc;
     use daroyan_protocol::log::LogBatch;
+    use duckdb::Connection;
     use serde_json::json;
 
     use super::{Analytics, MAX_SERVER_ROWS, Purge};
+    use crate::analytics::metrics::ingest::{
+        MetricKind, MetricSample, Reading, SeriesRow, Temporality,
+    };
+    use crate::analytics::metrics::series::SeriesLimits;
 
     fn batch(lines: usize) -> LogBatch {
         let line = json!({ "at": 1, "service": "app", "stream": "file", "severity": 9, "message": "hi" });
@@ -820,7 +859,7 @@ mod tests {
             .join(format!("daroyan-trim-floor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let analytics = Analytics::open(&dir.join("live.duckdb")).unwrap();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = Utc::now().timestamp_millis();
         analytics
             .run(move |conn| {
                 conn.execute_batch(&format!(
@@ -915,6 +954,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn purges_other_data_when_metric_rollups_fail() {
+        let analytics =
+            Analytics::try_from(Connection::open_in_memory().unwrap()).unwrap();
+        analytics
+            .run(|conn| {
+                conn.execute_batch(
+                    "CREATE TABLE metric_points (taken_at BIGINT); \
+                     INSERT INTO metric_points VALUES (0); \
+                     CREATE TABLE server_states (taken_at BIGINT); \
+                     CREATE TABLE disk_states (taken_at BIGINT); \
+                     CREATE TABLE server_events (occurred_at BIGINT); \
+                     CREATE TABLE spans (started_at BIGINT); \
+                     CREATE TABLE span_exceptions (occurred_at BIGINT); \
+                     CREATE TABLE uptime_results (checked_at BIGINT); \
+                     CREATE TABLE cron_runs (finished_at BIGINT); \
+                     CREATE TABLE log_lines (logged_at BIGINT); \
+                     CREATE TABLE log_volume (minute BIGINT); \
+                     INSERT INTO server_states VALUES (1), (500);",
+                )
+            })
+            .unwrap();
+
+        let purge = Purge {
+            now_ms: 10 * 60 * 60 * 1000,
+            cutoff_ms: 100,
+            log_cutoff_ms: 0,
+            volume_cutoff_ms: 0,
+            point_cutoff_ms: 0,
+            rollup_cutoff_ms: 0,
+            keep_unarchived: false,
+        };
+        analytics.purge(purge).await.unwrap();
+
+        let states: i64 = analytics
+            .run(|conn| {
+                conn.query_row("SELECT count(*) FROM server_states", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(states, 1);
+    }
+
+    #[tokio::test]
+    async fn writes_the_series_again_after_a_failed_metric_flush() {
+        let analytics =
+            Analytics::try_from(Connection::open_in_memory().unwrap()).unwrap();
+        analytics
+            .run(|conn| {
+                conn.execute_batch(include_str!(
+                    "../../../daroyan-migration/duckdb/0015_metrics.sql"
+                ))
+            })
+            .unwrap();
+        let sample = || MetricSample {
+            series: SeriesRow {
+                series_id: 1,
+                token_id: "ing_1".into(),
+                name: "queue.depth".into(),
+                unit: "".into(),
+                description: "".into(),
+                kind: MetricKind::Gauge,
+                is_monotonic: false,
+                temporality: Some(Temporality::Cumulative),
+                service: "api".into(),
+                server_id: None,
+                instance: None,
+                attributes: "{}".to_string(),
+                resource: None,
+                bounds: None,
+                first_seen: Utc::now().timestamp_millis(),
+            },
+            at: Utc::now().timestamp_millis(),
+            start_at: None,
+            reading: Reading::Number(1.0),
+            trace_id: None,
+            span_id: None,
+        };
+        let limits = SeriesLimits { per_token: 10, per_metric: 10 };
+
+        analytics.accept_metrics(vec![sample()], limits).await.unwrap();
+        analytics
+            .run(|conn| {
+                conn.execute_batch("ALTER TABLE metric_points_staging RENAME TO hidden")
+            })
+            .unwrap();
+        assert!(analytics.flush().await.is_err());
+
+        analytics
+            .run(|conn| {
+                conn.execute_batch("ALTER TABLE hidden RENAME TO metric_points_staging")
+            })
+            .unwrap();
+        analytics.accept_metrics(vec![sample()], limits).await.unwrap();
+        analytics.flush().await.unwrap();
+
+        let rows: (i64, i64) = analytics
+            .run(|conn| {
+                conn.query_row(
+                    "SELECT (SELECT count(*) FROM metric_series), (SELECT count(*) FROM metric_points)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(rows, (1, 1));
+    }
+
+    #[tokio::test]
     async fn backs_up_to_a_readable_file() {
         let dir =
             std::env::temp_dir().join(format!("daroyan-backup-{}", std::process::id()));
@@ -925,7 +1071,7 @@ mod tests {
             .unwrap();
         let backup = analytics.back_up(dir.join("backups")).await.unwrap();
         let path = dir.join("backups").join(&backup.name);
-        let copy = duckdb::Connection::open(&path).unwrap();
+        let copy = Connection::open(&path).unwrap();
         let count: i64 = copy
             .query_row("SELECT count(*) FROM samples", [], |row| row.get(0))
             .unwrap();

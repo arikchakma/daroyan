@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use crate::analytics::metrics::ingest::{
@@ -6,7 +7,8 @@ use crate::analytics::metrics::ingest::{
 };
 use crate::config::MetricSettings;
 
-const ACTIVE_MS: i64 = 60 * 60 * 1000;
+pub const IDLE_MS: i64 = 60 * 60 * 1000;
+const SWEEP_MS: i64 = 60 * 1000;
 const FRESH_START_MS: i64 = 5 * 60 * 1000;
 
 #[derive(Clone, Copy, Debug)]
@@ -45,10 +47,16 @@ pub struct PointRow {
 
 #[derive(Debug, Default)]
 pub struct Admission {
+    pub rejected: u64,
+    pub out_of_order: u64,
+    pub full_metric: Option<Arc<str>>,
+}
+
+#[derive(Debug, Default)]
+pub struct Admitted {
     pub series: Vec<SeriesRow>,
     pub points: Vec<PointRow>,
-    pub rejected: u64,
-    pub full_metric: Option<Arc<str>>,
+    pub admission: Admission,
 }
 
 #[derive(Clone, Debug)]
@@ -69,13 +77,61 @@ pub struct KnownSeries {
 struct Tracked {
     token_id: Arc<str>,
     name: Arc<str>,
-    last_seen: i64,
+    active_at: i64,
     last: Option<LastPoint>,
+}
+
+#[derive(Default)]
+struct Counts {
+    per_token: HashMap<Arc<str>, usize>,
+    per_metric: HashMap<(Arc<str>, Arc<str>), usize>,
+}
+
+impl Counts {
+    fn is_full(&self, series: &SeriesRow, limits: SeriesLimits) -> bool {
+        let token_count =
+            self.per_token.get(&series.token_id).copied().unwrap_or_default();
+        let metric_count = self
+            .per_metric
+            .get(&(series.token_id.clone(), series.name.clone()))
+            .copied()
+            .unwrap_or_default();
+
+        token_count >= limits.per_token || metric_count >= limits.per_metric
+    }
+
+    fn add(&mut self, tracked: &Tracked) {
+        *self.per_token.entry(tracked.token_id.clone()).or_default() += 1;
+        *self
+            .per_metric
+            .entry((tracked.token_id.clone(), tracked.name.clone()))
+            .or_default() += 1;
+    }
+
+    fn remove(&mut self, tracked: &Tracked) {
+        if let Entry::Occupied(mut entry) = self.per_token.entry(tracked.token_id.clone())
+        {
+            *entry.get_mut() -= 1;
+            if *entry.get() == 0 {
+                entry.remove();
+            }
+        }
+
+        let key = (tracked.token_id.clone(), tracked.name.clone());
+        if let Entry::Occupied(mut entry) = self.per_metric.entry(key) {
+            *entry.get_mut() -= 1;
+            if *entry.get() == 0 {
+                entry.remove();
+            }
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct SeriesCache {
     series: HashMap<i64, Tracked>,
+    counts: Counts,
+    swept_at: i64,
     is_loaded: bool,
 }
 
@@ -90,18 +146,45 @@ impl SeriesCache {
         }
 
         for series in known {
-            self.series.entry(series.series_id).or_insert(Tracked {
+            let Entry::Vacant(entry) = self.series.entry(series.series_id) else {
+                continue;
+            };
+
+            let tracked = Tracked {
                 token_id: series.token_id,
                 name: series.name,
-                last_seen: series.last_seen,
+                active_at: series.last_seen,
                 last: series.last,
-            });
+            };
+            self.counts.add(&tracked);
+            entry.insert(tracked);
         }
+
         self.is_loaded = true;
     }
 
-    pub fn forget_before(&mut self, cutoff: i64) {
-        self.series.retain(|_, series| series.last_seen >= cutoff);
+    pub fn forget_idle(&mut self, now: i64) {
+        let cutoff = now - IDLE_MS;
+        let counts = &mut self.counts;
+
+        self.series.retain(|_, tracked| {
+            let is_active = tracked.active_at >= cutoff;
+            if !is_active {
+                counts.remove(tracked);
+            }
+
+            is_active
+        });
+
+        self.swept_at = now;
+    }
+
+    pub fn forget(&mut self, series_ids: &[i64]) {
+        for series_id in series_ids {
+            if let Some(tracked) = self.series.remove(series_id) {
+                self.counts.remove(&tracked);
+            }
+        }
     }
 
     pub fn admit(
@@ -109,113 +192,81 @@ impl SeriesCache {
         mut samples: Vec<MetricSample>,
         limits: SeriesLimits,
         now: i64,
-    ) -> Admission {
+    ) -> Admitted {
+        if now - self.swept_at >= SWEEP_MS {
+            self.forget_idle(now);
+        }
+
         samples.sort_by_key(|sample| sample.at);
 
-        let mut admission = Admission::default();
-        let (mut per_token, mut per_metric) = self.count_active(now);
-
+        let mut admitted = Admitted::default();
         for sample in samples {
-            let series_id = sample.series.series_id;
-            let is_active = self
-                .series
-                .get(&series_id)
-                .is_some_and(|series| series.last_seen >= now - ACTIVE_MS);
+            match self.series.entry(sample.series.series_id) {
+                Entry::Occupied(entry) => {
+                    let tracked = entry.into_mut();
+                    tracked.active_at = now;
 
-            if !is_active {
-                let token_count =
-                    per_token.entry(sample.series.token_id.clone()).or_default();
-                let metric_count = per_metric
-                    .entry((sample.series.token_id.clone(), sample.series.name.clone()))
-                    .or_default();
-                if *token_count >= limits.per_token || *metric_count >= limits.per_metric
-                {
-                    admission.rejected += 1;
-                    admission
-                        .full_metric
-                        .get_or_insert_with(|| sample.series.name.clone());
-                    continue;
+                    if tracked.last.as_ref().is_some_and(|last| sample.at <= last.at) {
+                        if sample.series.temporality == Some(Temporality::Delta) {
+                            admitted.admission.out_of_order += 1;
+                        }
+                        continue;
+                    }
+
+                    let (_, point, last) = to_point(sample, tracked.last.as_ref());
+                    tracked.last = Some(last);
+                    admitted.points.push(point);
                 }
+                Entry::Vacant(entry) => {
+                    if self.counts.is_full(&sample.series, limits) {
+                        admitted.admission.rejected += 1;
+                        admitted
+                            .admission
+                            .full_metric
+                            .get_or_insert_with(|| sample.series.name.clone());
+                        continue;
+                    }
 
-                *token_count += 1;
-                *metric_count += 1;
-            }
+                    let (series, point, last) = to_point(sample, None);
+                    let tracked = Tracked {
+                        token_id: series.token_id.clone(),
+                        name: series.name.clone(),
+                        active_at: now,
+                        last: Some(last),
+                    };
+                    self.counts.add(&tracked);
+                    entry.insert(tracked);
 
-            let tracked = self.series.get(&series_id);
-            if tracked
-                .and_then(|series| series.last.as_ref())
-                .is_some_and(|last| sample.at <= last.at)
-            {
-                continue;
-            }
-
-            let point =
-                to_point(&sample, tracked.and_then(|series| series.last.as_ref()));
-            let last = LastPoint {
-                at: sample.at,
-                start_at: sample.start_at,
-                reading: sample.reading.clone(),
-            };
-
-            match self.series.get_mut(&series_id) {
-                Some(series) => {
-                    series.last_seen = series.last_seen.max(sample.at);
-                    series.last = Some(last);
-                }
-                None => {
-                    self.series.insert(
-                        series_id,
-                        Tracked {
-                            token_id: sample.series.token_id.clone(),
-                            name: sample.series.name.clone(),
-                            last_seen: sample.at,
-                            last: Some(last),
-                        },
-                    );
-                    admission.series.push(sample.series);
+                    admitted.series.push(series);
+                    admitted.points.push(point);
                 }
             }
-            admission.points.push(point);
         }
 
-        admission
-    }
-
-    fn count_active(
-        &self,
-        now: i64,
-    ) -> (HashMap<Arc<str>, usize>, HashMap<(Arc<str>, Arc<str>), usize>) {
-        let mut per_token: HashMap<Arc<str>, usize> = HashMap::new();
-        let mut per_metric: HashMap<(Arc<str>, Arc<str>), usize> = HashMap::new();
-        for series in self
-            .series
-            .values()
-            .filter(|series| series.last_seen >= now - ACTIVE_MS)
-        {
-            *per_token.entry(series.token_id.clone()).or_default() += 1;
-            *per_metric
-                .entry((series.token_id.clone(), series.name.clone()))
-                .or_default() += 1;
-        }
-
-        (per_token, per_metric)
+        admitted
     }
 }
 
-fn to_point(sample: &MetricSample, last: Option<&LastPoint>) -> PointRow {
+enum HistogramChange {
+    Whole,
+    Since(HistogramReading),
+}
+
+fn to_point(
+    sample: MetricSample,
+    last: Option<&LastPoint>,
+) -> (SeriesRow, PointRow, LastPoint) {
     let mut point = PointRow {
         series_id: sample.series.series_id,
         at: sample.at,
         start_at: sample.start_at,
-        trace_id: sample.trace_id.clone(),
-        span_id: sample.span_id.clone(),
         ..PointRow::default()
     };
 
     match &sample.reading {
         Reading::Number(value) => {
             point.value = Some(*value);
-            point.delta = number_change(sample, *value, last);
+            point.delta = number_change(&sample, *value, last);
         }
         Reading::Histogram(histogram) => {
             point.count = Some(histogram.count);
@@ -224,15 +275,27 @@ fn to_point(sample: &MetricSample, last: Option<&LastPoint>) -> PointRow {
             point.max = histogram.max;
             point.buckets = Some(histogram.buckets.clone());
 
-            if let Some(change) = histogram_change(sample, histogram, last) {
-                point.count_delta = Some(change.count);
-                point.sum_delta = change.sum;
-                point.bucket_deltas = Some(change.buckets);
+            match histogram_change(&sample, histogram, last) {
+                Some(HistogramChange::Whole) => {
+                    point.count_delta = Some(histogram.count);
+                    point.sum_delta = histogram.sum;
+                    point.bucket_deltas = Some(histogram.buckets.clone());
+                }
+                Some(HistogramChange::Since(change)) => {
+                    point.count_delta = Some(change.count);
+                    point.sum_delta = change.sum;
+                    point.bucket_deltas = Some(change.buckets);
+                }
+                None => {}
             }
         }
     }
 
-    point
+    let MetricSample { series, at, start_at, reading, trace_id, span_id } = sample;
+    point.trace_id = trace_id;
+    point.span_id = span_id;
+
+    (series, point, LastPoint { at, start_at, reading })
 }
 
 fn number_change(
@@ -262,19 +325,19 @@ fn histogram_change(
     sample: &MetricSample,
     histogram: &HistogramReading,
     last: Option<&LastPoint>,
-) -> Option<HistogramReading> {
+) -> Option<HistogramChange> {
     if sample.series.kind != MetricKind::Histogram {
         return None;
     }
     if sample.series.temporality == Some(Temporality::Delta) {
-        return Some(histogram.clone());
+        return Some(HistogramChange::Whole);
     }
 
     let Some(last) = last else {
-        return is_fresh_start(sample).then(|| histogram.clone());
+        return is_fresh_start(sample).then_some(HistogramChange::Whole);
     };
     let Reading::Histogram(previous) = &last.reading else {
-        return Some(histogram.clone());
+        return Some(HistogramChange::Whole);
     };
 
     let is_reset = last.start_at != sample.start_at
@@ -286,10 +349,10 @@ fn histogram_change(
             .zip(&previous.buckets)
             .any(|(now, before)| now < before);
     if is_reset {
-        return Some(histogram.clone());
+        return Some(HistogramChange::Whole);
     }
 
-    Some(HistogramReading {
+    Some(HistogramChange::Since(HistogramReading {
         count: histogram.count - previous.count,
         sum: histogram.sum.zip(previous.sum).map(|(now, before)| now - before),
         min: None,
@@ -300,7 +363,7 @@ fn histogram_change(
             .zip(&previous.buckets)
             .map(|(now, before)| now - before)
             .collect(),
-    })
+    }))
 }
 
 fn is_fresh_start(sample: &MetricSample) -> bool {
@@ -427,8 +490,8 @@ mod tests {
         let admission = cache.admit(samples, limits, 1_000);
 
         assert_eq!(admission.series.len(), 3);
-        assert_eq!(admission.rejected, 2);
-        assert_eq!(admission.full_metric.as_deref(), Some("a"));
+        assert_eq!(admission.admission.rejected, 2);
+        assert_eq!(admission.admission.full_metric.as_deref(), Some("a"));
 
         let later = cache.admit(
             vec![sample(counter(1, "a", Temporality::Delta), 2_000, 1_000, 1.0)],
@@ -436,7 +499,7 @@ mod tests {
             2_000,
         );
         assert_eq!(later.points.len(), 1);
-        assert_eq!(later.rejected, 0);
+        assert_eq!(later.admission.rejected, 0);
     }
 
     #[test]
@@ -449,14 +512,14 @@ mod tests {
             0,
         );
 
-        let later = ACTIVE_MS + 1;
+        let later = IDLE_MS + 1;
         let admission = cache.admit(
             vec![sample(counter(2, "a", Temporality::Delta), later, 0, 1.0)],
             limits,
             later,
         );
 
-        assert_eq!(admission.rejected, 0);
+        assert_eq!(admission.admission.rejected, 0);
         assert_eq!(admission.points.len(), 1);
     }
 
@@ -495,5 +558,79 @@ mod tests {
         assert_eq!(point.count_delta, Some(4));
         assert_eq!(point.sum_delta, Some(4.0));
         assert_eq!(point.bucket_deltas, Some(vec![0, 3, 1]));
+    }
+
+    #[test]
+    fn counts_activity_by_arrival_time_not_point_time() {
+        let mut cache = SeriesCache::default();
+        let limits = SeriesLimits { per_token: 1, per_metric: 1 };
+        let now = 10 * IDLE_MS;
+        let old = now - 2 * IDLE_MS;
+
+        let first = cache.admit(
+            vec![sample(counter(1, "a", Temporality::Delta), old, 0, 1.0)],
+            limits,
+            now,
+        );
+        let second = cache.admit(
+            vec![sample(counter(2, "a", Temporality::Delta), old, 0, 1.0)],
+            limits,
+            now + 1,
+        );
+
+        assert_eq!(first.admission.rejected, 0);
+        assert_eq!(second.admission.rejected, 1);
+        assert!(second.points.is_empty());
+    }
+
+    #[test]
+    fn comes_back_after_going_idle_without_a_made_up_change() {
+        let mut cache = SeriesCache::default();
+        let make = || counter(1, "emails.sent", Temporality::Cumulative);
+        cache.admit(vec![sample(make(), 60_000, 1_000, 5.0)], LIMITS, 60_000);
+
+        let later = 60_000 + IDLE_MS + SWEEP_MS;
+        let admitted =
+            cache.admit(vec![sample(make(), later, 1_000, 900.0)], LIMITS, later);
+
+        assert_eq!(cache.series.len(), 1);
+        assert_eq!(admitted.series.len(), 1);
+        assert_eq!(admitted.points[0].delta, None);
+    }
+
+    #[test]
+    fn writes_the_series_again_after_a_failed_flush() {
+        let mut cache = SeriesCache::default();
+        let make = || counter(1, "emails.sent", Temporality::Delta);
+        let first = cache.admit(vec![sample(make(), 1_000, 0, 1.0)], LIMITS, 1_000);
+        assert_eq!(first.series.len(), 1);
+
+        cache.forget(&[1]);
+        let second = cache.admit(vec![sample(make(), 2_000, 1_000, 1.0)], LIMITS, 2_000);
+
+        assert_eq!(second.series.len(), 1);
+        assert!(cache.counts.per_token.values().all(|count| *count == 1));
+    }
+
+    #[test]
+    fn counts_late_delta_points_as_out_of_order() {
+        let mut cache = SeriesCache::default();
+        let delta = || counter(1, "emails.sent", Temporality::Delta);
+        let cumulative = || counter(2, "emails.sent", Temporality::Cumulative);
+        cache.admit(
+            vec![sample(delta(), 2_000, 1_000, 1.0), sample(cumulative(), 2_000, 0, 5.0)],
+            LIMITS,
+            2_000,
+        );
+
+        let admitted = cache.admit(
+            vec![sample(delta(), 1_500, 1_000, 1.0), sample(cumulative(), 2_000, 0, 5.0)],
+            LIMITS,
+            3_000,
+        );
+
+        assert!(admitted.points.is_empty());
+        assert_eq!(admitted.admission.out_of_order, 1);
+        assert_eq!(admitted.admission.rejected, 0);
     }
 }

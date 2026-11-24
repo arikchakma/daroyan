@@ -14,7 +14,9 @@ use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 use crate::analytics::clamp_future_ms;
-use crate::analytics::metrics::histogram::{exponential_bounds, to_fixed_buckets};
+use crate::analytics::metrics::histogram::{
+    exponential_bounds, sum_counts, to_fixed_buckets,
+};
 use crate::analytics::spans::{
     UNKNOWN_SERVICE, find_text, to_hex, to_json_map, to_json_value, truncate,
 };
@@ -111,6 +113,17 @@ pub struct HistogramReading {
     pub buckets: Vec<u64>,
 }
 
+impl HistogramReading {
+    fn is_valid(&self) -> bool {
+        let is_finite = [self.sum, self.min, self.max]
+            .into_iter()
+            .flatten()
+            .all(f64::is_finite);
+
+        is_finite && sum_counts(&self.buckets) == Some(self.count)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reading {
     Number(f64),
@@ -138,6 +151,7 @@ struct Origin {
     service: Arc<str>,
     server_id: Option<Arc<str>>,
     instance: Option<Arc<str>>,
+    host: Option<String>,
     resource: Option<Arc<str>>,
     received_at: i64,
 }
@@ -176,14 +190,17 @@ pub fn to_metric_samples(
             .as_ref()
             .map(|resource| resource.attributes.as_slice())
             .unwrap_or_default();
+        let host = find_text(attributes, &["host.name"]);
         let origin = Origin {
             token_id: token_id.clone(),
             service: find_text(attributes, &["service.name"])
                 .unwrap_or_else(|| UNKNOWN_SERVICE.to_string())
                 .into(),
-            server_id: find_text(attributes, &["host.name"])
-                .and_then(|host_name| hosts.find(&host_name).map(Into::into)),
+            server_id: host
+                .as_deref()
+                .and_then(|host_name| hosts.find(host_name).map(Into::into)),
             instance: find_text(attributes, &["service.instance.id"]).map(Into::into),
+            host,
             resource: serde_json::to_string(&to_json_map(attributes))
                 .ok()
                 .map(Into::into),
@@ -250,7 +267,7 @@ pub fn to_metric_samples(
                     };
                     let descriptor =
                         describe(MetricKind::Histogram, false, Some(temporality));
-                    let bounds: Arc<[f64]> = exponential_bounds().into();
+                    let bounds = exponential_bounds();
                     for point in &histogram.data_points {
                         push_exponential(
                             &mut parsed,
@@ -333,7 +350,24 @@ fn push_histogram(
     }
 
     let is_sorted = bounds.windows(2).all(|pair| pair[0] < pair[1]);
-    if buckets.len() != bounds.len() + 1 || buckets.len() > MAX_BUCKETS || !is_sorted {
+    let is_finite = bounds.iter().all(|bound| bound.is_finite());
+    if buckets.len() != bounds.len() + 1
+        || buckets.len() > MAX_BUCKETS
+        || !is_sorted
+        || !is_finite
+    {
+        parsed.skipped += 1;
+        return;
+    }
+
+    let reading = HistogramReading {
+        count: point.count,
+        sum: point.sum,
+        min: point.min,
+        max: point.max,
+        buckets,
+    };
+    if !reading.is_valid() {
         parsed.skipped += 1;
         return;
     }
@@ -350,13 +384,7 @@ fn push_histogram(
             attributes: &point.attributes,
             exemplars: &point.exemplars,
         },
-        Reading::Histogram(HistogramReading {
-            count: point.count,
-            sum: point.sum,
-            min: point.min,
-            max: point.max,
-            buckets,
-        }),
+        Reading::Histogram(reading),
     );
 }
 
@@ -371,6 +399,18 @@ fn push_exponential(
         return;
     }
 
+    let reading = to_fixed_buckets(point).map(|buckets| HistogramReading {
+        count: point.count,
+        sum: point.sum,
+        min: point.min,
+        max: point.max,
+        buckets,
+    });
+    let Some(reading) = reading.filter(HistogramReading::is_valid) else {
+        parsed.skipped += 1;
+        return;
+    };
+
     push_sample(
         parsed,
         origin,
@@ -382,13 +422,7 @@ fn push_exponential(
             attributes: &point.attributes,
             exemplars: &point.exemplars,
         },
-        Reading::Histogram(HistogramReading {
-            count: point.count,
-            sum: point.sum,
-            min: point.min,
-            max: point.max,
-            buckets: to_fixed_buckets(point),
-        }),
+        Reading::Histogram(reading),
     );
 }
 
@@ -416,9 +450,14 @@ fn push_sample(
     let start_at = (parts.start_nanos > 0).then(|| to_millis(parts.start_nanos));
     let attributes = to_series_attributes(parts.attributes);
     let series_id = hash_series(origin, descriptor, bounds.as_deref(), &attributes);
-    let exemplar = parts.exemplars.iter().rev().find_map(|exemplar| {
-        Some((to_hex(&exemplar.trace_id)?, to_hex(&exemplar.span_id)?))
-    });
+    let (trace_id, span_id) = parts
+        .exemplars
+        .iter()
+        .rev()
+        .find_map(|exemplar| {
+            Some((to_hex(&exemplar.trace_id)?, to_hex(&exemplar.span_id)?))
+        })
+        .unzip();
 
     parsed.samples.push(MetricSample {
         series: SeriesRow {
@@ -441,8 +480,8 @@ fn push_sample(
         at,
         start_at,
         reading,
-        trace_id: exemplar.as_ref().map(|(trace_id, _)| trace_id.clone()),
-        span_id: exemplar.map(|(_, span_id)| span_id),
+        trace_id,
+        span_id,
     });
 }
 
@@ -472,9 +511,7 @@ fn hash_series(
     bounds: Option<&[f64]>,
     attributes: &str,
 ) -> i64 {
-    let bounds = bounds
-        .map(|bounds| bounds.iter().map(f64::to_string).collect::<Vec<_>>().join(","))
-        .unwrap_or_default();
+    let identity = origin.instance.as_deref().or(origin.host.as_deref());
     let parts = [
         &*origin.token_id,
         &*descriptor.name,
@@ -483,11 +520,20 @@ fn hash_series(
         descriptor.temporality.map(Temporality::as_str).unwrap_or_default(),
         &*origin.service,
         origin.server_id.as_deref().unwrap_or_default(),
-        origin.instance.as_deref().unwrap_or_default(),
+        identity.unwrap_or_default(),
         attributes,
-        &bounds,
     ];
-    let digest = Sha256::digest(parts.join("\u{1f}").as_bytes());
+
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    for bound in bounds.unwrap_or_default() {
+        hasher.update(bound.to_bits().to_be_bytes());
+    }
+
+    let digest = hasher.finalize();
 
     i64::from_be_bytes(digest[..8].try_into().unwrap_or_default())
 }
@@ -525,15 +571,22 @@ mod tests {
     }
 
     fn request(metrics: Vec<Metric>) -> ExportMetricsServiceRequest {
+        request_from(
+            vec![
+                text("service.name", "inboxjot-api"),
+                text("service.instance.id", "worker-1"),
+            ],
+            metrics,
+        )
+    }
+
+    fn request_from(
+        attributes: Vec<KeyValue>,
+        metrics: Vec<Metric>,
+    ) -> ExportMetricsServiceRequest {
         ExportMetricsServiceRequest {
             resource_metrics: vec![ResourceMetrics {
-                resource: Some(Resource {
-                    attributes: vec![
-                        text("service.name", "inboxjot-api"),
-                        text("service.instance.id", "worker-1"),
-                    ],
-                    ..Default::default()
-                }),
+                resource: Some(Resource { attributes, ..Default::default() }),
                 scope_metrics: vec![ScopeMetrics { metrics, ..Default::default() }],
                 ..Default::default()
             }],
@@ -644,5 +697,91 @@ mod tests {
 
         assert!(parsed.samples.is_empty());
         assert_eq!(parsed.skipped, 1);
+    }
+
+    fn histogram(points: Vec<HistogramDataPoint>) -> Metric {
+        Metric {
+            name: "job.duration".to_string(),
+            data: Some(Data::Histogram(Histogram {
+                data_points: points,
+                aggregation_temporality: AggregationTemporality::Delta as i32,
+            })),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rejects_histograms_with_bad_numbers_or_counts() {
+        let point = |count, sum: f64, bounds: Vec<f64>| HistogramDataPoint {
+            time_unix_nano: 1,
+            count,
+            sum: Some(sum),
+            explicit_bounds: bounds,
+            bucket_counts: vec![1, 1, 1],
+            ..Default::default()
+        };
+        let request = request(vec![histogram(vec![
+            point(3, 1.5, vec![1.0, 2.0]),
+            point(3, f64::NAN, vec![1.0, 2.0]),
+            point(3, 1.5, vec![1.0, f64::INFINITY]),
+            point(4, 1.5, vec![1.0, 2.0]),
+            HistogramDataPoint {
+                max: Some(f64::NEG_INFINITY),
+                ..point(3, 1.5, vec![1.0, 2.0])
+            },
+        ])]);
+
+        let parsed = to_metric_samples(&request, &HostIndex::default(), "ing_1", 0);
+
+        assert_eq!(parsed.samples.len(), 1);
+        assert_eq!(parsed.skipped, 4);
+    }
+
+    #[test]
+    fn rejects_exponential_histograms_with_bad_scales() {
+        use opentelemetry_proto::tonic::metrics::v1::ExponentialHistogram;
+        use opentelemetry_proto::tonic::metrics::v1::exponential_histogram_data_point::Buckets;
+
+        let point = |scale, count| ExponentialHistogramDataPoint {
+            time_unix_nano: 1,
+            scale,
+            count,
+            positive: Some(Buckets { offset: 0, bucket_counts: vec![2] }),
+            ..Default::default()
+        };
+        let request = request(vec![Metric {
+            name: "job.duration".to_string(),
+            data: Some(Data::ExponentialHistogram(ExponentialHistogram {
+                data_points: vec![point(0, 2), point(i32::MIN, 2), point(0, 5)],
+                aggregation_temporality: AggregationTemporality::Delta as i32,
+            })),
+            ..Default::default()
+        }]);
+
+        let parsed = to_metric_samples(&request, &HostIndex::default(), "ing_1", 0);
+
+        assert_eq!(parsed.samples.len(), 1);
+        assert_eq!(parsed.skipped, 2);
+    }
+
+    #[test]
+    fn tells_hosts_apart_when_there_is_no_instance_id() {
+        let metric = || Metric {
+            name: "queue.depth".to_string(),
+            data: Some(Data::Gauge(Gauge { data_points: vec![number_point("/a", 1.0)] })),
+            ..Default::default()
+        };
+        let series_id = |host: &str| {
+            let request = request_from(
+                vec![text("service.name", "inboxjot-api"), text("host.name", host)],
+                vec![metric()],
+            );
+            to_metric_samples(&request, &HostIndex::default(), "ing_1", 0).samples[0]
+                .series
+                .series_id
+        };
+
+        assert_ne!(series_id("web-1"), series_id("web-2"));
+        assert_eq!(series_id("web-1"), series_id("web-1"));
     }
 }

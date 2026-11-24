@@ -1,44 +1,65 @@
+use std::sync::{Arc, LazyLock};
+
 use opentelemetry_proto::tonic::metrics::v1::ExponentialHistogramDataPoint;
 
 const LOWEST_STEP: i32 = -20;
 const HIGHEST_STEP: i32 = 80;
+const LOWEST_SCALE: i32 = -10;
+const HIGHEST_SCALE: i32 = 20;
 
-pub fn exponential_bounds() -> Vec<f64> {
+static EXPONENTIAL_BOUNDS: LazyLock<Arc<[f64]>> = LazyLock::new(|| {
     (LOWEST_STEP..=HIGHEST_STEP)
         .map(|step| 2_f64.powf(f64::from(step) / 2.0))
         .collect()
+});
+
+pub fn exponential_bounds() -> Arc<[f64]> {
+    EXPONENTIAL_BOUNDS.clone()
 }
 
-pub fn to_fixed_buckets(point: &ExponentialHistogramDataPoint) -> Vec<u64> {
+pub fn to_fixed_buckets(point: &ExponentialHistogramDataPoint) -> Option<Vec<u64>> {
+    if !(LOWEST_SCALE..=HIGHEST_SCALE).contains(&point.scale) {
+        return None;
+    }
+
     let size = (HIGHEST_STEP - LOWEST_STEP + 2) as usize;
     let mut buckets = vec![0; size];
     buckets[0] = point.zero_count;
 
     if let Some(negative) = &point.negative {
-        buckets[0] += negative.bucket_counts.iter().sum::<u64>();
+        buckets[0] = buckets[0].checked_add(sum_counts(&negative.bucket_counts)?)?;
     }
 
-    let Some(positive) = &point.positive else { return buckets };
+    let Some(positive) = &point.positive else { return Some(buckets) };
     for (offset, count) in positive.bucket_counts.iter().enumerate() {
         let index = i64::from(positive.offset) + offset as i64;
         let step = to_half_step(index, point.scale);
         let slot = (step - i64::from(LOWEST_STEP) + 1).clamp(0, size as i64 - 1);
-        buckets[slot as usize] += count;
+        let bucket = &mut buckets[slot as usize];
+        *bucket = bucket.checked_add(*count)?;
     }
 
-    buckets
+    Some(buckets)
+}
+
+pub fn sum_counts(counts: &[u64]) -> Option<u64> {
+    counts
+        .iter()
+        .try_fold(0_u64, |total, count| total.checked_add(*count))
 }
 
 fn to_half_step(index: i64, scale: i32) -> i64 {
     if scale >= 1 {
-        return index >> (scale - 1).min(62);
+        return index >> (scale - 1);
     }
 
-    index << (1 - scale).min(62)
+    index << (1 - scale)
 }
 
 pub fn quantile_of(bounds: &[f64], buckets: &[u64], quantile: f64) -> Option<f64> {
-    let total: u64 = buckets.iter().sum();
+    let total = buckets
+        .iter()
+        .fold(0_u64, |total, count| total.saturating_add(*count));
     if total == 0 || buckets.len() != bounds.len() + 1 {
         return None;
     }
@@ -51,7 +72,7 @@ pub fn quantile_of(bounds: &[f64], buckets: &[u64], quantile: f64) -> Option<f64
         }
 
         let before = seen;
-        seen += count;
+        seen = seen.saturating_add(*count);
         if (seen as f64) < rank {
             continue;
         }
@@ -97,6 +118,14 @@ mod tests {
     }
 
     #[test]
+    fn survives_huge_bucket_counts() {
+        let bounds = [1.0, 2.0];
+        let buckets = [u64::MAX, u64::MAX, 0];
+
+        assert_eq!(quantile_of(&bounds, &buckets, 0.5), Some(0.5));
+    }
+
+    #[test]
     fn maps_exponential_buckets_onto_half_powers_of_two() {
         let bounds = exponential_bounds();
         let point = ExponentialHistogramDataPoint {
@@ -105,7 +134,7 @@ mod tests {
             positive: Some(Buckets { offset: 4, bucket_counts: vec![3, 4] }),
             ..Default::default()
         };
-        let buckets = to_fixed_buckets(&point);
+        let buckets = to_fixed_buckets(&point).unwrap();
 
         assert_eq!(buckets.len(), bounds.len() + 1);
         assert_eq!(buckets[0], 1);
@@ -113,5 +142,21 @@ mod tests {
 
         let slot = buckets.iter().rposition(|count| *count > 0).unwrap();
         assert!(bounds[slot - 1] <= 2.0 && bounds[slot] >= 2.0);
+    }
+
+    #[test]
+    fn rejects_bad_scales_and_overflowing_counts() {
+        let point = |scale, counts| ExponentialHistogramDataPoint {
+            scale,
+            zero_count: 1,
+            positive: Some(Buckets { offset: 0, bucket_counts: counts }),
+            ..Default::default()
+        };
+
+        assert_eq!(to_fixed_buckets(&point(i32::MIN, vec![1])), None);
+        assert_eq!(to_fixed_buckets(&point(21, vec![1])), None);
+        assert_eq!(to_fixed_buckets(&point(20, vec![u64::MAX, u64::MAX])), None);
+        assert!(to_fixed_buckets(&point(-10, vec![u64::MAX - 1])).is_some());
+        assert!(to_fixed_buckets(&point(20, vec![1])).is_some());
     }
 }
