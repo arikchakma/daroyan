@@ -10,6 +10,10 @@ use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source, list_busy_windows,
 };
+use crate::analytics::metrics::query::{
+    MetricQuery, format_metric_value, measure_metric_windows,
+};
+use crate::analytics::metrics::{METRICS_TARGET_ID, METRICS_TARGET_NAME};
 use crate::analytics::spans::{
     TRACES_TARGET_ID, TRACES_TARGET_NAME, measure_span_windows,
 };
@@ -58,6 +62,14 @@ pub async fn backtest_rule(
 
     if let Some(trace) = condition.trace_rule() {
         return Ok(Some(backtest_traces(analytics, condition, &trace, since).await?));
+    }
+
+    if let Condition::Metric { within_secs, .. } = condition
+        && let Some(mut query) = condition.metric_query(Utc::now().timestamp_millis())
+    {
+        query.since = since;
+        let window_ms = i64::from(*within_secs) * 1000;
+        return Ok(Some(backtest_metric(analytics, condition, query, window_ms).await?));
     }
 
     if matches!(
@@ -266,6 +278,49 @@ async fn backtest_traces(
             subject: reading.subject,
             value: reading.label,
             at: bucket * window_us / 1000,
+        });
+    }
+
+    hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
+    hits.truncate(MAX_HITS);
+    Ok(hits)
+}
+
+async fn backtest_metric(
+    analytics: &Analytics,
+    condition: &Condition,
+    query: MetricQuery,
+    window_ms: i64,
+) -> Result<Vec<BacktestHit>> {
+    let name = query.name.clone();
+    let Some(measured) = measure_metric_windows(analytics, query, window_ms).await?
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut last_breach: HashMap<Option<String>, i64> = HashMap::new();
+    let mut hits = Vec::new();
+
+    for window in measured.windows {
+        if rate(condition, None, window.value) == Level::Ok {
+            continue;
+        }
+
+        let previous = last_breach.insert(window.group.clone(), window.at);
+        if previous == Some(window.at - window_ms) {
+            continue;
+        }
+
+        hits.push(BacktestHit {
+            server_id: METRICS_TARGET_ID.to_string(),
+            server_name: METRICS_TARGET_NAME.to_string(),
+            subject: window.group.unwrap_or_else(|| name.clone()),
+            value: format_metric_value(
+                window.value,
+                &measured.unit,
+                measured.aggregation,
+            ),
+            at: window.at,
         });
     }
 

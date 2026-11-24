@@ -10,8 +10,8 @@ use tokio::task::JoinHandle;
 use crate::agents::Agents;
 use crate::alerts::deploys::{DEPLOY_WINDOW_SECS, DeployNote, DeployWatch};
 use crate::alerts::evaluate::{
-    Level, NO_DATA, Reading, ServerSnapshot, find_readings, find_trace_readings,
-    format_percent, is_past, make_log_reading, make_reading, rate,
+    Level, NO_DATA, Reading, ServerSnapshot, find_metric_readings, find_readings,
+    find_trace_readings, format_percent, is_past, make_log_reading, make_reading, rate,
 };
 use crate::alerts::facts::{AlertFacts, CheckCount, FactSources};
 use crate::alerts::integrations::IntegrationConfig;
@@ -28,6 +28,8 @@ use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source,
 };
+use crate::analytics::metrics::query::{MetricQuery, measure_metric};
+use crate::analytics::metrics::{METRICS_TARGET_ID, METRICS_TARGET_NAME};
 use crate::analytics::server_states::aggregate_server_metric;
 use crate::analytics::spans::{
     SpanOrder, TRACES_TARGET_ID, TRACES_TARGET_NAME, measure_spans,
@@ -160,6 +162,7 @@ fn get_target(alert: &Alert) -> Target {
         (_, Some(_), _) => Target::Cron,
         (_, _, Some(OTLP_SERVER_ID)) => Target::Telemetry,
         (_, _, Some(TRACES_TARGET_ID)) => Target::Traces,
+        (_, _, Some(METRICS_TARGET_ID)) => Target::Metrics,
         _ => Target::Server,
     }
 }
@@ -269,6 +272,20 @@ impl AlertEngine {
         })
     }
 
+    async fn read_metric_target(&self, query: MetricQuery) -> Result<TargetReadings> {
+        let name = query.name.clone();
+        let measure =
+            measure_metric(&self.analytics, query, MAX_TRACE_GROUPS as usize).await?;
+        let readings = measure.and_then(|measure| find_metric_readings(&name, &measure));
+
+        Ok(TargetReadings {
+            id: METRICS_TARGET_ID.to_string(),
+            name: METRICS_TARGET_NAME.to_string(),
+            target: Target::Metrics,
+            readings,
+        })
+    }
+
     async fn aggregate_servers(
         &self,
         parsed: &ParsedRule,
@@ -327,6 +344,10 @@ impl AlertEngine {
     ) -> Result<Vec<TargetReadings>> {
         if let Some(trace) = parsed.condition.trace_rule() {
             return Ok(vec![self.read_trace_target(&trace, now).await?]);
+        }
+
+        if let Some(query) = parsed.condition.metric_query(now.timestamp_millis()) {
+            return Ok(vec![self.read_metric_target(query).await?]);
         }
 
         if parsed.condition.target() == Target::Cron {
@@ -501,6 +522,7 @@ impl AlertEngine {
             .chain([
                 (OTLP_SERVER_ID.to_string(), OTLP_SERVER_NAME.to_string()),
                 (TRACES_TARGET_ID.to_string(), TRACES_TARGET_NAME.to_string()),
+                (METRICS_TARGET_ID.to_string(), METRICS_TARGET_NAME.to_string()),
             ])
             .collect();
         self.end_mutes(&rules, &firing, &target_names, &integrations, now)
@@ -788,7 +810,8 @@ impl AlertEngine {
                 rule_id: rule.id.clone(),
                 server_id: target_of(Target::Server)
                     .or_else(|| target_of(Target::Telemetry))
-                    .or_else(|| target_of(Target::Traces)),
+                    .or_else(|| target_of(Target::Traces))
+                    .or_else(|| target_of(Target::Metrics)),
                 check_id: target_of(Target::Check),
                 cron_id: target_of(Target::Cron),
                 subject: reading.subject,
@@ -839,7 +862,10 @@ impl AlertEngine {
             rule,
             target_kind: target.kind(),
             target_id,
-            target_name: if matches!(target, Target::Telemetry | Target::Traces) {
+            target_name: if matches!(
+                target,
+                Target::Telemetry | Target::Traces | Target::Metrics
+            ) {
                 &alert.subject
             } else {
                 target_name

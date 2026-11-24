@@ -4,6 +4,7 @@ use crate::alerts::rules::{
     Condition, LogGroup, TraceMeasure, TraceRule, format_duration, format_ms,
     make_trace_subject,
 };
+use crate::analytics::metrics::query::{MetricMeasure, format_metric_value};
 use crate::analytics::spans::SpanStat;
 use crate::servers::report::LastReport;
 use crate::servers::status::get_percent;
@@ -187,6 +188,26 @@ pub fn find_trace_readings(
         .iter()
         .filter(|stat| stat.requests >= min_requests)
         .filter_map(|stat| make_trace_reading(trace.measure, stat))
+        .collect();
+
+    Some(readings)
+}
+
+pub fn find_metric_readings(name: &str, measure: &MetricMeasure) -> Option<Vec<Reading>> {
+    if measure.readings.is_empty() {
+        return None;
+    }
+
+    let readings = measure
+        .readings
+        .iter()
+        .map(|reading| {
+            make_reading(
+                reading.group.as_deref().unwrap_or(name),
+                reading.value,
+                format_metric_value(reading.value, &measure.unit, measure.aggregation),
+            )
+        })
         .collect();
 
     Some(readings)

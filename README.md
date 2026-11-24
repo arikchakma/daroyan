@@ -1,6 +1,6 @@
 ![Daroyan](_static/daroyan-thumbnail.png)
 
-<p align="center">Self-hosted monitoring for your servers, uptime, <br />crons, logs and traces in a single binary.</p>
+<p align="center">Self-hosted monitoring for your servers, uptime, <br />crons, logs, traces and metrics in a single binary.</p>
 
 <p align="center">
   <a href="./LICENSE.md">
@@ -17,7 +17,7 @@
   </a>
 </p>
 
-Daroyan watches your servers, uptime checks and cron jobs, collects logs, traces and errors, and alerts you in Slack, Discord, Telegram or a webhook when something breaks. It ships as one API binary with the dashboard built in, and stores everything in SQLite and DuckDB on local disk, so a single host is enough to run it.
+Daroyan watches your servers, uptime checks and cron jobs, collects logs, traces, metrics and errors, and alerts you in Slack, Discord, Telegram or a webhook when something breaks. It ships as one API binary with the dashboard built in, and stores everything in SQLite and DuckDB on local disk, so a single host is enough to run it.
 
 ### Quick Start
 

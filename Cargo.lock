@@ -1201,6 +1201,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "croner",
+ "daroyan-migration",
  "daroyan-protocol",
  "duckdb",
  "futures-util",

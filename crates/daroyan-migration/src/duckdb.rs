@@ -5,7 +5,7 @@ use duckdb::{Config, Connection};
 const STORAGE_VERSION: &str = "v1.2.0";
 const EXTENSION_DIR: &str = "duckdb_extensions";
 
-const MIGRATIONS: [(&str, &str); 14] = [
+const MIGRATIONS: [(&str, &str); 15] = [
     ("0001_server_states.sql", include_str!("../duckdb/0001_server_states.sql")),
     ("0002_log_lines.sql", include_str!("../duckdb/0002_log_lines.sql")),
     ("0003_log_raw.sql", include_str!("../duckdb/0003_log_raw.sql")),
@@ -20,6 +20,7 @@ const MIGRATIONS: [(&str, &str); 14] = [
     ("0012_log_archive.sql", include_str!("../duckdb/0012_log_archive.sql")),
     ("0013_log_ingested_at.sql", include_str!("../duckdb/0013_log_ingested_at.sql")),
     ("0014_log_volume.sql", include_str!("../duckdb/0014_log_volume.sql")),
+    ("0015_metrics.sql", include_str!("../duckdb/0015_metrics.sql")),
 ];
 
 pub fn open_duckdb(path: &Path) -> duckdb::Result<Connection> {
@@ -52,7 +53,7 @@ fn is_legacy(conn: &Connection) -> duckdb::Result<bool> {
         .any(|prefix| version.starts_with(prefix)))
 }
 
-fn run_migrations(conn: &Connection) -> duckdb::Result<()> {
+pub fn run_migrations(conn: &Connection) -> duckdb::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS _migrations (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT current_timestamp)",
     )?;

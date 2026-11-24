@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use daroyan_api::app::{build_app, open_state};
 use daroyan_core::alerts::engine::spawn_alert_engine;
-use daroyan_core::analytics::spawn_analytics_tasks;
+use daroyan_core::analytics::{Retention, spawn_analytics_tasks};
 use daroyan_core::archive::spawn_archive_task;
 use daroyan_core::backup::spawn_backup_task;
 use daroyan_core::config::Config;
@@ -30,10 +30,8 @@ async fn main() -> anyhow::Result<()> {
     let agents = state.agents.clone();
     let analytics_tasks = spawn_analytics_tasks(
         analytics.clone(),
-        state.config.retention_days,
-        state.config.log_retention_days,
+        Retention::from(&*state.config),
         state.config.duckdb_max_bytes,
-        state.config.archive.as_ref().map(|archive| archive.retention_days),
     );
     let archive_task = state
         .archive
