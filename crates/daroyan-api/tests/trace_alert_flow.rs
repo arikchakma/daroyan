@@ -188,6 +188,7 @@ async fn alerts_on_trace_error_rate_and_latency_per_service() {
         metrics: daroyan_core::config::MetricSettings::default(),
         backup_dir: None,
         duckdb_max_bytes: None,
+        duckdb_max_memory_bytes: 512 * 1024 * 1024,
         archive: None,
         trusted_proxies: Vec::new(),
         client_ip_header: "cf-connecting-ip".to_string(),
