@@ -1,6 +1,7 @@
 import type { Schemas } from '@daroyan/client';
 
-import { DAY_MS, formatBytes, getUnitSuffix, HOUR_MS } from '~/utils/format';
+import { formatBytes, getUnitSuffix, HOUR_MS } from '~/utils/format';
+import { getTimeRanges, readTimeRange } from '~/utils/time-range';
 import { formatMicros } from '~/utils/traces';
 
 export const METRICS_TARGET_ID = 'metrics';
@@ -100,35 +101,42 @@ const GAUGE_COLUMNS: MetricRead[] = [
   { label: 'Max', aggregation: 'max' },
 ];
 
-export const METRIC_RANGES = [
-  { value: '1h', label: 'Last Hour', ms: HOUR_MS },
-  { value: '6h', label: 'Last 6 Hours', ms: 6 * HOUR_MS },
-  { value: '24h', label: 'Last 24 Hours', ms: DAY_MS },
-  { value: '7d', label: 'Last 7 Days', ms: 7 * DAY_MS },
-  { value: '30d', label: 'Last 30 Days', ms: 30 * DAY_MS },
-] as const;
+export const METRIC_RANGES = getTimeRanges(['1h', '6h', '24h', '7d', '30d']);
 
-export type MetricRange = (typeof METRIC_RANGES)[number];
+export function readMetricRange(value: string | null) {
+  return readTimeRange(METRIC_RANGES, value);
+}
 
-export function readMetricRange(value: string | null): MetricRange {
-  return METRIC_RANGES.find((item) => item.value === value) ?? METRIC_RANGES[0];
+type MetricKindSource = Pick<MetricSummary, 'kind' | 'is_monotonic'>;
+
+export type MetricKind = 'histogram' | 'counter' | 'gauge';
+
+export function getMetricKind(metric: MetricKindSource): MetricKind {
+  if (metric.kind === 'histogram') {
+    return 'histogram';
+  }
+  if (metric.kind === 'sum' && metric.is_monotonic) {
+    return 'counter';
+  }
+  return 'gauge';
 }
 
 const COMPACT_FORMAT = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 const PLAIN_FORMAT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 
-export function getAggregations(metric: Pick<MetricSummary, 'kind' | 'is_monotonic'>) {
-  if (metric.kind === 'histogram') {
-    return HISTOGRAM_AGGREGATIONS;
+export function getAggregations(metric: MetricKindSource) {
+  switch (getMetricKind(metric)) {
+    case 'histogram':
+      return HISTOGRAM_AGGREGATIONS;
+    case 'counter':
+      return COUNTER_AGGREGATIONS;
+    case 'gauge':
+      return GAUGE_AGGREGATIONS;
   }
-  if (metric.kind === 'sum' && metric.is_monotonic) {
-    return COUNTER_AGGREGATIONS;
-  }
-  return GAUGE_AGGREGATIONS;
 }
 
-export function getDefaultAggregation(metric: Pick<MetricSummary, 'kind' | 'is_monotonic'>): MetricAggregation {
-  if (metric.kind === 'histogram') {
+export function getDefaultAggregation(metric: MetricKindSource): MetricAggregation {
+  if (getMetricKind(metric) === 'histogram') {
     return 'p95';
   }
   return getAggregations(metric)[0]!.value;
@@ -153,38 +161,41 @@ export function getMetricUnitLabel(unit: string) {
   return getMetricUnitWord(unit) || unit;
 }
 
-export function getSpecReads(metric: Pick<MetricSummary, 'kind' | 'is_monotonic'>) {
-  if (metric.kind === 'histogram') {
-    return HISTOGRAM_SPECS;
+export function getSpecReads(metric: MetricKindSource) {
+  switch (getMetricKind(metric)) {
+    case 'histogram':
+      return HISTOGRAM_SPECS;
+    case 'counter':
+      return COUNTER_SPECS;
+    case 'gauge':
+      return GAUGE_SPECS;
   }
-  if (metric.kind === 'sum' && metric.is_monotonic) {
-    return COUNTER_SPECS;
-  }
-  return GAUGE_SPECS;
 }
 
-export function getSeriesColumns(metric: Pick<MetricSummary, 'kind' | 'is_monotonic'>) {
-  if (metric.kind === 'histogram') {
-    return HISTOGRAM_COLUMNS;
+export function getSeriesColumns(metric: MetricKindSource) {
+  switch (getMetricKind(metric)) {
+    case 'histogram':
+      return HISTOGRAM_COLUMNS;
+    case 'counter':
+      return COUNTER_COLUMNS;
+    case 'gauge':
+      return GAUGE_COLUMNS;
   }
-  if (metric.kind === 'sum' && metric.is_monotonic) {
-    return COUNTER_COLUMNS;
-  }
-  return GAUGE_COLUMNS;
 }
 
 export function getMetricLink(name: string) {
   return `/metrics/${encodeURIComponent(name)}`;
 }
 
-export function getKindLabel(metric: Pick<MetricSummary, 'kind' | 'is_monotonic'>) {
-  if (metric.kind === 'histogram') {
-    return 'Histogram';
+export function getKindLabel(metric: MetricKindSource) {
+  switch (getMetricKind(metric)) {
+    case 'histogram':
+      return 'Histogram';
+    case 'counter':
+      return 'Counter';
+    case 'gauge':
+      return 'Gauge';
   }
-  if (metric.kind === 'sum' && metric.is_monotonic) {
-    return 'Counter';
-  }
-  return 'Gauge';
 }
 
 const UNIT_WORDS: Record<string, string> = {
@@ -293,22 +304,60 @@ export function getMetricTracesLink(metric: Pick<MetricSummary, 'services'>, ser
   return traceService ? `/traces?${new URLSearchParams({ service: traceService })}` : '/traces';
 }
 
-export function readMetricFilters(text: string): MetricFilter[] {
-  return text
-    .split(',')
-    .map((part) => {
-      const negated = part.split('!=');
-      if (negated.length === 2) {
-        return { key: negated[0]!.trim(), value: negated[1]!.trim(), isNegated: true };
-      }
-      const [key = '', ...rest] = part.split('=');
-      return { key: key.trim(), value: rest.join('=').trim(), isNegated: false };
-    })
-    .filter((filter) => filter.key);
+export function readMetricFilter(text: string): MetricFilter | undefined {
+  const index = text.indexOf('=');
+  if (index <= 0) {
+    return undefined;
+  }
+
+  const isNegated = text[index - 1] === '!';
+  const key = text.slice(0, isNegated ? index - 1 : index).trim();
+  if (!key) {
+    return undefined;
+  }
+
+  return { key, value: text.slice(index + 1).trim(), isNegated };
+}
+
+export function readMetricFilters(texts: string[]) {
+  return texts.map(readMetricFilter).filter((filter) => filter !== undefined);
+}
+
+export function writeMetricFilter(filter: MetricFilter) {
+  return `${filter.key}${filter.isNegated ? '!=' : '='}${filter.value}`;
 }
 
 export function writeMetricFilters(filters: MetricFilter[]) {
-  return filters.map((filter) => `${filter.key}${filter.isNegated ? '!=' : '='}${filter.value}`).join(',');
+  return filters.map(writeMetricFilter);
+}
+
+type HeadlineSeries = {
+  label: string;
+  values: (number | null)[];
+};
+
+export function getLatestValue(values: (number | null)[]) {
+  return values.filter((value) => value !== null).at(-1);
+}
+
+export function getHeadlineSeries<T extends HeadlineSeries>(series: T[], isBelow: boolean) {
+  let headline: T | undefined;
+  let headlineValue: number | undefined;
+
+  for (const line of series) {
+    const value = getLatestValue(line.values);
+    if (value === undefined) {
+      continue;
+    }
+
+    const isWorse = headlineValue === undefined || (isBelow ? value < headlineValue : value > headlineValue);
+    if (isWorse) {
+      headline = line;
+      headlineValue = value;
+    }
+  }
+
+  return headline;
 }
 
 export function getGroupLabel(group: string | null | undefined) {

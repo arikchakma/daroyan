@@ -17,16 +17,12 @@ import { useStoredState } from '~/hooks/use-stored-state';
 import { serverQueries } from '~/queries/servers';
 import { traceQueries } from '~/queries/traces';
 import { SLOW_MS, TRACES_TARGET_ID } from '~/utils/traces';
-import { HOUR_MS } from '~/utils/format';
+import { getTimeRanges, readTimeRange } from '~/utils/time-range';
 
 const PAGE_SIZE = 50;
 const COLUMNS_KEY = 'daroyan.traces.columns';
 
-const RANGES = [
-  { value: '1h', label: 'Last Hour', ms: HOUR_MS },
-  { value: '24h', label: 'Last 24 Hours', ms: 24 * HOUR_MS },
-  { value: '7d', label: 'Last 7 Days', ms: 7 * 24 * HOUR_MS },
-] as const;
+const RANGES = getTimeRanges(['1h', '24h', '7d']);
 
 type StatusView = 'all' | 'error' | 'slow';
 
@@ -49,7 +45,7 @@ export function meta() {
 
 export default function TracesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const range = RANGES.find((item) => item.value === searchParams.get('range')) ?? RANGES[0];
+  const range = readTimeRange(RANGES, searchParams.get('range'));
   const view = VIEWS.find((item) => item.value === searchParams.get('view'))?.value ?? 'all';
   const sort = SORTS.find((item) => item.value === searchParams.get('sort')) ?? SORTS[0];
   const search = searchParams.get('q') ?? '';

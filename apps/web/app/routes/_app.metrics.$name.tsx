@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { AlertBadge, AlertBanners } from '~/components/alerts/alert-banners';
 import { MetricOverTime } from '~/components/metrics/metric-over-time';
@@ -12,7 +12,7 @@ import { Skeleton } from '~/components/ui/skeleton';
 import { useFiringAlerts } from '~/hooks/use-firing-alerts';
 import { useListParams } from '~/hooks/use-list-params';
 import { useMetricRules } from '~/hooks/use-metric-rules';
-import { metricQueries } from '~/queries/metrics';
+import { getCachedMetricList, metricQueries } from '~/queries/metrics';
 import { isMetricRuleInView, readMetricCondition } from '~/utils/alerts';
 import {
   getAggregations,
@@ -41,24 +41,33 @@ export default function MetricPage(props: Route.ComponentProps) {
   const service = searchParams.get('service') || undefined;
   const serverId = searchParams.get('server') || undefined;
   const groupBy = searchParams.get('group') || undefined;
-  const filters = readMetricFilters(searchParams.get('filter') ?? '');
-  const filter = writeMetricFilters(filters) || undefined;
+  const filters = readMetricFilters(searchParams.getAll('filter'));
+  const filterTexts = writeMetricFilters(filters);
 
-  const { data: metrics, isSuccess, isLoading, isError } = useQuery(metricQueries.list());
+  const queryClient = useQueryClient();
+  const { data: metrics, isSuccess, isLoading, isError } = useQuery({
+    ...metricQueries.list(),
+    placeholderData: () => getCachedMetricList(queryClient, name),
+  });
   const metric = metrics?.find((item) => item.name === name);
   const aggregations = metric ? getAggregations(metric) : [];
   const aggregation =
     aggregations.find((item) => item.value === searchParams.get('agg'))?.value ?? (metric ? getDefaultAggregation(metric) : undefined);
 
   const { data: attributes } = useQuery({ ...metricQueries.attributes(name), enabled: !!metric });
-  const { data: result } = useQuery({
+  const {
+    data: result,
+    isError: isResultError,
+    isPlaceholderData: isShowingOldResult,
+    refetch,
+  } = useQuery({
     ...metricQueries.query({
       name,
       rangeMs: range.ms,
       agg: aggregation,
       service,
       server_id: serverId,
-      filter,
+      filter: filterTexts.length > 0 ? filterTexts : undefined,
       group_by: groupBy,
     }),
     enabled: !!metric,
@@ -68,10 +77,10 @@ export default function MetricPage(props: Route.ComponentProps) {
   const { active } = useFiringAlerts({ ruleIds });
   const firingRuleIds = active.map((alert) => alert.rule_id);
   const viewRules = metric
-    ? rules.filter((rule) => isMetricRuleInView(rule, metric, { aggregation, service, serverId, filter, groupBy }))
+    ? rules.filter((rule) => isMetricRuleInView(rule, metric, { aggregation, service, serverId, filters: filterTexts, groupBy }))
     : [];
   const limitRule = viewRules.find((rule) => firingRuleIds.includes(rule.id)) ?? viewRules[0];
-  const limit = limitRule ? readMetricCondition(limitRule.condition)?.threshold : undefined;
+  const limitCondition = limitRule ? readMetricCondition(limitRule.condition) : undefined;
 
   const shown = result?.name === name ? result : undefined;
   const series: ChartSeries[] = (shown?.series ?? []).map((line, index) => ({
@@ -125,7 +134,7 @@ export default function MetricPage(props: Route.ComponentProps) {
 
   return (
     <div className="flex min-h-full flex-col bg-surface-page">
-      <MetricTopBar metric={metric} aggregation={aggregation} service={service} filter={filter} groupBy={groupBy} />
+      <MetricTopBar metric={metric} aggregation={aggregation} service={service} filters={filterTexts} groupBy={groupBy} />
       {metric && aggregation && (
         <div className="flex flex-1 justify-center px-10 pt-3 pb-12">
           <div className="flex w-full max-w-240 min-w-0 flex-col gap-6">
@@ -169,8 +178,12 @@ export default function MetricPage(props: Route.ComponentProps) {
               groupBy={groupBy}
               filters={filters}
               attributes={attributes}
-              limit={limit}
+              limit={limitCondition?.threshold}
+              isBelow={limitCondition?.below ?? false}
               isFiring={!!limitRule && firingRuleIds.includes(limitRule.id)}
+              isError={isResultError && !shown}
+              isShowingOldResult={isShowingOldResult}
+              onRetry={() => refetch()}
               onChange={setParams}
             />
 
@@ -180,7 +193,7 @@ export default function MetricPage(props: Route.ComponentProps) {
               rangeMs={range.ms}
               service={service}
               serverId={serverId}
-              filter={filter}
+              filter={filterTexts.length > 0 ? filterTexts : undefined}
               groupBy={groupBy}
             />
           </div>

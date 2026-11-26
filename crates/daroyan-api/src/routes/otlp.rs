@@ -350,6 +350,22 @@ async fn accept_metrics(
         )));
     }
 
+    if let Err(retry_after) = state.metric_budgets.spend(&token.id, count) {
+        if let Err(error) =
+            state.database.add_rejected_metric_points(&token.id, count).await
+        {
+            tracing::warn!(token_id = %token.id, %error, "count throttled metric points");
+        }
+
+        return Err(OtlpError::Throttled {
+            message: format!(
+                "This token sent more than {} metric points this minute",
+                state.config.metrics.point_budget
+            ),
+            retry_after,
+        });
+    }
+
     let hosts = state.hosts.read(&state.database).await.map_err(Error::from)?;
     let parsed =
         to_metric_samples(&request, &hosts, &token.id, Utc::now().timestamp_millis());
@@ -396,6 +412,6 @@ fn rejection_message(
     }
 
     format!(
-        "Dropped {skipped} points. Daroyan does not store summaries or points without a value"
+        "Dropped {skipped} points. Daroyan does not store summaries, points without a value or points more than 5 minutes in the future"
     )
 }

@@ -16,7 +16,7 @@ export function MetricFilterChip(props: MetricFilterChipProps) {
       <button
         type="button"
         onClick={onToggle}
-        aria-label={filter.isNegated ? 'Change to equals' : 'Change to not equals'}
+        aria-label={filter.isNegated ? 'is not, change to is' : 'is, change to is not'}
         className="h-full px-1.5 text-text-tertiary outline-none hover:bg-surface-fill focus-visible:bg-surface-fill"
       >
         {filter.isNegated ? 'is not' : 'is'}

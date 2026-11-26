@@ -1,8 +1,9 @@
 import { keepPreviousData, queryOptions } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 
 import { apiClient } from '~/lib/api-client';
 import { request } from '~/lib/http';
-import type { MetricAggregation } from '~/utils/metrics';
+import type { MetricAggregation, MetricSummary } from '~/utils/metrics';
 
 const REFRESH_MS = 30_000;
 
@@ -12,7 +13,7 @@ export type MetricFilters = {
   agg?: MetricAggregation;
   service?: string;
   server_id?: string;
-  filter?: string;
+  filter?: string[];
   group_by?: string;
   step_ms?: number;
 };
@@ -51,3 +52,10 @@ export const metricQueries = {
       refetchInterval: REFRESH_MS,
     }),
 };
+
+export function getCachedMetricList(queryClient: QueryClient, name: string) {
+  return queryClient
+    .getQueriesData<MetricSummary[]>({ queryKey: [...metricQueries.all(), 'list'] })
+    .map(([, data]) => data)
+    .find((data) => data?.some((metric) => metric.name === name));
+}

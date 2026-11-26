@@ -636,8 +636,16 @@ fn build_uri(tool: &Tool, args: &Map<String, Value>) -> Result<String, String> {
     }
     let mut query = form_urlencoded::Serializer::new(String::new());
     for name in &tool.query_names {
-        if let Some(value) = args.get(name).filter(|value| !value.is_null()) {
-            query.append_pair(name, &to_param(value));
+        match args.get(name) {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(items)) => {
+                for item in items {
+                    query.append_pair(name, &to_param(item));
+                }
+            }
+            Some(value) => {
+                query.append_pair(name, &to_param(value));
+            }
         }
     }
     let query = query.finish();
@@ -1097,5 +1105,31 @@ mod tests {
         assert_eq!(value["next_runs"][0], "2026-10-14T17:46:40.000Z");
         assert_eq!(value["uptime"], 21_917);
         assert_eq!(value["ping_url"], "https://d.example/p/abc");
+    }
+
+    #[test]
+    fn sends_each_list_item_as_its_own_query_param() {
+        let tool = Tool {
+            def: ToolDef {
+                name: "query_metric",
+                method: Method::GET,
+                path: "/v1/metrics/{name}/query",
+                description: "",
+            },
+            path_names: vec!["name".to_string()],
+            query_names: vec!["filter".to_string(), "agg".to_string()],
+            body: BodyShape::None,
+            listing: Value::Null,
+        };
+        let args = json!({
+            "name": "queue.depth",
+            "filter": ["url=/a?b=1,2", "code!=500"],
+            "agg": "last",
+        });
+
+        assert_eq!(
+            build_uri(&tool, args.as_object().unwrap()).unwrap(),
+            "/v1/metrics/queue.depth/query?filter=url%3D%2Fa%3Fb%3D1%2C2&filter=code%21%3D500&agg=last"
+        );
     }
 }

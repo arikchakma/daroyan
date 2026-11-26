@@ -399,7 +399,7 @@ async fn stores_metrics_and_works_out_counter_changes() {
         .iter()
         .filter_map(Value::as_f64)
         .collect();
-    assert_eq!(values, [5.0, 47.0, 8.0]);
+    assert_eq!(values, [5.0, 27.0, 8.0]);
 
     let filtered: Value = http
         .get(query("emails.sent", "&agg=increase&filter=provider!=ses"))
@@ -410,6 +410,35 @@ async fn stores_metrics_and_works_out_counter_changes() {
         .await
         .unwrap();
     assert_eq!(filtered["series"], json!([]));
+
+    let comma: Value = http
+        .get(query("emails.sent", "&agg=increase&filter=provider%3Dses%2Cx"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(comma["series"], json!([]));
+
+    let both: Value = http
+        .get(query("emails.sent", "&agg=increase&filter=provider=ses&filter=provider!=x"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(both["series"].as_array().unwrap().len(), 1);
+
+    let broken = http
+        .get(query("emails.sent", "&filter=provider"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(broken.status(), StatusCode::BAD_REQUEST);
+    let nameless = http.get(query("emails.sent", "&filter=%3Dses")).send().await.unwrap();
+    assert_eq!(nameless.status(), StatusCode::BAD_REQUEST);
 
     let median: Value = http
         .get(query("job.duration", "&agg=p50"))
@@ -779,4 +808,157 @@ async fn fires_metric_alerts_per_group() {
     assert_eq!(subjects, ["email", "pool.size"]);
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+struct SilentCase {
+    no_data: &'static str,
+    for_secs: u32,
+    first_check_mins_ago: i64,
+}
+
+async fn run_silent_group(
+    case: SilentCase,
+) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let dir = std::env::temp_dir().join(format!(
+        "daroyan-metric-silent-{}-{}",
+        case.no_data,
+        std::process::id()
+    ));
+    let state = open_test_state(&dir, MetricSettings::default()).await;
+    let analytics = state.analytics.clone();
+    let mut engine = AlertEngine::new(
+        state.database.clone(),
+        state.agents.clone(),
+        state.analytics.clone(),
+        state.config.app_url.clone(),
+    );
+    let http = common::sign_in(&state.database).await;
+    let anonymous = Client::new();
+    let base = serve(build_app(state)).await;
+    let token = create_token(&http, &base).await;
+
+    let now = chrono::Utc::now();
+    let ago = |mins: u64| now_nanos() - mins * MINUTE_NANOS;
+    let depth = |queue: &str, value: f64, at: u64| NumberDataPoint {
+        attributes: vec![text("queue", queue)],
+        time_unix_nano: at,
+        value: Some(NumberValue::AsDouble(value)),
+        ..Default::default()
+    };
+    let body = request(
+        "worker-1",
+        vec![Metric {
+            name: "queue.depth".to_string(),
+            unit: "{job}".to_string(),
+            data: Some(Data::Gauge(Gauge {
+                data_points: vec![
+                    depth("email", 1200.0, ago(9)),
+                    depth("webhook", 40.0, ago(9)),
+                    depth("webhook", 40.0, ago(1)),
+                ],
+            })),
+            ..Default::default()
+        }],
+    );
+    send(&anonymous, &format!("{base}/v1/otlp/v1/metrics"), &token, &body).await;
+    analytics.flush().await.unwrap();
+
+    let rule: Value = http
+        .post(format!("{base}/v1/alert-rules"))
+        .json(&json!({
+            "name": "Queue Backed Up",
+            "condition": {
+                "kind": "metric",
+                "name": "queue.depth",
+                "aggregation": "last",
+                "threshold": 1000,
+                "within_secs": 300,
+                "group_by": "queue"
+            },
+            "scope": { "kind": "all" },
+            "for_secs": case.for_secs,
+            "options": { "no_data": case.no_data },
+            "integration_ids": []
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(rule["id"].is_string(), "{rule}");
+
+    let list_firing = || async {
+        let firing: Vec<Value> = http
+            .get(format!("{base}/v1/alerts?status=firing"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        firing
+            .iter()
+            .map(|alert| {
+                (
+                    alert["subject"].as_str().unwrap().to_string(),
+                    alert["value"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let first = now - chrono::Duration::minutes(case.first_check_mins_ago);
+    engine.check_alerts(first).await.unwrap();
+    let before = list_firing().await;
+
+    engine.check_alerts(now).await.unwrap();
+    let after = list_firing().await;
+
+    std::fs::remove_dir_all(&dir).ok();
+    (before, after)
+}
+
+fn email(value: &str) -> Vec<(String, String)> {
+    vec![("email".to_string(), value.to_string())]
+}
+
+#[tokio::test]
+async fn keeps_a_silent_group_firing_when_no_data_is_keep() {
+    let case = SilentCase {
+        no_data: "keep",
+        for_secs: 0,
+        first_check_mins_ago: 6,
+    };
+    let (before, after) = run_silent_group(case).await;
+
+    assert_eq!(before, email("1,200 jobs"));
+    assert_eq!(after, email("1,200 jobs"));
+}
+
+#[tokio::test]
+async fn fires_a_silent_group_as_no_data_when_no_data_is_alert() {
+    let case = SilentCase {
+        no_data: "alert",
+        for_secs: 300,
+        first_check_mins_ago: 8,
+    };
+    let (before, after) = run_silent_group(case).await;
+
+    assert_eq!(before, []);
+    assert_eq!(after, email("No data"));
+}
+
+#[tokio::test]
+async fn resolves_a_silent_group_when_no_data_is_resolve() {
+    let case = SilentCase {
+        no_data: "resolve",
+        for_secs: 0,
+        first_check_mins_ago: 6,
+    };
+    let (before, after) = run_silent_group(case).await;
+
+    assert_eq!(before, email("1,200 jobs"));
+    assert_eq!(after, []);
 }

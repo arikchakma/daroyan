@@ -75,7 +75,7 @@ export default function MetricsPage() {
           icon="calendar"
           label={range.label}
           value={range.value}
-          options={[...METRIC_RANGES]}
+          options={METRIC_RANGES}
           onChange={(value) => setParams({ range: value === '1h' ? null : value })}
         />
       </PageBar>

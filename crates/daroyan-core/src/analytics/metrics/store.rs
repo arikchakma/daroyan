@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use duckdb::{Connection, params};
@@ -171,6 +172,27 @@ pub fn roll_up_metrics(conn: &Connection, now: i64) -> duckdb::Result<()> {
     let Some(start) = start.filter(|start| *start < end) else { return Ok(()) };
 
     let transaction = conn.unchecked_transaction()?;
+    rebuild_rollups(conn, start, end)?;
+
+    transaction.commit()
+}
+
+pub fn roll_up_late_hours(
+    conn: &Connection,
+    now: i64,
+    hours: &BTreeSet<i64>,
+) -> duckdb::Result<()> {
+    let window_start = now / HOUR_MS * HOUR_MS - REROLL_MS;
+
+    let transaction = conn.unchecked_transaction()?;
+    for hour in hours.iter().filter(|hour| **hour < window_start) {
+        rebuild_rollups(conn, *hour, hour + HOUR_MS)?;
+    }
+
+    transaction.commit()
+}
+
+fn rebuild_rollups(conn: &Connection, start: i64, end: i64) -> duckdb::Result<()> {
     conn.execute(
         "DELETE FROM metric_rollups WHERE hour >= ? AND hour < ?",
         [start, end],
@@ -183,7 +205,17 @@ pub fn roll_up_metrics(conn: &Connection, now: i64) -> duckdb::Result<()> {
         [],
     )?;
 
-    transaction.commit()
+    Ok(())
+}
+
+pub fn to_late_hours(points: &[PointRow], now: i64) -> BTreeSet<i64> {
+    let current_hour = now / HOUR_MS * HOUR_MS;
+
+    points
+        .iter()
+        .map(|point| point.at.div_euclid(HOUR_MS) * HOUR_MS)
+        .filter(|hour| *hour < current_hour)
+        .collect()
 }
 
 pub fn to_rollup_select(start: &str, end: &str) -> String {
@@ -223,11 +255,15 @@ pub fn to_rollup_select(start: &str, end: &str) -> String {
     )
 }
 
-pub fn purge_metrics(
-    conn: &Connection,
-    point_cutoff: i64,
-    rollup_cutoff: i64,
-) -> duckdb::Result<()> {
+pub struct MetricPurge {
+    pub point_cutoff: i64,
+    pub rollup_cutoff: i64,
+    pub keep_points: bool,
+}
+
+pub fn purge_metrics(conn: &Connection, purge: MetricPurge) -> duckdb::Result<()> {
+    let MetricPurge { point_cutoff, rollup_cutoff, keep_points } = purge;
+
     conn.execute(
         "UPDATE metric_series SET last_seen = recent.taken_at
          FROM (
@@ -238,7 +274,9 @@ pub fn purge_metrics(
            AND recent.taken_at > metric_series.last_seen",
         [point_cutoff],
     )?;
-    conn.execute("DELETE FROM metric_points WHERE taken_at < ?", [point_cutoff])?;
+    if !keep_points {
+        conn.execute("DELETE FROM metric_points WHERE taken_at < ?", [point_cutoff])?;
+    }
     conn.execute("DELETE FROM metric_rollups WHERE hour < ?", [rollup_cutoff])?;
     conn.execute("DELETE FROM metric_series WHERE last_seen < ?", [rollup_cutoff])?;
 
@@ -490,7 +528,7 @@ mod tests {
         )
         .unwrap();
 
-        purge_metrics(&conn, 5_000, 0).unwrap();
+        purge_metrics(&conn, purge(5_000, 0, false)).unwrap();
         let (points, last_seen): (i64, i64) = conn
             .query_row(
                 "SELECT (SELECT count(*) FROM metric_points), (SELECT last_seen FROM metric_series)",
@@ -500,10 +538,54 @@ mod tests {
             .unwrap();
         assert_eq!((points, last_seen), (1, 9_000));
 
-        purge_metrics(&conn, 20_000, 10_000).unwrap();
+        purge_metrics(&conn, purge(20_000, 10_000, false)).unwrap();
         let series: i64 = conn
             .query_row("SELECT count(*) FROM metric_series", [], |row| row.get(0))
             .unwrap();
         assert_eq!(series, 0);
+    }
+
+    fn purge(point_cutoff: i64, rollup_cutoff: i64, keep_points: bool) -> MetricPurge {
+        MetricPurge { point_cutoff, rollup_cutoff, keep_points }
+    }
+
+    fn rollup_points(conn: &Connection) -> Vec<(i64, i64)> {
+        conn.prepare("SELECT hour, points FROM metric_rollups ORDER BY hour")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<duckdb::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn rolls_up_hours_that_arrive_long_after_the_window() {
+        let conn = open();
+        let now = 10 * HOUR_MS + 5;
+        append_metrics(&conn, &[series(1)], &[point(1_000, vec![1, 0, 0])]).unwrap();
+        roll_up_metrics(&conn, now).unwrap();
+
+        let late = [point(2_000, vec![0, 2, 0]), point(9 * HOUR_MS, vec![1, 0, 0])];
+        append_metrics(&conn, &[], &late).unwrap();
+        let late_hours = to_late_hours(&late, now);
+        assert_eq!(late_hours, BTreeSet::from([0, 9 * HOUR_MS]));
+
+        roll_up_metrics(&conn, now).unwrap();
+        roll_up_late_hours(&conn, now, &late_hours).unwrap();
+
+        assert_eq!(rollup_points(&conn), [(0, 2), (9 * HOUR_MS, 1)]);
+    }
+
+    #[test]
+    fn keeps_points_when_asked() {
+        let conn = open();
+        append_metrics(&conn, &[series(1)], &[point(1_000, vec![1, 0, 0])]).unwrap();
+
+        purge_metrics(&conn, purge(5_000, 0, true)).unwrap();
+
+        let points: i64 = conn
+            .query_row("SELECT count(*) FROM metric_points", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(points, 1);
     }
 }

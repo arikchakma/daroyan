@@ -35,6 +35,7 @@ type MetricChartProps = {
   from: number;
   to: number;
   bucketMs: number;
+  min?: number;
   max: number;
   maxLabel: string;
   formatValue: (value: number) => string;
@@ -96,6 +97,7 @@ export function MetricChart(props: MetricChartProps) {
     from,
     to,
     bucketMs,
+    min = 0,
     max,
     maxLabel,
     formatValue,
@@ -115,7 +117,7 @@ export function MetricChart(props: MetricChartProps) {
       }
     }
 
-    const hasLimit = limit !== undefined && limit <= max;
+    const hasLimit = limit !== undefined && limit >= min && limit <= max;
     const lines = series.slice().reverse();
 
     const definition = defineChart({
@@ -207,11 +209,11 @@ export function MetricChart(props: MetricChartProps) {
           },
         },
         y: {
-          scale: scaleLinear().domain([0, max]),
+          scale: scaleLinear().domain([min, max]),
           grid: { stroke: 'var(--color-chart-grid)', strokeOpacity: 1 },
           axis: {
             line: false,
-            ticks: { values: [0, max / 2, max], size: 0 },
+            ticks: { values: [min, (min + max) / 2, max], size: 0 },
             tickLabels: false,
           },
         },
@@ -227,7 +229,7 @@ export function MetricChart(props: MetricChartProps) {
     });
 
     return { definition, rowsByTime };
-  }, [series, times, from, to, bucketMs, max, limit, limitLabel]);
+  }, [series, times, from, to, bucketMs, min, max, limit, limitLabel]);
 
   return (
     <div className="@container flex min-w-0 flex-col gap-2.5 rounded-2xl border border-border-ring bg-surface-default px-4 pt-3.5 pb-3 shadow-card">
@@ -317,4 +319,17 @@ export function getNiceMax(values: number[]) {
   const steps = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
   const step = steps.find((candidate) => candidate * magnitude >= peak) ?? 10;
   return step * magnitude;
+}
+
+export function getNiceDomain(values: number[]) {
+  const max = getNiceMax(values);
+  const lowest = Math.min(...values, 0);
+  if (lowest >= 0) {
+    return { min: 0, max };
+  }
+
+  const min = -getNiceMax([-lowest]);
+  const highest = Math.max(...values, 0);
+
+  return { min, max: highest > 0 ? max : 0 };
 }

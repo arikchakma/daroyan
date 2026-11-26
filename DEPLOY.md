@@ -53,6 +53,7 @@ start. Put TLS in front of it with a reverse proxy.
 | `METRIC_ROLLUP_RETENTION_DAYS` | No | `30` | Days of hourly OpenTelemetry metric totals kept. Charts longer than a day read these. |
 | `METRIC_SERIES_LIMIT` | No | `10000` | The most metric series each ingest token can send in an hour. A series is one metric with one set of attribute values. New series over it are dropped, and Settings → Telemetry counts them. |
 | `METRIC_SERIES_PER_METRIC` | No | `2000` | The most series one metric can have per ingest token. It stops one attribute with many values, like a user ID, from filling the disk. |
+| `METRIC_POINT_BUDGET` | No | `100000` | The most OpenTelemetry metric points each ingest token can send per minute. Batches over it get `429` with `Retry-After`, so SDKs retry them. Settings → Telemetry counts them as rejected points. |
 | `TRUSTED_PROXIES` | No | `127.0.0.1,::1` | CIDRs allowed to set the real-client-IP header. See the warning below. |
 | `CLIENT_IP_HEADER` | No | `cf-connecting-ip` | Header your proxy sets with the real client IP. Use `x-forwarded-for` for most proxies. |
 | `ALLOW_PRIVATE_TARGETS` | No | `false` | Allow uptime checks against private/localhost addresses. **Keep `false` in production** (it is the SSRF guard). Only enable if you monitor LAN hosts. |

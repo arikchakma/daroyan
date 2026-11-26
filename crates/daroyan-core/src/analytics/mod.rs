@@ -8,7 +8,7 @@ pub mod server_states;
 pub mod spans;
 pub mod uptime_results;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -30,7 +30,8 @@ use crate::analytics::metrics::series::{
     Admission, IDLE_MS, PointRow, SeriesCache, SeriesLimits,
 };
 use crate::analytics::metrics::store::{
-    append_metrics, list_known_series, purge_metrics, roll_up_metrics,
+    MetricPurge, append_metrics, list_known_series, purge_metrics, roll_up_late_hours,
+    roll_up_metrics, to_late_hours,
 };
 use crate::analytics::server_events::{
     EventRow, append_events, to_event_row, to_event_rows,
@@ -62,6 +63,7 @@ pub struct Analytics {
     reader: Arc<Mutex<Connection>>,
     pending: Arc<Mutex<Pending>>,
     metric_series: Arc<Mutex<SeriesCache>>,
+    late_metric_hours: Arc<Mutex<BTreeSet<i64>>>,
     last_backup: Arc<Mutex<Option<Backup>>>,
 }
 
@@ -162,6 +164,7 @@ impl TryFrom<Connection> for Analytics {
             reader: Arc::new(Mutex::new(reader)),
             pending: Arc::default(),
             metric_series: Arc::default(),
+            late_metric_hours: Arc::default(),
             last_backup: Arc::default(),
         })
     }
@@ -380,9 +383,11 @@ impl Analytics {
         }
 
         let series_ids: Vec<i64> = series.iter().map(|row| row.series_id).collect();
+        let late_hours = to_late_hours(&points, Utc::now().timestamp_millis());
         let result = self.write(move |conn| append_metrics(conn, &series, &points)).await;
-        if result.is_err() {
-            lock(&self.metric_series).forget(&series_ids);
+        match result {
+            Ok(()) => lock(&self.late_metric_hours).extend(late_hours),
+            Err(_) => lock(&self.metric_series).forget(&series_ids),
         }
 
         result
@@ -400,11 +405,26 @@ impl Analytics {
         } = purge;
         lock(&self.metric_series).forget_idle(now_ms);
 
+        let pending_hours = Arc::clone(&self.late_metric_hours);
+        let late_hours: BTreeSet<i64> = std::mem::take(&mut *lock(&pending_hours))
+            .into_iter()
+            .filter(|hour| *hour >= point_cutoff_ms)
+            .collect();
+
         self.write(move |conn| {
-            if let Err(error) = roll_up_metrics(conn, now_ms) {
+            let rolled_up = roll_up_metrics(conn, now_ms)
+                .and_then(|()| roll_up_late_hours(conn, now_ms, &late_hours));
+            if let Err(error) = &rolled_up {
                 tracing::error!(%error, "roll up metrics");
+                lock(&pending_hours).extend(late_hours);
             }
-            if let Err(error) = purge_metrics(conn, point_cutoff_ms, rollup_cutoff_ms) {
+
+            let metric_purge = MetricPurge {
+                point_cutoff: point_cutoff_ms,
+                rollup_cutoff: rollup_cutoff_ms,
+                keep_points: rolled_up.is_err(),
+            };
+            if let Err(error) = purge_metrics(conn, metric_purge) {
                 tracing::error!(%error, "purge metrics");
             }
 
@@ -1079,5 +1099,54 @@ mod tests {
         assert!(!path.with_extension("duckdb.partial").exists());
         assert_eq!(analytics.read_last_backup().unwrap().name, backup.name);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn keeps_metric_points_when_their_rollup_fails() {
+        let analytics =
+            Analytics::try_from(Connection::open_in_memory().unwrap()).unwrap();
+        analytics
+            .run(|conn| {
+                conn.execute_batch(include_str!(
+                    "../../../daroyan-migration/duckdb/0015_metrics.sql"
+                ))?;
+                conn.execute_batch(
+                    "DROP TABLE metric_rollups; \
+                     INSERT INTO metric_points (series_id, taken_at) VALUES (1, 0); \
+                     CREATE TABLE server_states (taken_at BIGINT); \
+                     CREATE TABLE disk_states (taken_at BIGINT); \
+                     CREATE TABLE server_events (occurred_at BIGINT); \
+                     CREATE TABLE spans (started_at BIGINT); \
+                     CREATE TABLE span_exceptions (occurred_at BIGINT); \
+                     CREATE TABLE uptime_results (checked_at BIGINT); \
+                     CREATE TABLE cron_runs (finished_at BIGINT); \
+                     CREATE TABLE log_lines (logged_at BIGINT); \
+                     CREATE TABLE log_volume (minute BIGINT); \
+                     INSERT INTO server_states VALUES (1), (500);",
+                )
+            })
+            .unwrap();
+
+        let purge = Purge {
+            now_ms: 10 * 60 * 60 * 1000,
+            cutoff_ms: 100,
+            log_cutoff_ms: 0,
+            volume_cutoff_ms: 0,
+            point_cutoff_ms: 100,
+            rollup_cutoff_ms: 0,
+            keep_unarchived: false,
+        };
+        analytics.purge(purge).await.unwrap();
+
+        let rows: (i64, i64) = analytics
+            .run(|conn| {
+                conn.query_row(
+                    "SELECT (SELECT count(*) FROM metric_points), (SELECT count(*) FROM server_states)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(rows, (1, 1));
     }
 }

@@ -6,6 +6,7 @@ import { DataTable } from '~/components/ui/data-table';
 import { useMetricSeriesTable } from '~/hooks/use-metric-series-table';
 import type { MetricSeriesRow } from '~/hooks/use-metric-series-table';
 import { metricQueries } from '~/queries/metrics';
+import { cn } from '~/utils/classname';
 import { pluralize } from '~/utils/format';
 import { getGroupLabel, getSeriesColor, getSeriesColumns } from '~/utils/metrics';
 import type { MetricSummary } from '~/utils/metrics';
@@ -16,7 +17,7 @@ type MetricSeriesSectionProps = {
   rangeMs: number;
   service?: string;
   serverId?: string;
-  filter?: string;
+  filter?: string[];
   groupBy?: string;
 };
 
@@ -41,6 +42,7 @@ export function MetricSeriesSection(props: MetricSeriesSectionProps) {
 
   const shown = results.map((result) => (result.data?.name === metric.name ? result.data : undefined));
   const isLoading = results.some((result, index) => !shown[index] && result.isFetching);
+  const isShowingOldResults = results.some((result) => result.isPlaceholderData);
 
   const labels =
     series.length > 0
@@ -55,13 +57,15 @@ export function MetricSeriesSection(props: MetricSeriesSectionProps) {
 
   return (
     <DetailSection title="Series" summary={rows.length > 0 ? pluralize(rows.length, 'series', 'series') : undefined}>
-      <DetailCard>
-        {rows.length > 0 || isLoading ? (
-          <DataTable table={table} label="Series" variant="card" size="lg" isLoading={isLoading} />
-        ) : (
-          <DetailEmpty>No series reported in this range.</DetailEmpty>
-        )}
-      </DetailCard>
+      <div className={cn('transition-opacity', isShowingOldResults && 'opacity-60')}>
+        <DetailCard>
+          {rows.length > 0 || isLoading ? (
+            <DataTable table={table} label="Series" variant="card" size="lg" isLoading={isLoading} />
+          ) : (
+            <DetailEmpty>No series reported in this range.</DetailEmpty>
+          )}
+        </DetailCard>
+      </div>
     </DetailSection>
   );
 }
