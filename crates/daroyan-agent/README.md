@@ -229,6 +229,18 @@ The API adds these attributes to each line it can read:
 
 An SSH user name can contain spaces and the word `from`. The API reads the address from the end of the line, where `sshd` writes it, and drops an address that is not an IP address.
 
+The API keeps the last login from each address on each server in the `access_sources` table. It does not delete these rows with old logs, so it knows an address for longer than `LOG_RETENTION_DAYS`. Each successful SSH login gets `ssh.ip_last_seen`: the time of the login before it from the same address. A first login from an address has no `ssh.ip_last_seen`.
+
+The server page shows the latest access events in the Access section. Failed SSH logins are not listed there, because a public server gets many of them. The section shows how many failed logins came in the last 24 hours.
+
+Three alert rules use these lines:
+
+- Login from a new address: an SSH login from an address that did not log in to the server in the last N days.
+- Root login: an SSH login as `root`.
+- Login after failed attempts: an SSH login after N or more failed attempts from the same address in a time window. One wrong password writes more than one line, so the API counts each password or key that `sshd` rejected once.
+
+Each rule makes one alert for each address. The alert closes when no new matching login comes from that address for 15 minutes. The rules read only lines from the `access` source that came from the journal and from `sshd`.
+
 Access logs need journald. On a server without it, the agent logs this at the start and sends no access logs. The agent does not read `/var/log/auth.log` for access logs, because any user can write a forged line there through syslog.
 
 ## Enrollment

@@ -85,6 +85,14 @@ pub enum Condition {
         #[serde(default)]
         group_by: TraceGroup,
     },
+    LoginNewIp {
+        days: u32,
+    },
+    LoginRoot,
+    LoginAfterFailures {
+        failures: u32,
+        within_secs: u32,
+    },
     Metric {
         name: String,
         #[serde(default)]
@@ -703,6 +711,19 @@ pub fn validate_options(
                 "Leave the source and text out to match any, or give up to 200 characters",
             );
         }
+        Condition::LoginNewIp { days } if !(1..=365).contains(days) => {
+            return invalid("The days must be between 1 and 365");
+        }
+        Condition::LoginAfterFailures { failures, .. }
+            if !(1..=10_000).contains(failures) =>
+        {
+            return invalid("The failed attempts must be between 1 and 10,000");
+        }
+        Condition::LoginAfterFailures { within_secs, .. }
+            if !(60..=MAX_FOR_SECS).contains(within_secs) =>
+        {
+            return invalid("The window must be between 1 minute and 24 hours");
+        }
         Condition::TraceErrors { above, .. } if !(0.0..100.0).contains(above) => {
             return invalid("The error rate must be between 0 and 100 percent");
         }
@@ -931,6 +952,14 @@ pub fn describe_condition(condition: &Condition, for_secs: u32) -> String {
             }
             what
         }
+        Condition::LoginNewIp { days } => {
+            format!("SSH login from an address not seen in {days} days")
+        }
+        Condition::LoginRoot => "SSH login as root".to_string(),
+        Condition::LoginAfterFailures { failures, within_secs } => format!(
+            "SSH login after {failures}+ failed attempts in {}",
+            format_duration(*within_secs)
+        ),
         Condition::TraceErrors { .. } | Condition::TraceLatency { .. } => condition
             .trace_rule()
             .map(|trace| trace.to_string())

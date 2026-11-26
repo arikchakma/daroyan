@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use super::ParsedLine;
 
-const SSH_PROCESSES: [&str; 3] = ["sshd", "sshd-session", "sshd-auth"];
+pub(crate) const SSH_PROCESSES: [&str; 3] = ["sshd", "sshd-session", "sshd-auth"];
 const ACCOUNT_PROCESSES: [&str; 9] = [
     "useradd", "userdel", "usermod", "groupadd", "groupdel", "groupmod", "gpasswd",
     "passwd", "chpasswd",

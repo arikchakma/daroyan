@@ -5,10 +5,12 @@ use daroyan_protocol::host::Host;
 use duckdb::params;
 
 use crate::alerts::evaluate::{Level, make_trace_reading, rate};
+use crate::alerts::logins::{LOGIN_WINDOW_MS, LoginHit, find_login_hits};
 use crate::alerts::rules::{
     Condition, MAX_METRIC_GROUPS, Scope, Target, TraceRule, read_log_severity,
 };
 use crate::analytics::Analytics;
+use crate::analytics::access::Since;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source, list_busy_windows,
 };
@@ -72,6 +74,12 @@ pub async fn backtest_rule(
         query.since = since;
         let window_ms = i64::from(*within_secs) * 1000;
         return Ok(Some(backtest_metric(analytics, condition, query, window_ms).await?));
+    }
+
+    if let Some(rule) = condition.login_rule() {
+        let servers = database.list_servers().await?;
+        let hits = find_login_hits(analytics, rule, Since::Logged(since)).await?;
+        return Ok(Some(to_login_hits(hits, scope, &servers)));
     }
 
     if matches!(
@@ -156,6 +164,47 @@ pub async fn backtest_rule(
     hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
     hits.truncate(MAX_HITS);
     Ok(Some(hits))
+}
+
+fn to_login_hits(
+    hits: Vec<LoginHit>,
+    scope: &Scope,
+    servers: &[Server],
+) -> Vec<BacktestHit> {
+    let names: HashMap<&str, &str> = servers
+        .iter()
+        .filter(|server| {
+            let labels: Vec<String> =
+                serde_json::from_value(server.labels.clone()).unwrap_or_default();
+            scope.includes(&server.id, &labels)
+        })
+        .map(|server| (server.id.as_str(), server.name.as_str()))
+        .collect();
+
+    let mut fired: HashMap<(String, String), i64> = HashMap::new();
+    let mut found: Vec<BacktestHit> = Vec::new();
+    for hit in hits {
+        let Some(name) = names.get(hit.server_id.as_str()) else {
+            continue;
+        };
+        let key = (hit.server_id.clone(), hit.ip.clone());
+        if fired.get(&key).is_some_and(|at| hit.at - at < LOGIN_WINDOW_MS) {
+            continue;
+        }
+
+        fired.insert(key, hit.at);
+        found.push(BacktestHit {
+            server_id: hit.server_id,
+            server_name: name.to_string(),
+            subject: hit.ip,
+            value: hit.label,
+            at: hit.at,
+        });
+    }
+
+    found.sort_by_key(|hit| std::cmp::Reverse(hit.at));
+    found.truncate(MAX_HITS);
+    found
 }
 
 async fn backtest_logs(

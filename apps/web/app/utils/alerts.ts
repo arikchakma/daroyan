@@ -54,6 +54,14 @@ export const METRIC_GROUPS: { label: string; items: { kind: ConditionKind; label
       { kind: 'cron_failed', label: 'Failed' },
     ],
   },
+  {
+    label: 'Access',
+    items: [
+      { kind: 'login_new_ip', label: 'Login from a new address' },
+      { kind: 'login_root', label: 'Root login' },
+      { kind: 'login_after_failures', label: 'Login after failed attempts' },
+    ],
+  },
   { label: 'Logs', items: [{ kind: 'logs', label: 'Matching lines' }] },
   {
     label: 'Traces',
@@ -70,6 +78,7 @@ export const CONDITION_OPTIONS = METRIC_GROUPS.flatMap((group) => group.items);
 const CHECK_KINDS: ConditionKind[] = ['uptime_down', 'response_time', 'first_byte', 'cert_days'];
 const CRON_KINDS: ConditionKind[] = ['cron_missed', 'cron_failed'];
 const TRACE_KINDS: ConditionKind[] = ['trace_errors', 'trace_latency'];
+const LOGIN_KINDS: ConditionKind[] = ['login_new_ip', 'login_root', 'login_after_failures'];
 const AGGREGATED_KINDS: ConditionKind[] = ['cpu', 'memory', 'disk', 'load', 'response_time', 'first_byte'];
 
 export function isCheckKind(kind: ConditionKind) {
@@ -82,6 +91,14 @@ export function isCronKind(kind: ConditionKind) {
 
 export function isTraceKind(kind: ConditionKind) {
   return TRACE_KINDS.includes(kind);
+}
+
+export function isLoginKind(kind: ConditionKind) {
+  return LOGIN_KINDS.includes(kind);
+}
+
+export function hasLoginLimit(kind: ConditionKind) {
+  return kind === 'login_new_ip' || kind === 'login_after_failures';
 }
 
 export function isServiceKind(kind: ConditionKind) {
@@ -104,9 +121,12 @@ export function getUnit(kind: ConditionKind) {
     case 'trace_latency':
       return 'ms';
     case 'cert_days':
+    case 'login_new_ip':
       return 'days';
     case 'logs':
       return 'lines';
+    case 'login_after_failures':
+      return 'attempts';
     default:
       return '';
   }
@@ -387,6 +407,12 @@ export function readThreshold(condition: Schemas['Condition']) {
   if ('below' in condition) {
     return condition.below;
   }
+  if (condition.kind === 'login_new_ip') {
+    return condition.days;
+  }
+  if (condition.kind === 'login_after_failures') {
+    return condition.failures;
+  }
   return condition.kind === 'logs' ? condition.count : undefined;
 }
 
@@ -598,6 +624,10 @@ export function getValueHint(condition?: Schemas['Condition']) {
       return 'Days left on the certificate when the alert fired.';
     case 'logs':
       return `Matching log lines in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
+    case 'login_new_ip':
+    case 'login_root':
+    case 'login_after_failures':
+      return 'Who logged in, and from which address.';
     case 'trace_errors':
       return `Share of requests that failed in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
     case 'metric':
@@ -613,7 +643,10 @@ export function getValueHint(condition?: Schemas['Condition']) {
 
 export function describeAlertNow(alert: Schemas['Alert'], summary?: string) {
   const rest = summary?.match(/ (above|below|over) .*/)?.[0];
-  return rest ? `${alert.subject} is at ${alert.value},${rest}.` : `${alert.subject}: ${alert.value}.`;
+  if (rest) {
+    return `${alert.subject} is at ${alert.value},${rest}.`;
+  }
+  return alert.value.includes(alert.subject) ? `${alert.value}.` : `${alert.subject}: ${alert.value}.`;
 }
 
 export function formatMinutesLong(from: string | number, to: string | number = Date.now()) {

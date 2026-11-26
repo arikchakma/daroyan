@@ -5,6 +5,7 @@ pub mod engine;
 pub mod evaluate;
 pub mod facts;
 pub mod integrations;
+pub mod logins;
 pub mod message;
 pub mod notify;
 pub mod rules;

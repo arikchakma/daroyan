@@ -2,7 +2,6 @@ use std::path::Path;
 
 use serde_json::Value;
 
-pub const ACCESS_SERVICE: &str = "access";
 pub const ACCESS_KEY: &str = "daroyan/access";
 const JOURNAL_SOCKET: &str = "/run/systemd/journal/socket";
 const COMMANDS: [&str; 14] = [

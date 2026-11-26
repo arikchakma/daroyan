@@ -1,3 +1,4 @@
+pub mod access;
 pub mod archive;
 pub mod cron_runs;
 pub mod log_lines;
@@ -365,6 +366,7 @@ impl Analytics {
 
         let others = self
             .write(move |conn| {
+                access::remember_logins(conn, &mut pending.logs)?;
                 append_states(conn, &pending.states)?;
                 append_disks(conn, &pending.disks)?;
                 append_events(conn, &pending.events)?;
@@ -570,6 +572,7 @@ impl Analytics {
                 [OTLP_SERVER_ID, &server_id],
             )?;
             conn.execute("DELETE FROM log_lines WHERE server_id = ?", [&server_id])?;
+            conn.execute("DELETE FROM access_sources WHERE server_id = ?", [&server_id])?;
             conn.execute(
                 "UPDATE spans SET server_id = NULL WHERE server_id = ?",
                 [&server_id],

@@ -11,7 +11,9 @@ use daroyan_protocol::log::{
 use log::{info, warn};
 use serde_json::Value;
 
-use crate::logs::access::{self, ACCESS_KEY, ACCESS_SERVICE};
+use daroyan_protocol::log::ACCESS_SERVICE;
+
+use crate::logs::access::{self, ACCESS_KEY};
 use crate::logs::follow::{Feed, Follower, Launch, LogFollowers, Position, Sink};
 use crate::logs::parse::RawLine;
 

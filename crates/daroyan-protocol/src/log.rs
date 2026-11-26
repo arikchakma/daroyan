@@ -8,6 +8,7 @@ pub const SEVERITY_DEBUG: u8 = 5;
 pub const SEVERITY_INFO: u8 = 9;
 pub const SEVERITY_WARN: u8 = 13;
 pub const SEVERITY_ERROR: u8 = 17;
+pub const ACCESS_SERVICE: &str = "access";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct LogBatch {

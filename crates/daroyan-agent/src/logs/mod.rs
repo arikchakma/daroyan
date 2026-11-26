@@ -11,14 +11,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use daroyan_protocol::log::{LogBatch, LogDrop, LogFormat, LogLine};
+use daroyan_protocol::log::{ACCESS_SERVICE, LogBatch, LogDrop, LogFormat, LogLine};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 
 use crate::check::docker_events::DockerEvents;
 use crate::config::{Config, DockerTarget, Source};
-use crate::logs::access::ACCESS_SERVICE;
 use crate::logs::docker::{DockerLogs, DockerSource};
 use crate::logs::file::FilePosition;
 use crate::logs::follow::{FollowedLine, LineQueue, Position};
@@ -344,6 +343,18 @@ fn access_source(config: &Config) -> Option<LogSource> {
     if !config.agent.access_logs {
         return None;
     }
+    let is_taken = config
+        .processes
+        .iter()
+        .map(|check| &check.name)
+        .chain(config.files.iter().map(|file| &file.name))
+        .any(|name| name == ACCESS_SERVICE);
+    if is_taken {
+        warn!(
+            "another log source is named {ACCESS_SERVICE}, so access logs are off. Rename it to turn them on"
+        );
+        return None;
+    }
     if !access::has_journal() {
         info!("access logs need journald, which this server does not run");
         return None;
@@ -610,10 +621,10 @@ mod tests {
 
     use super::{
         BUDGET_WINDOW, Budget, FollowedLine, Held, IDLE_FLUSH, Journal, LogSource,
-        Position, Positions, RawLine, SourceKind, flush_held, join_continuations,
-        resolve_format, take_ready_lines, take_streamed,
+        Position, Positions, RawLine, SourceKind, access_source, flush_held,
+        join_continuations, resolve_format, take_ready_lines, take_streamed,
     };
-    use crate::config::DockerTarget;
+    use crate::config::{DockerTarget, parse_config};
 
     fn raw(stream: LogStream, text: &str) -> RawLine {
         RawLine {
@@ -623,6 +634,18 @@ mod tests {
             severity: None,
             position: None,
         }
+    }
+
+    #[test]
+    fn turns_access_logs_off_when_the_name_is_taken() {
+        let taken = parse_config(
+            "files:\n  - name: access\n    path: /var/log/nginx/access.log\n",
+        )
+        .unwrap();
+        assert!(access_source(&taken).is_none());
+
+        let off = parse_config("agent:\n  access_logs: false\n").unwrap();
+        assert!(access_source(&off).is_none());
     }
 
     #[test]

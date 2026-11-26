@@ -1,6 +1,7 @@
 import type { Schemas } from '@daroyan/client';
 
 import { AlertBadge, AlertBanners } from '~/components/alerts/alert-banners';
+import { AccessSection } from '~/components/servers/access-section';
 import { Icon } from '~/components/icons/icon';
 import { EventsCard } from '~/components/servers/events-card';
 import { FilesystemsSection } from '~/components/servers/filesystems-section';
@@ -81,6 +82,7 @@ export function ServerBody(props: ServerBodyProps) {
         {report && <ProcessesSection serverId={server.id} processes={report.processes} />}
         {report && <FilesystemsSection disks={report.state.disks} />}
         {report && <PortsSection ports={report.ports} />}
+        <AccessSection serverId={server.id} />
       </div>
     </div>
   );

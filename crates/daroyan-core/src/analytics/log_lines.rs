@@ -74,13 +74,13 @@ impl From<&Map<String, Value>> for HttpFields {
 }
 
 pub struct LogRow {
-    server_id: String,
-    at: i64,
-    service: String,
-    stream: &'static str,
+    pub(crate) server_id: String,
+    pub(crate) at: i64,
+    pub(crate) service: String,
+    pub(crate) stream: &'static str,
     severity: u8,
     message: String,
-    attributes: Option<String>,
+    pub(crate) attributes: Option<String>,
     trace_id: Option<String>,
     span_id: Option<String>,
     raw: Option<String>,

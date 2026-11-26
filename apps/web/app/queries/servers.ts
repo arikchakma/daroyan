@@ -41,6 +41,17 @@ export const serverQueries = {
         ),
       refetchInterval: REFRESH_MS,
     }),
+  access: (serverId: string) =>
+    queryOptions({
+      queryKey: [...serverQueries.detail(serverId).queryKey, 'access'],
+      queryFn: () =>
+        request(
+          apiClient.GET('/v1/servers/{server_id}/access', {
+            params: { path: { server_id: serverId } },
+          })
+        ),
+      refetchInterval: REFRESH_MS,
+    }),
   events: (serverId: string) =>
     queryOptions({
       queryKey: [...serverQueries.detail(serverId).queryKey, 'events'],

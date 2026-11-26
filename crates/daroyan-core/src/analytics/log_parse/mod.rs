@@ -10,6 +10,7 @@ mod system;
 use daroyan_protocol::log::LogFormat;
 use serde_json::{Map, Value};
 
+pub(crate) use access::SSH_PROCESSES;
 use access::{read_account, read_ssh, read_su, read_sudo};
 use app::{
     read_elasticsearch, read_flask, read_level_and_logger, read_python,

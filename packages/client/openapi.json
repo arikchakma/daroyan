@@ -2281,6 +2281,32 @@
         }
       }
     },
+    "/v1/servers/{server_id}/access": {
+      "get": {
+        "operationId": "get_server_access",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/servers/{server_id}/commands": {
       "post": {
         "operationId": "create_command",
@@ -3066,6 +3092,95 @@
   },
   "components": {
     "schemas": {
+      "AccessEvent": {
+        "type": "object",
+        "required": [
+          "at",
+          "action",
+          "outcome"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ip_last_seen": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AccessView": {
+        "type": "object",
+        "required": [
+          "events",
+          "failed_logins"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccessEvent"
+            }
+          },
+          "failed_logins": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "ActionName": {
         "type": "string",
         "enum": [
@@ -3991,6 +4106,66 @@
               },
               "spans": {
                 "$ref": "#/components/schemas/TraceSpans"
+              },
+              "within_secs": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "days",
+              "kind"
+            ],
+            "properties": {
+              "days": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "login_new_ip"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "login_root"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "failures",
+              "within_secs",
+              "kind"
+            ],
+            "properties": {
+              "failures": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "login_after_failures"
+                ]
               },
               "within_secs": {
                 "type": "integer",

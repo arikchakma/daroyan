@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
+use daroyan_protocol::log::ACCESS_SERVICE;
 use daroyan_protocol::report::TopProcess;
 use reqwest::Url;
 
@@ -8,6 +9,7 @@ use crate::alerts::facts::{
     AlertFacts, CertFacts, CheckFacts, DiskFacts, LogFacts, OfflineFacts, ProcessFacts,
     TraceFacts, UsageFacts,
 };
+use crate::alerts::logins::LOGIN_WINDOW_MS;
 use crate::alerts::notify::{Details, Field, Link, LinkStyle, Snippet, Text, Tone};
 use crate::alerts::rules::{
     Condition, RuleOptions, Target, TraceMeasure, describe_log_level, describe_rule,
@@ -83,6 +85,7 @@ impl AlertMessage<'_> {
                 self.resolved(lasted_secs, facts)
             }
             _ if self.alert.subject == NO_DATA => self.no_data(),
+            _ if self.condition.login_rule().is_some() => self.login(),
             (_, AlertFacts::Logs(facts)) => self.logs(facts),
             (_, AlertFacts::Usage(facts)) => self.usage(facts),
             (_, AlertFacts::Process(facts)) => self.process(facts),
@@ -152,6 +155,20 @@ impl AlertMessage<'_> {
                 Some(link) => vec![link.primary()],
                 None => self.open_target(),
             },
+            ..Details::default()
+        }
+    }
+
+    fn login(&self) -> Details {
+        Details {
+            summary: Text::default().bold(self.alert.value.as_str()).plain("."),
+            fields: vec![
+                self.target_field(),
+                Field::new("Address", &self.alert.subject),
+                self.started_field(),
+                Field::new("Rule", &self.rule.name),
+            ],
+            links: self.logs_link().into_iter().map(Link::primary).collect(),
             ..Details::default()
         }
     }
@@ -641,6 +658,21 @@ impl AlertMessage<'_> {
     fn resolved(&self, lasted_secs: u32, facts: &AlertFacts) -> Details {
         let lasted = format_span(u64::from(lasted_secs));
 
+        if self.condition.login_rule().is_some() {
+            let quiet = format_span(LOGIN_WINDOW_MS.unsigned_abs() / 1000);
+            return Details {
+                summary: Text::from(format!(
+                    "No new login from {} for {quiet}, so the alert closed after ",
+                    self.alert.subject
+                ))
+                .bold(lasted)
+                .plain("."),
+                fields: vec![self.target_field(), Field::new("Rule", &self.rule.name)],
+                links: self.logs_link().into_iter().collect(),
+                ..Details::default()
+            };
+        }
+
         if let (
             AlertFacts::Logs(LogFacts { run: Some(run), .. }),
             Condition::Logs { level, within_secs, .. },
@@ -836,6 +868,10 @@ impl AlertMessage<'_> {
             }
             Condition::ProcessStopped { .. } | Condition::ProcessDegraded { .. } => {
                 params.push(("service", self.alert.subject.clone()));
+            }
+            condition if condition.login_rule().is_some() => {
+                params.push(("service", ACCESS_SERVICE.to_string()));
+                params.push(("q", self.alert.subject.clone()));
             }
             _ => {}
         }
@@ -1281,6 +1317,30 @@ mod tests {
             ]
         );
         assert_eq!(labels(&details.links), ["Open logs"]);
+    }
+
+    #[test]
+    fn builds_a_login_alert() {
+        let case = Case::new(
+            Condition::LoginRoot,
+            make_alert("203.0.113.7", "root logged in from 203.0.113.7 with publickey"),
+            AlertFacts::None,
+        );
+
+        let firing = case.details(Moment::Firing);
+        assert_eq!(
+            firing.summary.to_string(),
+            "root logged in from 203.0.113.7 with publickey."
+        );
+        assert_eq!(labels(&firing.links)[0], "Open logs");
+        assert!(firing.links[0].url.contains("service=access"));
+        assert!(firing.links[0].url.contains("q=203.0.113.7"));
+
+        let resolved = case.details(Moment::Resolved { lasted_secs: 960 });
+        assert_eq!(
+            resolved.summary.to_string(),
+            "No new login from 203.0.113.7 for 15 min, so the alert closed after 16 min."
+        );
     }
 
     #[test]
