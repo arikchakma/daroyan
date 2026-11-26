@@ -2,10 +2,13 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::alerts::rules::{Condition, format_duration};
 use crate::analytics::Analytics;
-use crate::analytics::access::{Failure, Login, Since, list_failures, list_logins};
+use crate::analytics::access::{
+    Failure, FailureKind, Login, Since, list_failures, list_first_logins, list_logins,
+};
 use crate::error::Result;
 
 pub const LOGIN_WINDOW_MS: i64 = 15 * 60_000;
+pub const LEARNING_MS: i64 = 86_400_000;
 const DAY_MS: i64 = 86_400_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,40 +48,65 @@ impl Login {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct History {
+    pub failures: Vec<Failure>,
+    pub first_logins: HashMap<String, i64>,
+}
+
+impl History {
+    fn has_learned(&self, login: &Login) -> bool {
+        self.first_logins
+            .get(&login.server_id)
+            .is_some_and(|first| login.at - first >= LEARNING_MS)
+    }
+}
+
+#[derive(Default)]
+struct Connection {
+    attempts: u32,
+    has_other: bool,
+}
+
+impl Connection {
+    fn add(&mut self, kind: FailureKind) {
+        match kind {
+            FailureKind::Attempt => self.attempts += 1,
+            FailureKind::Other => self.has_other = true,
+            FailureKind::Probe => {}
+        }
+    }
+
+    fn count(&self) -> u32 {
+        if self.attempts > 0 { self.attempts } else { u32::from(self.has_other) }
+    }
+}
+
 fn count_attempts(login: &Login, failures: &[Failure], window_ms: i64) -> u32 {
-    let mut by_port: HashMap<i64, u32> = HashMap::new();
-    let mut unported = 0;
-    let matching = failures.iter().filter(|failure| {
+    let mut connections: HashMap<(Option<i64>, Option<i64>, usize), Connection> =
+        HashMap::new();
+    let matching = failures.iter().enumerate().filter(|(_, failure)| {
         failure.server_id == login.server_id
             && failure.ip == login.ip
             && (login.at - window_ms..=login.at).contains(&failure.at)
     });
-    for failure in matching {
-        match failure.port {
-            Some(port) => {
-                *by_port.entry(port).or_default() += u32::from(failure.is_attempt);
-            }
-            None => unported += 1,
-        }
+    for (index, failure) in matching {
+        let alone = if failure.port.is_some() { 0 } else { index };
+        connections
+            .entry((failure.pid, failure.port, alone))
+            .or_default()
+            .add(failure.kind);
     }
 
-    unported + by_port.into_values().map(|attempts| attempts.max(1)).sum::<u32>()
+    connections.values().map(Connection::count).sum()
 }
 
 impl LoginRule {
-    fn failure_window_ms(self) -> Option<i64> {
-        match self {
-            Self::AfterFailures { within_secs, .. } => {
-                Some(i64::from(within_secs) * 1000)
-            }
-            _ => None,
-        }
-    }
-
-    fn describe(self, login: &Login, failures: &[Failure]) -> Option<String> {
+    fn describe(self, login: &Login, history: &History) -> Option<String> {
         let who = login.who();
         let ip = &login.ip;
         match self {
+            Self::NewIp { .. } if !history.has_learned(login) => None,
             Self::NewIp { days } => match login.last_seen.map(|seen| login.at - seen) {
                 None => Some(format!(
                     "{who} logged in from {ip}, the first login from this address"
@@ -95,7 +123,7 @@ impl LoginRule {
             }),
             Self::AfterFailures { failures: least, within_secs } => {
                 let window_ms = i64::from(within_secs) * 1000;
-                let attempts = count_attempts(login, failures, window_ms);
+                let attempts = count_attempts(login, &history.failures, window_ms);
                 (attempts >= least).then(|| {
                     format!(
                         "{who} logged in from {ip} after {attempts} failed attempts in {}",
@@ -106,7 +134,7 @@ impl LoginRule {
         }
     }
 
-    pub fn find_hits(self, logins: &[Login], failures: &[Failure]) -> Vec<LoginHit> {
+    pub fn find_hits(self, logins: &[Login], history: &History) -> Vec<LoginHit> {
         logins
             .iter()
             .filter_map(|login| {
@@ -114,7 +142,7 @@ impl LoginRule {
                     server_id: login.server_id.clone(),
                     ip: login.ip.clone(),
                     at: login.at,
-                    label: self.describe(login, failures)?,
+                    label: self.describe(login, history)?,
                 })
             })
             .collect()
@@ -127,23 +155,32 @@ pub async fn find_login_hits(
     since: Since,
 ) -> Result<Vec<LoginHit>> {
     let logins = list_logins(analytics, since).await?;
-    let failures = match (rule.failure_window_ms(), logins.first()) {
-        (Some(window_ms), Some(first)) => {
-            let ips: BTreeSet<String> =
-                logins.iter().map(|login| login.ip.clone()).collect();
-            list_failures(analytics, first.at - window_ms, ips.into_iter().collect())
-                .await?
-        }
-        _ => Vec::new(),
+    let Some(first) = logins.first() else {
+        return Ok(Vec::new());
     };
 
-    Ok(rule.find_hits(&logins, &failures))
+    let mut history = History::default();
+    match rule {
+        LoginRule::NewIp { .. } => {
+            history.first_logins = list_first_logins(analytics).await?;
+        }
+        LoginRule::AfterFailures { within_secs, .. } => {
+            let ips: BTreeSet<String> =
+                logins.iter().map(|login| login.ip.clone()).collect();
+            let from = first.at - i64::from(within_secs) * 1000;
+            history.failures =
+                list_failures(analytics, from, ips.into_iter().collect()).await?;
+        }
+        LoginRule::Root => {}
+    }
+
+    Ok(rule.find_hits(&logins, &history))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DAY_MS, LoginRule, count_attempts};
-    use crate::analytics::access::{Failure, Login};
+    use super::{DAY_MS, History, LEARNING_MS, LoginRule, count_attempts};
+    use crate::analytics::access::{Failure, FailureKind, Login};
 
     fn login(user: &str, at: i64, last_seen: Option<i64>) -> Login {
         Login {
@@ -156,13 +193,14 @@ mod tests {
         }
     }
 
-    fn failure(at: i64, port: Option<i64>, is_attempt: bool) -> Failure {
+    fn failure(at: i64, port: Option<i64>, kind: FailureKind) -> Failure {
         Failure {
             server_id: "srv_1".to_string(),
             at,
+            pid: Some(9),
             ip: "203.0.113.7".to_string(),
             port,
-            is_attempt,
+            kind,
         }
     }
 
@@ -176,8 +214,12 @@ mod tests {
             login("arik", now, Some(now - 2 * DAY_MS)),
         ];
 
+        let history = History {
+            first_logins: [("srv_1".to_string(), now - 60 * DAY_MS)].into(),
+            ..History::default()
+        };
         let labels: Vec<String> = rule
-            .find_hits(&logins, &[])
+            .find_hits(&logins, &history)
             .into_iter()
             .map(|hit| hit.label)
             .collect();
@@ -191,9 +233,30 @@ mod tests {
     }
 
     #[test]
+    fn learns_addresses_for_a_day_first() {
+        let now = 100 * DAY_MS;
+        let rule = LoginRule::NewIp { days: 30 };
+        let logins = [login("arik", now, None)];
+        let learning = History {
+            first_logins: [("srv_1".to_string(), now - LEARNING_MS + 1)].into(),
+            ..History::default()
+        };
+        assert!(rule.find_hits(&logins, &learning).is_empty());
+        assert!(rule.find_hits(&logins, &History::default()).is_empty());
+
+        let learned = History {
+            first_logins: [("srv_1".to_string(), now - LEARNING_MS)].into(),
+            ..History::default()
+        };
+        assert_eq!(rule.find_hits(&logins, &learned).len(), 1);
+    }
+
+    #[test]
     fn finds_root_logins() {
-        let hits = LoginRule::Root
-            .find_hits(&[login("root", 1, None), login("deploy", 2, None)], &[]);
+        let hits = LoginRule::Root.find_hits(
+            &[login("root", 1, None), login("deploy", 2, None)],
+            &History::default(),
+        );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].label, "root logged in from 203.0.113.7 with publickey");
     }
@@ -202,24 +265,26 @@ mod tests {
     fn counts_each_failed_attempt_once() {
         let success = login("deploy", 610_000, Some(1));
         let failures = [
-            failure(100_000, Some(5001), true),
-            failure(100_001, Some(5001), false),
-            failure(200_000, Some(5002), true),
-            failure(200_001, Some(5002), true),
-            failure(300_000, Some(5003), false),
-            failure(400_000, None, true),
-            failure(1, Some(5004), true),
+            failure(100_000, Some(5001), FailureKind::Attempt),
+            failure(100_001, Some(5001), FailureKind::Other),
+            failure(200_000, Some(5002), FailureKind::Attempt),
+            failure(200_001, Some(5002), FailureKind::Attempt),
+            failure(300_000, Some(5003), FailureKind::Other),
+            failure(400_000, None, FailureKind::Attempt),
+            failure(450_000, Some(5005), FailureKind::Probe),
+            failure(1, Some(5004), FailureKind::Attempt),
         ];
         assert_eq!(count_attempts(&success, &failures, 600_000), 5);
 
         let rule = LoginRule::AfterFailures { failures: 5, within_secs: 600 };
-        let hits = rule.find_hits(std::slice::from_ref(&success), &failures);
+        let history = History { failures: failures.to_vec(), ..History::default() };
+        let hits = rule.find_hits(std::slice::from_ref(&success), &history);
         assert_eq!(
             hits[0].label,
             "deploy logged in from 203.0.113.7 after 5 failed attempts in 10m"
         );
 
         let strict = LoginRule::AfterFailures { failures: 6, within_secs: 600 };
-        assert!(strict.find_hits(&[success], &failures).is_empty());
+        assert!(strict.find_hits(&[success], &history).is_empty());
     }
 }

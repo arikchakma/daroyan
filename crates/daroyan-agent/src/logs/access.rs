@@ -40,6 +40,8 @@ const NOISE: [&str; 17] = [
     "pam_unix(sshd:auth): authentication failure",
     "PAM service(sshd) ignoring max retries",
 ];
+const SETUID_COMMANDS: [&str; 4] = ["sudo", "su", "passwd", "gpasswd"];
+const SYSTEM_DIRS: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 const UNNAMED_CLOSES: [&str; 2] = ["Connection closed by ", "Disconnected from "];
 const NAMED_CLOSES: [&str; 2] = ["authenticating user ", "invalid user "];
 
@@ -55,13 +57,26 @@ fn field<'a>(entry: &'a Value, key: &str) -> Option<&'a str> {
     entry.get(key).and_then(Value::as_str)
 }
 
-fn is_privileged(entry: &Value) -> bool {
-    let is_root = field(entry, "_UID") == Some("0");
+fn is_system_binary(entry: &Value, command: &str) -> bool {
+    field(entry, "_EXE").is_some_and(|exe| {
+        SYSTEM_DIRS.iter().any(|dir| {
+            exe.strip_prefix(dir).and_then(|rest| rest.strip_prefix('/')) == Some(command)
+        })
+    })
+}
+
+fn is_privileged(entry: &Value, command: &str) -> bool {
+    if field(entry, "_UID") == Some("0") {
+        return true;
+    }
+    if !SETUID_COMMANDS.contains(&command) {
+        return false;
+    }
+
     let has_capabilities = field(entry, "_CAP_EFFECTIVE")
         .and_then(|caps| u64::from_str_radix(caps, 16).ok())
         .is_some_and(|caps| caps != 0);
-
-    is_root || has_capabilities
+    has_capabilities && is_system_binary(entry, command)
 }
 
 fn is_noise(message: &str) -> bool {
@@ -79,7 +94,7 @@ fn is_noise(message: &str) -> bool {
 pub fn tag(entry: &Value, message: &str) -> Option<String> {
     let command = field(entry, "_COMM").filter(|command| COMMANDS.contains(command))?;
     let pid = field(entry, "_PID").and_then(|pid| pid.parse::<u32>().ok())?;
-    if !is_privileged(entry) || is_noise(message) {
+    if !is_privileged(entry, command) || is_noise(message) {
         return None;
     }
 
@@ -108,6 +123,7 @@ mod tests {
             "_PID": "512712",
             "_UID": "1000",
             "_CAP_EFFECTIVE": "1ffffffffff",
+            "_EXE": "/usr/bin/sudo",
         });
         assert!(tag(&sudo, "  tester : USER=root ; COMMAND=/usr/bin/true").is_some());
     }
@@ -135,6 +151,35 @@ mod tests {
             tag(&renamed, "Accepted password for root from 6.6.6.6 port 1 ssh2")
                 .is_none()
         );
+
+        let namespaced = json!({
+            "_COMM": "sshd",
+            "_PID": "9",
+            "_UID": "1000",
+            "_CAP_EFFECTIVE": "1ffffffffff",
+            "_EXE": "/usr/bin/python3.12",
+        });
+        assert!(
+            tag(&namespaced, "Accepted password for root from 9.9.9.9 port 1 ssh2")
+                .is_none()
+        );
+
+        let bind_mounted = json!({
+            "_COMM": "sudo",
+            "_PID": "9",
+            "_UID": "1000",
+            "_CAP_EFFECTIVE": "1ffffffffff",
+        });
+        assert!(tag(&bind_mounted, "  eve : USER=root ; COMMAND=/bin/forged").is_none());
+
+        let elsewhere = json!({
+            "_COMM": "sudo",
+            "_PID": "9",
+            "_UID": "1000",
+            "_CAP_EFFECTIVE": "1ffffffffff",
+            "_EXE": "/home/eve/sudo",
+        });
+        assert!(tag(&elsewhere, "  eve : USER=root ; COMMAND=/bin/forged").is_none());
 
         let unknown = json!({ "_COMM": "sshd", "_PID": "9" });
         assert!(tag(&unknown, "Accepted password for root").is_none());

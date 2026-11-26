@@ -204,30 +204,36 @@ sudo setfacl -d -m u:daroyan:r /var/www/app/storage/logs
 
 The agent sends the logins and the use of root on the server as the `access` source. It does this by default. Set `agent.access_logs: false` to stop it.
 
-The agent runs one `journalctl` process with a match for each of these programs: `sshd`, `sshd-session`, `sshd-auth`, `sudo`, `su`, `useradd`, `userdel`, `usermod`, `groupadd`, `groupdel`, `groupmod`, `gpasswd`, `passwd` and `chpasswd`. It follows the journal like a `systemd` entry, from a saved cursor. The source starts at the time the agent first runs with it, and it does not read older lines.
+The agent runs one `journalctl` process with a match for each of these programs: `sshd`, `sshd-session`, `sshd-auth`, `sudo`, `su`, `login`, `useradd`, `userdel`, `usermod`, `groupadd`, `groupdel`, `groupmod`, `gpasswd`, `passwd` and `chpasswd`. It follows the journal like a `systemd` entry, from a saved cursor. The source starts at the time the agent first runs with it, and it does not read older lines.
 
 Any user can write a journal line that says it comes from `sshd`, for example with `logger -t sshd`. So the agent does not trust the identifier that the program gives. It uses the fields that journald itself adds:
 
 - `_COMM` must be one of the programs above.
-- The program must run with privileges: `_UID` is `0`, or `_CAP_EFFECTIVE` is not zero. `sudo` and `su` run as the calling user but with root capabilities. A normal user's program has no capabilities, even if it renames itself to `sshd`.
+- The program must run as root: `_UID` is `0`. journald reads the user ID from the kernel, as the host sees it, so a program in a user namespace cannot fake it.
+- `sudo`, `su`, `passwd` and `gpasswd` are setuid programs. They run with the user ID of the person who called them, so for these four the agent also accepts a line when `_CAP_EFFECTIVE` is not zero and `_EXE` is that program in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin`. A program in a user namespace has capabilities, but its `_EXE` is the real file, such as `/usr/bin/python3`, so a renamed program fails this check.
+
+One gap stays open for these four programs. A user who can make user and mount namespaces can mount another file over `/usr/bin/sudo` in the namespace, and journald then shows `_EXE` as `/usr/bin/sudo`. That user can write a fake `sudo`, `su`, `passwd` or `gpasswd` line. They cannot write a fake `sshd` or `login` line, because those need `_UID` `0`, and the alert rules read only `sshd` lines. To close the gap, turn off namespaces for normal users with `kernel.apparmor_restrict_unprivileged_userns=1` on Ubuntu or `user.max_user_namespaces=0`.
 
 The agent drops a line that fails either check. It also drops lines that repeat other lines or say nothing about a person, for example `Connection closed by <ip>` before a user name, `Received disconnect` and the PAM session lines of `sudo` and `su`.
+
+The agent reads console logins from `login`. A success is the line `pam_unix(login:session): session opened for user …`, because both the shadow and the util-linux versions of `login` write it. A failure is `FAILED LOGIN (1) on '/dev/tty1' FOR 'root', …` from shadow, or `FAILED LOGIN 1 FROM tty1 FOR root, …` from util-linux. The agent does not read `/var/log/wtmp` or `/var/log/btmp`, because Debian 13 does not write them.
 
 The API adds these attributes to each line it can read:
 
 | Attribute | Value |
 | --- | --- |
-| `event.action` | `ssh_login`, `ssh_logout`, `sudo`, `su`, `user_add`, `user_delete`, `user_change`, `group_add`, `group_delete` or `password_change` |
+| `event.action` | `ssh_login`, `ssh_logout`, `console_login`, `console_logout`, `sudo`, `su`, `user_add`, `user_delete`, `user_change`, `group_add`, `group_delete` or `password_change` |
 | `event.outcome` | `success` or `failure`. A failure is a warning |
 | `user` | The person who logged in or ran the command |
 | `client.ip`, `client.port` | The address of an SSH client |
 | `ssh.method` | `publickey`, `password` or `keyboard-interactive/pam` |
 | `ssh.key.type`, `ssh.key.fingerprint` | The key of a `publickey` login, for example `ED25519` and `SHA256:…` |
 | `ssh.invalid_user` | `true` when the user name does not exist on the server |
+| `login.tty`, `login.host` | The terminal of a console login, and the remote host when `login` gives one |
 | `sudo.target_user`, `su.target_user` | The user that `sudo` or `su` switched to |
-| `user.target`, `group.name` | The account or group that was added, changed or deleted |
+| `user.target.name`, `group.name` | The account or group that was added, changed or deleted |
 
-An SSH user name can contain spaces and the word `from`. The API reads the address from the end of the line, where `sshd` writes it, and drops an address that is not an IP address.
+An SSH user name, and the key ID of an SSH certificate, can contain the words `from` and `port`. The API reads only an IP address that comes before `port <number>` and then the end of the line or `ssh2`. For a successful login, it takes the first one, because the user name is a real account and certificate text comes after `ssh2`. For a failure, it takes the address only when the line has exactly one, and keeps the failure without an address otherwise.
 
 The API keeps the last login from each address on each server in the `access_sources` table. It does not delete these rows with old logs, so it knows an address for longer than `LOG_RETENTION_DAYS`. Each successful SSH login gets `ssh.ip_last_seen`: the time of the login before it from the same address. A first login from an address has no `ssh.ip_last_seen`.
 
@@ -235,9 +241,9 @@ The server page shows the latest access events in the Access section. Failed SSH
 
 Three alert rules use these lines:
 
-- Login from a new address: an SSH login from an address that did not log in to the server in the last N days.
+- Login from a new address: an SSH login from an address that did not log in to the server in the last N days. The rule learns for 24 hours after the first login that Daroyan sees on a server, and sends nothing in that time.
 - Root login: an SSH login as `root`.
-- Login after failed attempts: an SSH login after N or more failed attempts from the same address in a time window. One wrong password writes more than one line, so the API counts each password or key that `sshd` rejected once.
+- Login after failed attempts: an SSH login after N or more failed attempts from the same address in a time window. One wrong password writes more than one line, so the API groups the lines by `sshd` process and client port, and counts each password or key that `sshd` rejected once. A `Failed none` line is a probe that asks which methods the server allows, so it does not count.
 
 Each rule makes one alert for each address. The alert closes when no new matching login comes from that address for 15 minutes. The rules read only lines from the `access` source that came from the journal and from `sshd`.
 

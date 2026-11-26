@@ -82,26 +82,71 @@ impl ParsedLine {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pick {
+    First,
+    Only,
+}
+
 struct Remote<'a> {
     user: &'a str,
     ip: IpAddr,
-    port: Option<u16>,
+    port: u16,
     tail: &'a str,
 }
 
-impl<'a> Remote<'a> {
-    fn parse(text: &'a str) -> Option<Self> {
-        let (head, port, tail) = match text.rsplit_once(" port ") {
-            Some((head, after)) => {
-                let (port, tail) = after.split_once(' ').unwrap_or((after, ""));
-                (head, Some(port.parse().ok()?), tail)
+fn split_words(text: &str) -> Vec<(usize, &str)> {
+    let mut words = Vec::new();
+    let mut start = None;
+    for (index, character) in text.char_indices() {
+        match (character == ' ', start) {
+            (true, Some(from)) => {
+                words.push((from, &text[from..index]));
+                start = None;
             }
-            None => (text, None, ""),
+            (false, None) => start = Some(index),
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        words.push((from, &text[from..]));
+    }
+
+    words
+}
+
+impl<'a> Remote<'a> {
+    fn parse(text: &'a str, pick: Pick) -> Option<Self> {
+        let words = split_words(text);
+        let mut found = words.windows(3).enumerate().filter_map(|(index, window)| {
+            let [(start, ip), (_, "port"), (_, port)] = window else {
+                return None;
+            };
+            let next = words.get(index + 3).map(|(_, word)| *word);
+            if !matches!(next, None | Some("ssh2" | "ssh2:")) {
+                return None;
+            }
+
+            let ip = ip.parse::<IpAddr>().ok()?;
+            let port = port.parse::<u16>().ok()?;
+            let end = words.get(index + 2).map(|(at, word)| at + word.len())?;
+            Some((*start, ip, port, end))
+        });
+
+        let (start, ip, port, end) = match pick {
+            Pick::First => found.next()?,
+            Pick::Only => {
+                let first = found.next()?;
+                if found.next().is_some() {
+                    return None;
+                }
+                first
+            }
         };
-        let (user, ip) = head.rsplit_once(' ')?;
+        let user = text[..start].trim_end();
         let user = user.strip_suffix(" from").unwrap_or(user);
 
-        Some(Self { user, ip: ip.parse().ok()?, port, tail })
+        Some(Self { user, ip, port, tail: text[end..].trim_start() })
     }
 
     fn write(&self, parsed: &mut ParsedLine) {
@@ -114,9 +159,7 @@ impl<'a> Remote<'a> {
         };
         parsed.insert("user", user);
         parsed.insert("client.ip", self.ip.to_string());
-        if let Some(port) = self.port {
-            parsed.insert("client.port", port);
-        }
+        parsed.insert("client.port", self.port);
     }
 }
 
@@ -127,12 +170,14 @@ fn read_login(text: &str, outcome: Outcome, parsed: &mut ParsedLine) {
     if method.contains(' ') {
         return;
     }
-    let Some(remote) = Remote::parse(rest) else {
+    let pick = if outcome == Outcome::Success { Pick::First } else { Pick::Only };
+    parsed.insert("ssh.method", method);
+    let Some(remote) = Remote::parse(rest, pick) else {
+        parsed.record(Action::SshLogin, outcome);
         return;
     };
 
     remote.write(parsed);
-    parsed.insert("ssh.method", method);
     let key = remote.tail.split_once(": ").map(|(_, key)| key.split_whitespace());
     if let Some(mut key) = key
         && let (Some(kind), Some(fingerprint)) = (key.next(), key.next())
@@ -141,6 +186,34 @@ fn read_login(text: &str, outcome: Outcome, parsed: &mut ParsedLine) {
         parsed.insert("ssh.key.fingerprint", fingerprint);
     }
     parsed.record(Action::SshLogin, outcome);
+}
+
+fn find_only_ip<'a>(text: &'a str, ending: &str) -> Option<(&'a str, IpAddr)> {
+    let mut found = text.match_indices(" from ").filter_map(|(at, marker)| {
+        let rest = &text[at + marker.len()..];
+        let (ip, after) = rest.split_at(rest.find(' ').unwrap_or(rest.len()));
+        if !after.is_empty() && !after.starts_with(ending) {
+            return None;
+        }
+        Some((&text[..at], ip.parse::<IpAddr>().ok()?))
+    });
+    let first = found.next()?;
+
+    found.next().is_none().then_some(first)
+}
+
+fn read_refused(text: &str) -> Option<(&str, IpAddr)> {
+    if let Some(rest) = text.strip_prefix("ROOT LOGIN REFUSED FROM ") {
+        let ip = rest.split_whitespace().next()?.parse().ok()?;
+        return Some(("root", ip));
+    }
+    if let Some(rest) = text.strip_prefix("User ") {
+        return find_only_ip(rest, " not allowed because ");
+    }
+
+    let rest = text.strip_prefix("PAM: Authentication failure for ")?;
+    let (user, ip) = find_only_ip(rest, " ")?;
+    Some((user.strip_prefix("illegal user ").unwrap_or(user), ip))
 }
 
 struct PamSession<'a> {
@@ -185,12 +258,19 @@ pub(super) fn read_ssh(text: &str, parsed: &mut ParsedLine) {
         SSH_FAILURES.iter().find_map(|(prefix, is_invalid)| {
             text.strip_prefix(prefix).map(|rest| (rest, *is_invalid))
         })
-        && let Some(remote) = Remote::parse(rest)
+        && let Some(remote) = Remote::parse(rest, Pick::Only)
     {
         remote.write(parsed);
         if is_invalid {
             parsed.insert("ssh.invalid_user", true);
         }
+        parsed.record(Action::SshLogin, Outcome::Failure);
+        return;
+    }
+
+    if let Some((user, ip)) = read_refused(text) {
+        parsed.insert("user", user);
+        parsed.insert("client.ip", ip.to_string());
         parsed.record(Action::SshLogin, Outcome::Failure);
         return;
     }
@@ -334,7 +414,7 @@ fn read_membership(text: &str, parsed: &mut ParsedLine) -> bool {
         return false;
     };
 
-    parsed.insert("user.target", user);
+    parsed.insert("user.target.name", user);
     parsed.insert("group.name", group);
     true
 }
@@ -355,7 +435,7 @@ fn read_gpasswd(text: &str, parsed: &mut ParsedLine) -> bool {
     };
 
     parsed.insert("user", user);
-    parsed.insert("user.target", target);
+    parsed.insert("user.target.name", target);
     parsed.insert("group.name", group);
     true
 }
@@ -371,7 +451,7 @@ pub(super) fn read_account(text: &str, parsed: &mut ParsedLine) {
     if let Some(fields) = text.strip_prefix("new user: ")
         && let Some(user) = read_field(fields, "name")
     {
-        parsed.insert("user.target", user);
+        parsed.insert("user.target.name", user);
         parsed.record(Action::UserAdd, Outcome::Success);
         return;
     }
@@ -383,7 +463,7 @@ pub(super) fn read_account(text: &str, parsed: &mut ParsedLine) {
         return;
     }
     if let Some((user, _)) = text.strip_prefix("delete user ").and_then(quoted) {
-        parsed.insert("user.target", user);
+        parsed.insert("user.target.name", user);
         parsed.record(Action::UserDelete, Outcome::Success);
         return;
     }
@@ -396,7 +476,7 @@ pub(super) fn read_account(text: &str, parsed: &mut ParsedLine) {
         .split_once(":chauthtok): password changed for ")
         .map(|(_, user)| user.trim())
     {
-        parsed.insert("user.target", user);
+        parsed.insert("user.target.name", user);
         parsed.record(Action::PasswordChange, Outcome::Success);
         return;
     }
@@ -407,7 +487,7 @@ pub(super) fn read_account(text: &str, parsed: &mut ParsedLine) {
         return;
     }
     if let Some((user, _)) = text.strip_prefix("change user ").and_then(quoted) {
-        parsed.insert("user.target", user);
+        parsed.insert("user.target.name", user);
         parsed.record(Action::UserChange, Outcome::Success);
     }
 }
@@ -534,6 +614,48 @@ mod tests {
     }
 
     #[test]
+    fn takes_the_login_address_before_certificate_text() {
+        let cert = parse(
+            "sshd[9]: Accepted publickey for arik from 203.0.113.7 port 5 ssh2: ED25519-CERT SHA256:abc ID x from 10.0.0.5 port 22 ssh2: y (serial 1) CA ED25519 SHA256:def",
+        );
+        assert_eq!(event(&cert), ("ssh_login", "success"));
+        assert_eq!(cert.attributes["client.ip"], "203.0.113.7");
+        assert_eq!(cert.attributes["client.port"], 5);
+        assert_eq!(cert.attributes["ssh.key.type"], "ED25519-CERT");
+
+        let failed = parse(
+            "sshd[9]: Failed publickey for arik from 203.0.113.7 port 5 ssh2: ED25519-CERT SHA256:abc ID x from 10.0.0.5 port 22 ssh2: y",
+        );
+        assert_eq!(event(&failed), ("ssh_login", "failure"));
+        assert!(!failed.attributes.contains_key("client.ip"));
+    }
+
+    #[test]
+    fn reads_refused_logins() {
+        let root = parse("sshd[9]: ROOT LOGIN REFUSED FROM 45.155.205.233 port 41022");
+        assert_eq!(event(&root), ("ssh_login", "failure"));
+        assert_eq!(root.attributes["user"], "root");
+        assert_eq!(root.attributes["client.ip"], "45.155.205.233");
+
+        let denied = parse(
+            "sshd[9]: User deploy from 45.155.205.233 not allowed because not listed in AllowUsers",
+        );
+        assert_eq!(denied.attributes["user"], "deploy");
+        assert_eq!(denied.attributes["client.ip"], "45.155.205.233");
+
+        let forged = parse(
+            "sshd[9]: User x from 10.0.0.1 not allowed because y from 45.155.205.233 not allowed because not listed in AllowUsers",
+        );
+        assert!(!forged.attributes.contains_key("client.ip"));
+
+        let pam = parse(
+            "sshd[9]: error: PAM: Authentication failure for illegal user admin from 45.155.205.233",
+        );
+        assert_eq!(event(&pam), ("ssh_login", "failure"));
+        assert_eq!(pam.attributes["user"], "admin");
+    }
+
+    #[test]
     fn reads_ssh_only_from_sshd() {
         let app = parse(
             "Oct 16 01:41:50 worker-1 myapp[2]: Accepted password for root from 203.0.113.7 port 1 ssh2",
@@ -650,7 +772,7 @@ mod tests {
             "useradd[7]: new user: name=tester, UID=1000, GID=1000, home=/home/tester, shell=/bin/bash, from=none",
         );
         assert_eq!(event(&user), ("user_add", "success"));
-        assert_eq!(user.attributes["user.target"], "tester");
+        assert_eq!(user.attributes["user.target.name"], "tester");
 
         let group = parse("useradd[7]: new group: name=tester, GID=1000");
         assert_eq!(event(&group), ("group_add", "success"));
@@ -658,7 +780,7 @@ mod tests {
 
         let sudoer = parse("usermod[8]: add 'tester' to group 'sudo'");
         assert_eq!(event(&sudoer), ("user_change", "success"));
-        assert_eq!(sudoer.attributes["user.target"], "tester");
+        assert_eq!(sudoer.attributes["user.target.name"], "tester");
         assert_eq!(sudoer.attributes["group.name"], "sudo");
 
         let shadow = parse("usermod[8]: add 'tester' to shadow group 'sudo'");
@@ -684,7 +806,7 @@ mod tests {
             "chpasswd[12]: pam_unix(chpasswd:chauthtok): password changed for tester",
         );
         assert_eq!(event(&password), ("password_change", "success"));
-        assert_eq!(password.attributes["user.target"], "tester");
+        assert_eq!(password.attributes["user.target.name"], "tester");
 
         let elsewhere = parse("myapp[1]: new user: name=tester, UID=1000");
         assert!(!elsewhere.attributes.contains_key("event.action"));

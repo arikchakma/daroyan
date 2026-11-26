@@ -30,9 +30,27 @@ pub struct Login {
 pub struct Failure {
     pub server_id: String,
     pub at: i64,
+    pub pid: Option<i64>,
     pub ip: String,
     pub port: Option<i64>,
-    pub is_attempt: bool,
+    pub kind: FailureKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    Attempt,
+    Probe,
+    Other,
+}
+
+impl From<Option<String>> for FailureKind {
+    fn from(method: Option<String>) -> Self {
+        match method.as_deref() {
+            None => Self::Other,
+            Some("none") => Self::Probe,
+            Some(_) => Self::Attempt,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,9 +210,10 @@ pub async fn list_failures(
             let marks = vec!["?"; ips.len()].join(", ");
             let sql = format!(
                 "SELECT server_id, logged_at, \
+                 TRY_CAST(json_extract_string(attributes, '$.\"process.pid\"') AS BIGINT), \
                  json_extract_string(attributes, '$.\"client.ip\"'), \
                  TRY_CAST(json_extract_string(attributes, '$.\"client.port\"') AS BIGINT), \
-                 json_extract_string(attributes, '$.\"ssh.method\"') IS NOT NULL \
+                 json_extract_string(attributes, '$.\"ssh.method\"') \
                  FROM log_lines WHERE logged_at >= ? AND {filter} \
                  AND json_extract_string(attributes, '$.\"client.ip\"') IN ({marks})"
             );
@@ -207,12 +226,25 @@ pub async fn list_failures(
                     Ok(Failure {
                         server_id: row.get(0)?,
                         at: row.get(1)?,
-                        ip: row.get(2)?,
-                        port: row.get(3)?,
-                        is_attempt: row.get(4)?,
+                        pid: row.get(2)?,
+                        ip: row.get(3)?,
+                        port: row.get(4)?,
+                        kind: FailureKind::from(row.get::<_, Option<String>>(5)?),
                     })
                 })?
                 .collect()
+        })
+        .await
+}
+
+pub async fn list_first_logins(analytics: &Analytics) -> Result<HashMap<String, i64>> {
+    analytics
+        .read(|conn| {
+            conn.prepare(
+                "SELECT server_id, min(first_seen) FROM access_sources GROUP BY server_id",
+            )?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
         })
         .await
 }
@@ -265,7 +297,7 @@ pub async fn read_access(
                 field("ssh.key.fingerprint"),
                 field("sudo.target_user"),
                 field("su.target_user"),
-                field("user.target"),
+                field("user.target.name"),
                 field("group.name"),
                 field("process.command_line"),
                 field("login.tty"),
@@ -298,8 +330,8 @@ pub async fn read_access(
             let failed_logins: u64 = conn.query_row(
                 &format!(
                     "SELECT count(*) {base} AND {action} = 'ssh_login' \
-                     AND {outcome} = 'failure' AND {} IS NOT NULL AND logged_at >= ?",
-                    field("ssh.method")
+                     AND {outcome} = 'failure' AND {method} NOT IN ('none') AND logged_at >= ?",
+                    method = field("ssh.method")
                 ),
                 params![server_id, ACCESS_SERVICE, JOURNAL, now - DAY_MS],
                 |row| row.get(0),
@@ -315,7 +347,10 @@ mod tests {
     use daroyan_protocol::log::LogBatch;
     use serde_json::json;
 
-    use super::{LAST_SEEN, Since, list_failures, list_logins, read_access};
+    use super::{
+        FailureKind, LAST_SEEN, Since, list_failures, list_first_logins, list_logins,
+        read_access,
+    };
     use crate::analytics::Analytics;
     use crate::analytics::archive::create_log_tables;
 
@@ -401,7 +436,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(failures.len(), 2);
-        assert_eq!(failures.iter().filter(|failure| failure.is_attempt).count(), 1);
+        assert_eq!(
+            failures
+                .iter()
+                .filter(|failure| failure.kind == FailureKind::Attempt)
+                .count(),
+            1
+        );
         assert!(failures.iter().all(|failure| failure.port == Some(7)));
 
         let attributes: String = analytics
@@ -415,6 +456,10 @@ mod tests {
             .await
             .unwrap();
         assert!(attributes.contains(&format!("\"{LAST_SEEN}\":1000")));
+
+        let first = list_first_logins(&analytics).await.unwrap();
+        assert_eq!(first["srv_1"], 1_000);
+        assert_eq!(first["srv_2"], 9_500);
 
         let view = read_access(&analytics, "srv_1".to_string(), 10_000, 50)
             .await

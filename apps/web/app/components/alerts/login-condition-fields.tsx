@@ -9,7 +9,7 @@ const ROOT_HINT = 'Fires when someone logs in over SSH as root, with one alert p
 
 function getLimitHint(form: RuleFormState) {
   if (form.kind === 'login_new_ip') {
-    return `Fires when someone logs in over SSH from an address that did not log in to the server in the last ${form.critical} days, with one alert per address.`;
+    return `Fires when someone logs in over SSH from an address that did not log in to the server in the last ${form.critical} days, with one alert per address. It learns for 24 hours after the first login on a server.`;
   }
 
   return `Fires when someone logs in over SSH after ${form.critical} or more failed attempts from the same address within ${formatSpan(form.loginWithin)}.`;
