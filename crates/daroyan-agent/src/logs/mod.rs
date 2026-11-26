@@ -1,3 +1,4 @@
+mod access;
 mod docker;
 mod file;
 mod follow;
@@ -11,16 +12,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use daroyan_protocol::log::{LogBatch, LogDrop, LogFormat, LogLine};
-use log::warn;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 
 use crate::check::docker_events::DockerEvents;
 use crate::config::{Config, DockerTarget, Source};
+use crate::logs::access::ACCESS_SERVICE;
 use crate::logs::docker::{DockerLogs, DockerSource};
 use crate::logs::file::FilePosition;
 use crate::logs::follow::{FollowedLine, LineQueue, Position};
-use crate::logs::journal::{JournalSource, follow_units, start_position};
+use crate::logs::journal::{Journal, JournalSource, follow_units, start_position};
 use crate::logs::parse::{RawLine, to_log_line};
 
 pub use crate::logs::follow::LogFollowers;
@@ -40,7 +42,7 @@ struct LogSource {
 
 enum SourceKind {
     Docker { target: DockerTarget },
-    Journal { unit: String },
+    Journal { journal: Journal },
     File { path: PathBuf },
 }
 
@@ -318,7 +320,9 @@ fn list_sources(config: &Config) -> Vec<LogSource> {
         let settings = check.logs.as_ref()?;
         let kind = match &check.source {
             Source::Docker(target) => SourceKind::Docker { target: target.clone() },
-            Source::Systemd(unit) => SourceKind::Journal { unit: unit.clone() },
+            Source::Systemd(unit) => {
+                SourceKind::Journal { journal: Journal::Unit(unit.clone()) }
+            }
             Source::Process(_) => return None,
         };
         Some(LogSource {
@@ -332,7 +336,24 @@ fn list_sources(config: &Config) -> Vec<LogSource> {
         format: resolve_format(&file.name, file.format.as_deref()),
         kind: SourceKind::File { path: file.path.clone() },
     });
-    processes.chain(files).collect()
+
+    processes.chain(files).chain(access_source(config)).collect()
+}
+
+fn access_source(config: &Config) -> Option<LogSource> {
+    if !config.agent.access_logs {
+        return None;
+    }
+    if !access::has_journal() {
+        info!("access logs need journald, which this server does not run");
+        return None;
+    }
+
+    Some(LogSource {
+        name: ACCESS_SERVICE.to_string(),
+        format: LogFormat::System,
+        kind: SourceKind::Journal { journal: Journal::Access },
+    })
 }
 
 fn read_source(
@@ -388,12 +409,12 @@ pub fn collect_logs(
         .iter()
         .enumerate()
         .filter_map(|(index, source)| match &source.kind {
-            SourceKind::Journal { unit } => Some(JournalSource {
+            SourceKind::Journal { journal } => Some(JournalSource {
                 source: index,
-                unit: unit.clone(),
+                journal: journal.clone(),
                 from: positions
                     .journal
-                    .entry(unit.clone())
+                    .entry(journal.key().to_string())
                     .or_insert_with(|| start_position(unix_now().as_secs()))
                     .clone(),
             }),
@@ -555,13 +576,15 @@ fn commit_position(
                 .or_default();
             *position = (*position).max(newest);
         }
-        SourceKind::Journal { unit } => {
+        SourceKind::Journal { journal } => {
             let cursor = emitted.iter().rev().find_map(|line| match &line.position {
                 Some(Position::Cursor(cursor)) => Some(cursor),
                 _ => None,
             });
             if let Some(cursor) = cursor {
-                positions.journal.insert(unit.clone(), cursor.to_string());
+                positions
+                    .journal
+                    .insert(journal.key().to_string(), cursor.to_string());
             }
         }
         SourceKind::File { .. } => {}
@@ -586,9 +609,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        BUDGET_WINDOW, Budget, FollowedLine, Held, IDLE_FLUSH, LogSource, Position,
-        Positions, RawLine, SourceKind, flush_held, join_continuations, resolve_format,
-        take_ready_lines, take_streamed,
+        BUDGET_WINDOW, Budget, FollowedLine, Held, IDLE_FLUSH, Journal, LogSource,
+        Position, Positions, RawLine, SourceKind, flush_held, join_continuations,
+        resolve_format, take_ready_lines, take_streamed,
     };
     use crate::config::DockerTarget;
 
@@ -878,7 +901,9 @@ mod tests {
             LogSource {
                 name: "nginx".to_string(),
                 format: LogFormat::Auto,
-                kind: SourceKind::Journal { unit: "nginx.service".to_string() },
+                kind: SourceKind::Journal {
+                    journal: Journal::Unit("nginx.service".to_string()),
+                },
             },
         ];
         let lines =

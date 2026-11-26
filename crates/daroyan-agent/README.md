@@ -104,6 +104,7 @@ Each process entry has exactly one source. The source decides how the agent find
 | `agent.commands` | `false` | `true` lets admins start, stop and restart `systemd` and `docker` entries from the dashboard. Auto-restart (`restart`) works either way. Both need `DAROYAN_COMMANDS=1` at install |
 | `agent.log_level`, `agent.log_path` | `info`, `/var/log/daroyan` | Rotated daily or at 20 MB, 7 files kept, `daroyan.log` points to the current file |
 | `agent.log_budget` | `1MB` | The most log data sent per minute, as `512KB` or `2MB`. Each log source gets an equal share. Lines over a share are dropped and counted |
+| `agent.access_logs` | `true` | Send logins, `sudo`, `su` and account changes from the journal as the `access` source. See Access logs |
 | `agent.state_path` | `/var/lib/daroyan` | Holds `server.json`, the server id and token, mode 600 |
 
 ### Docker containers
@@ -187,7 +188,7 @@ Mark a `docker` or `systemd` process with `logs: true`, or list a file under `fi
 - The API reads the rest: nginx, Apache, Caddy, HAProxy, Envoy and Traefik requests; Laravel, PHP, PHP-FPM, Rails, Django, Flask, uvicorn, Spring Boot, Logback and log4j app logs; MySQL, PostgreSQL, MongoDB, Redis, Kafka, RabbitMQ and Elasticsearch; sshd, sudo, cron, UFW, fail2ban and kernel OOM kills; and OpenTelemetry, Elastic ECS, structlog and Docker JSON.
 - Format: by default (`auto`) every reader is tried on each line. Set `format` to read a source with only one family: `plain`, `json`, `logfmt`, `nginx`, `apache`, `caddy`, `haproxy`, `envoy`, `traefik`, `laravel`, `php`, `php-fpm`, `rails`, `python`, `java`, `mysql`, `postgresql`, `mongodb`, `redis`, `kafka`, `rabbitmq`, `elasticsearch` or `system`. `plain` keeps lines as they are. Lines get a `log.format` attribute, and a line the format cannot read is kept with `log.parse_failed: true`. An unknown name logs a warning and falls back to `auto`.
 - A new source starts at its newest line. Read positions live in `log_positions.json` in `agent.state_path`. The agent saves them every 5 seconds and when it stops, so a restart does not lose or repeat lines. If the agent is killed, it can send the lines of the last 5 seconds again.
-- Budget: each source (one `processes` or `files` entry) gets an equal share of `agent.log_budget` every minute. A noisy container cannot use up the share of another service, for example the journal of `sshd`. The agent counts the lines over a share and sends that count.
+- Budget: each source (one `processes` or `files` entry, and the `access` source) gets an equal share of `agent.log_budget` every minute. A noisy container cannot use up the share of another service, for example the journal of `sshd`. The agent counts the lines over a share and sends that count.
 - Memory: the agent holds at most 8 MB of lines that it read but did not process. If the connection is slow, the followers wait and do not read more. Docker and the journal keep the lines until the agent reads them.
 - While the API cannot be reached, the agent keeps up to 10 MB of lines and drops the oldest past that.
 
@@ -198,6 +199,37 @@ sudo setfacl -m u:daroyan:rx /var/www/app/storage/logs
 sudo setfacl -m u:daroyan:r /var/www/app/storage/logs/laravel.log
 sudo setfacl -d -m u:daroyan:r /var/www/app/storage/logs
 ```
+
+## Access logs
+
+The agent sends the logins and the use of root on the server as the `access` source. It does this by default. Set `agent.access_logs: false` to stop it.
+
+The agent runs one `journalctl` process with a match for each of these programs: `sshd`, `sshd-session`, `sshd-auth`, `sudo`, `su`, `useradd`, `userdel`, `usermod`, `groupadd`, `groupdel`, `groupmod`, `gpasswd`, `passwd` and `chpasswd`. It follows the journal like a `systemd` entry, from a saved cursor. The source starts at the time the agent first runs with it, and it does not read older lines.
+
+Any user can write a journal line that says it comes from `sshd`, for example with `logger -t sshd`. So the agent does not trust the identifier that the program gives. It uses the fields that journald itself adds:
+
+- `_COMM` must be one of the programs above.
+- The program must run with privileges: `_UID` is `0`, or `_CAP_EFFECTIVE` is not zero. `sudo` and `su` run as the calling user but with root capabilities. A normal user's program has no capabilities, even if it renames itself to `sshd`.
+
+The agent drops a line that fails either check. It also drops lines that repeat other lines or say nothing about a person, for example `Connection closed by <ip>` before a user name, `Received disconnect` and the PAM session lines of `sudo` and `su`.
+
+The API adds these attributes to each line it can read:
+
+| Attribute | Value |
+| --- | --- |
+| `event.action` | `ssh_login`, `ssh_logout`, `sudo`, `su`, `user_add`, `user_delete`, `user_change`, `group_add`, `group_delete` or `password_change` |
+| `event.outcome` | `success` or `failure`. A failure is a warning |
+| `user` | The person who logged in or ran the command |
+| `client.ip`, `client.port` | The address of an SSH client |
+| `ssh.method` | `publickey`, `password` or `keyboard-interactive/pam` |
+| `ssh.key.type`, `ssh.key.fingerprint` | The key of a `publickey` login, for example `ED25519` and `SHA256:…` |
+| `ssh.invalid_user` | `true` when the user name does not exist on the server |
+| `sudo.target_user`, `su.target_user` | The user that `sudo` or `su` switched to |
+| `user.target`, `group.name` | The account or group that was added, changed or deleted |
+
+An SSH user name can contain spaces and the word `from`. The API reads the address from the end of the line, where `sshd` writes it, and drops an address that is not an IP address.
+
+Access logs need journald. On a server without it, the agent logs this at the start and sends no access logs. The agent does not read `/var/log/auth.log` for access logs, because any user can write a forged line there through syslog.
 
 ## Enrollment
 
