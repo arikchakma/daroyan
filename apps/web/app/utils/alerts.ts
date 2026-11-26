@@ -311,7 +311,7 @@ export type MetricView = {
   aggregation?: MetricAggregation;
   service?: string;
   serverId?: string;
-  filter?: string;
+  filters: string[];
   groupBy?: string;
 };
 
@@ -326,12 +326,13 @@ export function isMetricRuleInView(
   }
 
   const aggregation = condition.aggregation ?? getDefaultAggregation(metric);
-  const filter = writeMetricFilters(readMetricFilters(condition.filter ?? ''));
+  const filters = writeMetricFilters(readMetricFilters(condition.filters ?? [])).sort();
+  const viewFilters = [...view.filters].sort();
 
   return (
     aggregation === view.aggregation &&
     (condition.service ?? '') === (view.service ?? '') &&
-    filter === (view.filter ?? '') &&
+    filters.join('\n') === viewFilters.join('\n') &&
     (condition.group_by ?? '') === (view.groupBy ?? '')
   );
 }

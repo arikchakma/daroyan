@@ -4,6 +4,8 @@ import { FieldGrid } from '~/components/alerts/field-grid';
 import { ForField } from '~/components/alerts/for-field';
 import { SelectField } from '~/components/alerts/select-field';
 import { UnitField } from '~/components/alerts/unit-field';
+import { Icon } from '~/components/icons/icon';
+import { Button } from '~/components/ui/button';
 import { FieldRow } from '~/components/ui/field-row';
 import { Input } from '~/components/ui/input';
 import { metricQueries } from '~/queries/metrics';
@@ -11,6 +13,8 @@ import { TRACE_WINDOW_OPTIONS } from '~/utils/alerts';
 import { getAggregations, getDefaultAggregation, getMetricLimitUnit } from '~/utils/metrics';
 import { getMetricLimitHint, isLimitValid, isOptionalNumber } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState } from '~/utils/rule-form';
+
+const MAX_FILTERS = 10;
 
 const DIRECTION_OPTIONS = [
   { value: 'above', label: 'Above' },
@@ -50,10 +54,14 @@ export function MetricConditionFields(props: MetricConditionFieldsProps) {
       : []),
     ...services.map((service) => ({ value: service, label: service })),
   ];
+  const filterRows = form.metricFilters.length > 0 ? form.metricFilters : [''];
   const metricItems = [
     ...(form.metricName && !metric ? [{ value: form.metricName, label: form.metricName }] : []),
     ...metrics.map((item) => ({ value: item.name, label: item.name })),
   ];
+
+  const setFilter = (index: number, value: string) =>
+    onChange({ metricFilters: filterRows.map((filter, other) => (other === index ? value : filter)) });
 
   return (
     <>
@@ -66,7 +74,7 @@ export function MetricConditionFields(props: MetricConditionFieldsProps) {
               metricName: value ?? '',
               metricAggregation: '',
               metricService: '',
-              metricFilter: '',
+              metricFilters: [],
               metricGroupBy: '',
             })
           }
@@ -96,16 +104,44 @@ export function MetricConditionFields(props: MetricConditionFieldsProps) {
           items={groupItems}
         />
       </FieldGrid>
-      <FieldRow label="Filter" hint="Optional. Attribute filters separated by commas, like queue=email or status!=200.">
+      <FieldRow label="Filters" hint="Optional. One filter per row, like queue=email or status!=200.">
         {({ inputId, hintId }) => (
-          <Input
-            id={inputId}
-            aria-describedby={hintId}
-            value={form.metricFilter}
-            onValueChange={(metricFilter) => onChange({ metricFilter })}
-            placeholder="Every series"
-            maxLength={200}
-          />
+          <div className="flex flex-col gap-2">
+            {filterRows.map((filter, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <Input
+                  id={index === 0 ? inputId : undefined}
+                  aria-label={index === 0 ? undefined : `Filter ${index + 1}`}
+                  aria-describedby={hintId}
+                  value={filter}
+                  onValueChange={(value) => setFilter(index, value)}
+                  placeholder={index === 0 ? 'Every series' : undefined}
+                  maxLength={200}
+                />
+                {filterRows.length > 1 && (
+                  <Button
+                    type="button"
+                    variant="plain"
+                    size="icon"
+                    aria-label={`Remove filter ${index + 1}`}
+                    onClick={() => onChange({ metricFilters: filterRows.filter((_, other) => other !== index) })}
+                  >
+                    <Icon name="x" />
+                  </Button>
+                )}
+              </div>
+            ))}
+            {filterRows.length < MAX_FILTERS && (
+              <Button
+                type="button"
+                variant="tertiary"
+                className="w-fit"
+                onClick={() => onChange({ metricFilters: [...filterRows, ''] })}
+              >
+                Add Filter
+              </Button>
+            )}
+          </div>
         )}
       </FieldRow>
       <FieldGrid columns={form.isWarningOpen ? 3 : 2}>

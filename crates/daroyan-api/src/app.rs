@@ -49,6 +49,7 @@ pub async fn open_state(config: Config) -> anyhow::Result<AppState> {
     let crons = Crons::new(database.clone(), analytics.clone());
     Ok(AppState {
         log_budgets: LogBudgets::new(config.otlp_log_budget),
+        metric_budgets: LogBudgets::new(config.metrics.point_budget),
         hosts: HostCache::default(),
         config: Arc::new(config),
         database,

@@ -82,47 +82,46 @@ struct Tracked {
 }
 
 #[derive(Default)]
+struct TokenCounts {
+    total: usize,
+    per_metric: HashMap<Arc<str>, usize>,
+}
+
+#[derive(Default)]
 struct Counts {
-    per_token: HashMap<Arc<str>, usize>,
-    per_metric: HashMap<(Arc<str>, Arc<str>), usize>,
+    per_token: HashMap<Arc<str>, TokenCounts>,
 }
 
 impl Counts {
     fn is_full(&self, series: &SeriesRow, limits: SeriesLimits) -> bool {
-        let token_count =
-            self.per_token.get(&series.token_id).copied().unwrap_or_default();
-        let metric_count = self
-            .per_metric
-            .get(&(series.token_id.clone(), series.name.clone()))
-            .copied()
-            .unwrap_or_default();
+        let Some(counts) = self.per_token.get(&series.token_id) else {
+            return limits.per_token == 0 || limits.per_metric == 0;
+        };
+        let metric_count =
+            counts.per_metric.get(&series.name).copied().unwrap_or_default();
 
-        token_count >= limits.per_token || metric_count >= limits.per_metric
+        counts.total >= limits.per_token || metric_count >= limits.per_metric
     }
 
     fn add(&mut self, tracked: &Tracked) {
-        *self.per_token.entry(tracked.token_id.clone()).or_default() += 1;
-        *self
-            .per_metric
-            .entry((tracked.token_id.clone(), tracked.name.clone()))
-            .or_default() += 1;
+        let counts = self.per_token.entry(tracked.token_id.clone()).or_default();
+        counts.total += 1;
+        *counts.per_metric.entry(tracked.name.clone()).or_default() += 1;
     }
 
     fn remove(&mut self, tracked: &Tracked) {
-        if let Entry::Occupied(mut entry) = self.per_token.entry(tracked.token_id.clone())
-        {
-            *entry.get_mut() -= 1;
-            if *entry.get() == 0 {
-                entry.remove();
+        let Some(counts) = self.per_token.get_mut(&tracked.token_id) else { return };
+
+        if let Some(metric_count) = counts.per_metric.get_mut(&tracked.name) {
+            *metric_count -= 1;
+            if *metric_count == 0 {
+                counts.per_metric.remove(&tracked.name);
             }
         }
 
-        let key = (tracked.token_id.clone(), tracked.name.clone());
-        if let Entry::Occupied(mut entry) = self.per_metric.entry(key) {
-            *entry.get_mut() -= 1;
-            if *entry.get() == 0 {
-                entry.remove();
-            }
+        counts.total -= 1;
+        if counts.total == 0 {
+            self.per_token.remove(&tracked.token_id);
         }
     }
 }
@@ -213,9 +212,9 @@ impl SeriesCache {
                         continue;
                     }
 
-                    let (_, point, last) = to_point(sample, tracked.last.as_ref());
-                    tracked.last = Some(last);
-                    admitted.points.push(point);
+                    let converted = to_point(sample, tracked.last.as_ref());
+                    tracked.last = Some(converted.last);
+                    admitted.points.push(converted.point);
                 }
                 Entry::Vacant(entry) => {
                     if self.counts.is_full(&sample.series, limits) {
@@ -227,18 +226,18 @@ impl SeriesCache {
                         continue;
                     }
 
-                    let (series, point, last) = to_point(sample, None);
+                    let converted = to_point(sample, None);
                     let tracked = Tracked {
-                        token_id: series.token_id.clone(),
-                        name: series.name.clone(),
+                        token_id: converted.series.token_id.clone(),
+                        name: converted.series.name.clone(),
                         active_at: now,
-                        last: Some(last),
+                        last: Some(converted.last),
                     };
                     self.counts.add(&tracked);
                     entry.insert(tracked);
 
-                    admitted.series.push(series);
-                    admitted.points.push(point);
+                    admitted.series.push(converted.series);
+                    admitted.points.push(converted.point);
                 }
             }
         }
@@ -252,30 +251,52 @@ enum HistogramChange {
     Since(HistogramReading),
 }
 
-fn to_point(
-    sample: MetricSample,
-    last: Option<&LastPoint>,
-) -> (SeriesRow, PointRow, LastPoint) {
+struct Converted {
+    series: SeriesRow,
+    point: PointRow,
+    last: LastPoint,
+}
+
+fn to_point(sample: MetricSample, last: Option<&LastPoint>) -> Converted {
     let mut point = PointRow {
         series_id: sample.series.series_id,
         at: sample.at,
         start_at: sample.start_at,
         ..PointRow::default()
     };
+    let is_delta = sample.series.temporality == Some(Temporality::Delta);
+    let number_delta = match &sample.reading {
+        Reading::Number(value) => number_change(&sample, *value, last),
+        Reading::Histogram(_) => None,
+    };
+    let change = match &sample.reading {
+        Reading::Histogram(histogram) => histogram_change(&sample, histogram, last),
+        Reading::Number(_) => None,
+    };
 
-    match &sample.reading {
+    let MetricSample {
+        series,
+        at,
+        start_at,
+        mut reading,
+        trace_id,
+        span_id,
+    } = sample;
+    point.trace_id = trace_id;
+    point.span_id = span_id;
+
+    match &mut reading {
         Reading::Number(value) => {
             point.value = Some(*value);
-            point.delta = number_change(&sample, *value, last);
+            point.delta = number_delta;
         }
         Reading::Histogram(histogram) => {
             point.count = Some(histogram.count);
             point.sum = histogram.sum;
             point.min = histogram.min;
             point.max = histogram.max;
-            point.buckets = Some(histogram.buckets.clone());
 
-            match histogram_change(&sample, histogram, last) {
+            match change {
                 Some(HistogramChange::Whole) => {
                     point.count_delta = Some(histogram.count);
                     point.sum_delta = histogram.sum;
@@ -288,14 +309,20 @@ fn to_point(
                 }
                 None => {}
             }
+
+            point.buckets = Some(if is_delta {
+                std::mem::take(&mut histogram.buckets)
+            } else {
+                histogram.buckets.clone()
+            });
         }
     }
 
-    let MetricSample { series, at, start_at, reading, trace_id, span_id } = sample;
-    point.trace_id = trace_id;
-    point.span_id = span_id;
-
-    (series, point, LastPoint { at, start_at, reading })
+    Converted {
+        series,
+        point,
+        last: LastPoint { at, start_at, reading },
+    }
 }
 
 fn number_change(
@@ -306,6 +333,7 @@ fn number_change(
     if !sample.series.is_counter() {
         return None;
     }
+
     if sample.series.temporality == Some(Temporality::Delta) {
         return Some(value);
     }
@@ -329,6 +357,7 @@ fn histogram_change(
     if sample.series.kind != MetricKind::Histogram {
         return None;
     }
+
     if sample.series.temporality == Some(Temporality::Delta) {
         return Some(HistogramChange::Whole);
     }
@@ -609,7 +638,7 @@ mod tests {
         let second = cache.admit(vec![sample(make(), 2_000, 1_000, 1.0)], LIMITS, 2_000);
 
         assert_eq!(second.series.len(), 1);
-        assert!(cache.counts.per_token.values().all(|count| *count == 1));
+        assert!(cache.counts.per_token.values().all(|counts| counts.total == 1));
     }
 
     #[test]

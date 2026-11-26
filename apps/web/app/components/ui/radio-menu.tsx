@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import { Icon } from '~/components/icons/icon';
 import type { IconName } from '~/components/icons/icon-paths';
 import { Button } from '~/components/ui/button';
@@ -7,7 +9,7 @@ type RadioMenuProps = {
   icon: IconName;
   label: string;
   value: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: ReactNode }[];
   onChange: (value: string) => void;
   size?: 'default' | 'xs';
 };

@@ -61,7 +61,7 @@ function readMetricDraft(params: URLSearchParams): RuleDraft | undefined {
       threshold: 0,
       within_secs: 300,
       service: params.get('metricService') || null,
-      filter: params.get('metricFilter') || null,
+      filters: params.getAll('metricFilter'),
       group_by: params.get('metricGroupBy') || null,
     },
     critical: '',

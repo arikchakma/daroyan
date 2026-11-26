@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, RawQuery, State};
 use chrono::Utc;
 use daroyan_core::analytics::metrics::query::{
     Aggregation, GroupBy, MetricAttribute, MetricFilter, MetricQuery, MetricResult,
@@ -13,9 +13,10 @@ use utoipa_axum::routes;
 use crate::AppState;
 use crate::extract::CurrentUser;
 
-const CATALOG_WINDOW_MS: i64 = 30 * 86_400_000;
+const DAY_MS: i64 = 86_400_000;
+const CATALOG_WINDOW_MS: i64 = 30 * DAY_MS;
 const QUERY_WINDOW_MS: i64 = 3_600_000;
-const MAX_QUERY_RANGE_MS: i64 = 400 * 86_400_000;
+const MAX_QUERY_RANGE_MS: i64 = 400 * DAY_MS;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -66,7 +67,6 @@ struct MetricQueryParams {
     agg: Option<Aggregation>,
     service: Option<String>,
     server_id: Option<String>,
-    filter: Option<String>,
     group_by: Option<String>,
     since: Option<i64>,
     until: Option<i64>,
@@ -81,7 +81,7 @@ struct MetricQueryParams {
         ("agg" = Option<Aggregation>, Query, description = "Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg, min, max or count_rate. Defaults to rate_per_minute, last or p95"),
         ("service" = Option<String>, Query),
         ("server_id" = Option<String>, Query),
-        ("filter" = Option<String>, Query, description = "Attribute filters separated by commas, like route=/checkout,status!=200"),
+        ("filter" = Option<Vec<String>>, Query, explode, description = "One attribute filter per parameter, like filter=route=/checkout&filter=status!=200. Each is key=value or key!=value, split at the first != or else the first =, so the value may hold commas and equals signs"),
         ("group_by" = Option<String>, Query, description = "service, server or an attribute key. At most 50 groups, largest first"),
         ("since" = Option<i64>, Query, description = "Time in ms. Defaults to the last hour"),
         ("until" = Option<i64>, Query, description = "Time in ms. Defaults to now"),
@@ -94,6 +94,7 @@ async fn get_metric_query(
     _user: CurrentUser,
     Path(name): Path<String>,
     Query(params): Query<MetricQueryParams>,
+    RawQuery(raw): RawQuery,
 ) -> Result<Json<MetricResult>> {
     let until = params.until.unwrap_or_else(|| Utc::now().timestamp_millis());
     let since = params.since.unwrap_or(until.saturating_sub(QUERY_WINDOW_MS));
@@ -116,16 +117,22 @@ async fn get_metric_query(
         aggregation: params.agg,
         service: params.service.filter(|service| !service.is_empty()),
         server_id: params.server_id.filter(|server_id| !server_id.is_empty()),
-        filters: params
-            .filter
-            .as_deref()
-            .map(MetricFilter::read_all)
-            .unwrap_or_default(),
+        filters: read_filters(raw.as_deref())?,
         group_by: params.group_by.as_deref().and_then(GroupBy::read),
         since,
         until,
         step_ms: params.step_ms.filter(|step| *step > 0),
     };
 
-    Ok(Json(query_metric(&state.analytics, query).await?))
+    let retention_ms = i64::from(state.config.metrics.retention_days) * DAY_MS;
+    let points_since = Utc::now().timestamp_millis() - retention_ms;
+
+    Ok(Json(query_metric(&state.analytics, query, points_since).await?))
+}
+
+fn read_filters(raw: Option<&str>) -> Result<Vec<MetricFilter>> {
+    form_urlencoded::parse(raw.unwrap_or_default().as_bytes())
+        .filter(|(key, _)| key == "filter")
+        .map(|(_, text)| text.parse())
+        .collect()
 }

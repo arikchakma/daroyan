@@ -10,12 +10,12 @@ type MetricTopBarProps = {
   metric?: MetricSummary;
   aggregation?: MetricAggregation;
   service?: string;
-  filter?: string;
+  filters?: string[];
   groupBy?: string;
 };
 
 export function MetricTopBar(props: MetricTopBarProps) {
-  const { metric, aggregation, service, filter, groupBy } = props;
+  const { metric, aggregation, service, filters, groupBy } = props;
 
   if (!metric) {
     return <PageBar backTo="/metrics" icon="chart-line" title="Metrics" />;
@@ -28,9 +28,7 @@ export function MetricTopBar(props: MetricTopBarProps) {
   if (service) {
     alertParams.set('metricService', service);
   }
-  if (filter) {
-    alertParams.set('metricFilter', filter);
-  }
+  filters?.forEach((filter) => alertParams.append('metricFilter', filter));
   if (groupBy) {
     alertParams.set('metricGroupBy', groupBy);
   }

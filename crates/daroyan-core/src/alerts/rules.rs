@@ -94,7 +94,8 @@ pub enum Condition {
         below: bool,
         within_secs: u32,
         service: Option<String>,
-        filter: Option<String>,
+        #[serde(default)]
+        filters: Vec<String>,
         #[schema(value_type = Option<String>)]
         group_by: Option<GroupBy>,
     },
@@ -106,6 +107,8 @@ const MAX_TRACE_FILTER: usize = 200;
 pub const MAX_METRIC_WINDOW_SECS: u32 = 3600;
 const MAX_METRIC_NAME: usize = 255;
 const MAX_METRIC_FILTER: usize = 200;
+const MAX_METRIC_FILTERS: usize = 20;
+pub const MAX_METRIC_GROUPS: usize = 200;
 const ROUTE_SEPARATOR: &str = " · ";
 
 fn default_min_requests() -> u32 {
@@ -400,7 +403,7 @@ impl Condition {
             aggregation,
             within_secs,
             service,
-            filter,
+            filters,
             group_by,
             ..
         } = self
@@ -412,7 +415,7 @@ impl Condition {
             name: name.clone(),
             aggregation: *aggregation,
             service: service.clone(),
-            filters: filter.as_deref().map(MetricFilter::read_all).unwrap_or_default(),
+            filters: filters.iter().filter_map(|text| text.parse().ok()).collect(),
             group_by: group_by.clone(),
             since: now_ms - i64::from(*within_secs) * 1000,
             until: now_ms,
@@ -719,22 +722,22 @@ pub fn validate_options(
         {
             return invalid("The window must be between 1 minute and 1 hour");
         }
-        Condition::Metric { service, filter, group_by, .. }
-            if [
-                service.as_deref(),
-                filter.as_deref(),
-                group_by.as_ref().and_then(GroupBy::attribute),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|text| text.trim().is_empty() || text.len() > MAX_METRIC_FILTER) =>
+        Condition::Metric { service, filters, group_by, .. }
+            if [service.as_deref(), group_by.as_ref().and_then(GroupBy::attribute)]
+                .into_iter()
+                .flatten()
+                .chain(filters.iter().map(String::as_str))
+                .any(|text| text.trim().is_empty() || text.len() > MAX_METRIC_FILTER) =>
         {
             return invalid(
                 "Leave the service, filter and grouping out to match any, or give up to 200 characters",
             );
         }
-        Condition::Metric { filter: Some(filter), .. }
-            if filter.split(',').count() != MetricFilter::read_all(filter).len() =>
+        Condition::Metric { filters, .. } if filters.len() > MAX_METRIC_FILTERS => {
+            return invalid("Use up to 20 filters");
+        }
+        Condition::Metric { filters, .. }
+            if filters.iter().any(|text| text.parse::<MetricFilter>().is_err()) =>
         {
             return invalid("Write each filter as key=value or key!=value");
         }
@@ -1232,14 +1235,19 @@ mod tests {
             .unwrap()
         };
 
-        let condition = read(r#","filter":"$env=prod","group_by":"server_id""#);
+        let condition =
+            read(r#","filters":["$env=prod","url=/a?b=1,2"],"group_by":"server_id""#);
         assert!(validate_rule(&condition, &Scope::All, 0).is_ok());
         assert!(matches!(
             condition,
             Condition::Metric { group_by: Some(GroupBy::Server), .. }
         ));
 
-        assert!(validate_rule(&read(r#","filter":"route""#), &Scope::All, 0).is_err());
+        let query = condition.metric_query(0).unwrap();
+        assert_eq!(query.filters[1].value, "/a?b=1,2");
+
+        assert!(validate_rule(&read(r#","filters":["route"]"#), &Scope::All, 0).is_err());
+        assert!(validate_rule(&read(r#","filters":["=x"]"#), &Scope::All, 0).is_err());
         assert!(validate_rule(&read(r#","group_by":"  ""#), &Scope::All, 0).is_err());
         let long = format!(r#","group_by":"{}""#, "k".repeat(MAX_METRIC_FILTER + 1));
         assert!(validate_rule(&read(&long), &Scope::All, 0).is_err());

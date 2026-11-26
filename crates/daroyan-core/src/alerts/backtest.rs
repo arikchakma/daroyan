@@ -5,13 +5,15 @@ use daroyan_protocol::host::Host;
 use duckdb::params;
 
 use crate::alerts::evaluate::{Level, make_trace_reading, rate};
-use crate::alerts::rules::{Condition, Scope, Target, TraceRule, read_log_severity};
+use crate::alerts::rules::{
+    Condition, MAX_METRIC_GROUPS, Scope, Target, TraceRule, read_log_severity,
+};
 use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source, list_busy_windows,
 };
 use crate::analytics::metrics::query::{
-    MetricQuery, format_metric_value, measure_metric_windows,
+    MetricQuery, Ranking, format_metric_value, measure_metric_windows,
 };
 use crate::analytics::metrics::{METRICS_TARGET_ID, METRICS_TARGET_NAME};
 use crate::analytics::spans::{
@@ -293,7 +295,12 @@ async fn backtest_metric(
     window_ms: i64,
 ) -> Result<Vec<BacktestHit>> {
     let name = query.name.clone();
-    let Some(measured) = measure_metric_windows(analytics, query, window_ms).await?
+    let ranking = Ranking {
+        max_groups: MAX_METRIC_GROUPS,
+        is_lowest_first: condition.is_below(),
+    };
+    let Some(measured) =
+        measure_metric_windows(analytics, query, window_ms, ranking).await?
     else {
         return Ok(Vec::new());
     };

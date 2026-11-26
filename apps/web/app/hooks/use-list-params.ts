@@ -1,17 +1,21 @@
 import { useSearchParams } from 'react-router';
 
+export type ParamChanges = Record<string, string | string[] | null>;
+
 export function useListParams() {
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.get('q') ?? '';
 
-  const setParams = (changes: Record<string, string | null>) =>
+  const setParams = (changes: ParamChanges) =>
     setSearchParams(
       (params) => {
         for (const [key, value] of Object.entries(changes)) {
-          if (value) {
+          params.delete(key);
+
+          if (Array.isArray(value)) {
+            value.forEach((item) => params.append(key, item));
+          } else if (value) {
             params.set(key, value);
-          } else {
-            params.delete(key);
           }
         }
         return params;

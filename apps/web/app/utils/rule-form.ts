@@ -64,7 +64,7 @@ export type RuleFormState = {
   metricBelow: boolean;
   metricWithin: number;
   metricService: string;
-  metricFilter: string;
+  metricFilters: string[];
   metricGroupBy: string;
   scopeKind: ScopeKind;
   label: string;
@@ -371,7 +371,7 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
     metricBelow: savedMetric?.below ?? false,
     metricWithin: savedMetric?.within_secs ?? 300,
     metricService: savedMetric?.service ?? '',
-    metricFilter: savedMetric?.filter ?? '',
+    metricFilters: savedMetric?.filters ?? [],
     metricGroupBy: savedMetric?.group_by ?? '',
     scopeKind: readScopeKind(scope),
     label: scope?.kind === 'label' ? scope.label : '',
@@ -489,7 +489,7 @@ export function readCondition(form: RuleFormState): Schemas['Condition'] | undef
         below: form.metricBelow,
         within_secs: form.metricWithin,
         service: form.metricService || null,
-        filter: form.metricFilter.trim() || null,
+        filters: form.metricFilters.map((filter) => filter.trim()).filter(Boolean),
         group_by: form.metricGroupBy || null,
       };
     case 'cert_days':

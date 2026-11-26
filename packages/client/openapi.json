@@ -2089,11 +2089,15 @@
           {
             "name": "filter",
             "in": "query",
-            "description": "Attribute filters separated by commas, like route=/checkout,status!=200",
+            "description": "One attribute filter per parameter, like filter=route=/checkout&filter=status!=200. Each is key=value or key!=value, split at the first != or else the first =, so the value may hold commas and equals signs",
             "required": false,
             "schema": {
-              "type": "string"
-            }
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true
           },
           {
             "name": "group_by",
@@ -4017,11 +4021,11 @@
               "below": {
                 "type": "boolean"
               },
-              "filter": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "filters": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               "group_by": {
                 "type": [

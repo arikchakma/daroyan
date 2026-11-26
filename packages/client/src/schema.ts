@@ -1517,7 +1517,7 @@ export interface components {
         } | {
             aggregation?: components["schemas"]["MetricAggregation"] | null;
             below?: boolean;
-            filter?: string | null;
+            filters?: string[];
             group_by?: string | null;
             /** @enum {string} */
             kind: "metric";
@@ -4480,8 +4480,8 @@ export interface operations {
                 agg?: components["schemas"]["MetricAggregation"];
                 service?: string;
                 server_id?: string;
-                /** @description Attribute filters separated by commas, like route=/checkout,status!=200 */
-                filter?: string;
+                /** @description One attribute filter per parameter, like filter=route=/checkout&filter=status!=200. Each is key=value or key!=value, split at the first != or else the first =, so the value may hold commas and equals signs */
+                filter?: string[];
                 /** @description service, server or an attribute key. At most 50 groups, largest first */
                 group_by?: string;
                 /** @description Time in ms. Defaults to the last hour */
