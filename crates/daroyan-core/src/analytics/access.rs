@@ -229,6 +229,7 @@ pub struct AccessEvent {
     pub target: Option<String>,
     pub group: Option<String>,
     pub command: Option<String>,
+    pub tty: Option<String>,
     pub ip_last_seen: Option<i64>,
 }
 
@@ -255,7 +256,7 @@ pub async fn read_access(
             );
             let sql = format!(
                 "SELECT logged_at, {action}, coalesce({outcome}, 'success'), {}, {}, {}, {}, \
-                 coalesce({}, {}, {}), {}, {}, TRY_CAST({} AS BIGINT) \
+                 coalesce({}, {}, {}), {}, {}, coalesce({}, {}), TRY_CAST({} AS BIGINT) \
                  {base} AND NOT ({action} = 'ssh_login' AND {outcome} = 'failure') \
                  ORDER BY logged_at DESC LIMIT ?",
                 field("user"),
@@ -267,6 +268,8 @@ pub async fn read_access(
                 field("user.target"),
                 field("group.name"),
                 field("process.command_line"),
+                field("login.tty"),
+                field("su.tty"),
                 field(LAST_SEEN),
             );
             let events = conn
@@ -285,7 +288,8 @@ pub async fn read_access(
                             target: row.get(7)?,
                             group: row.get(8)?,
                             command: row.get(9)?,
-                            ip_last_seen: row.get(10)?,
+                            tty: row.get(10)?,
+                            ip_last_seen: row.get(11)?,
                         })
                     },
                 )?

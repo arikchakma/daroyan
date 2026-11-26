@@ -1304,6 +1304,7 @@ export interface components {
             method?: string | null;
             outcome: string;
             target?: string | null;
+            tty?: string | null;
             user?: string | null;
         };
         AccessView: {

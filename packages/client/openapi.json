@@ -3153,6 +3153,12 @@
               "null"
             ]
           },
+          "tty": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "user": {
             "type": [
               "string",

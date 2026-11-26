@@ -11,7 +11,7 @@ use daroyan_protocol::log::LogFormat;
 use serde_json::{Map, Value};
 
 pub(crate) use access::SSH_PROCESSES;
-use access::{read_account, read_ssh, read_su, read_sudo};
+use access::{read_account, read_console, read_ssh, read_su, read_sudo};
 use app::{
     read_elasticsearch, read_flask, read_level_and_logger, read_python,
     read_python_dashes, read_python_traceback, read_rails, read_spring,
@@ -219,6 +219,7 @@ pub fn parse_text_line(text: &str, format: LogFormat) -> ParsedLine {
         read_ssh(&message, &mut parsed);
         read_sudo(&message, &mut parsed);
         read_su(&message, &mut parsed);
+        read_console(&message, &mut parsed);
         read_account(&message, &mut parsed);
         read_cron(&message, &mut parsed);
         read_oom_kill(&message, &mut parsed);

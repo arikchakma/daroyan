@@ -26,6 +26,8 @@ const SUDO_FAILURES: [&str; 4] = [
 enum Action {
     SshLogin,
     SshLogout,
+    ConsoleLogin,
+    ConsoleLogout,
     Sudo,
     Su,
     UserAdd,
@@ -41,6 +43,8 @@ impl Action {
         match self {
             Self::SshLogin => "ssh_login",
             Self::SshLogout => "ssh_logout",
+            Self::ConsoleLogin => "console_login",
+            Self::ConsoleLogout => "console_logout",
             Self::Sudo => "sudo",
             Self::Su => "su",
             Self::UserAdd => "user_add",
@@ -197,6 +201,60 @@ pub(super) fn read_ssh(text: &str, parsed: &mut ParsedLine) {
     {
         parsed.insert("user", session.user);
         parsed.record(Action::SshLogout, Outcome::Success);
+    }
+}
+
+struct FailedLogin<'a> {
+    user: &'a str,
+    tty: &'a str,
+    host: Option<&'a str>,
+}
+
+impl<'a> FailedLogin<'a> {
+    fn parse(text: &'a str) -> Option<Self> {
+        let rest = text.strip_prefix("FAILED LOGIN ")?;
+        let (head, user) = rest.rsplit_once(" FOR ")?;
+        let user = user
+            .split_once(", ")
+            .map_or(user, |(user, _)| user)
+            .trim_matches('\'');
+        let (_, place) = head.split_once(' ')?;
+
+        if let Some(place) = place.strip_prefix("on ") {
+            let (tty, host) = match place.split_once(" from ") {
+                Some((tty, host)) => (tty, Some(host.trim_matches('\''))),
+                None => (place, None),
+            };
+            return Some(Self { user, tty: tty.trim_matches('\''), host });
+        }
+
+        let place = place.strip_prefix("FROM ")?;
+        Some(Self { user, tty: place, host: None })
+    }
+}
+
+pub(super) fn read_console(text: &str, parsed: &mut ParsedLine) {
+    if parsed.process_name() != Some("login") {
+        return;
+    }
+
+    if let Some(failed) = FailedLogin::parse(text) {
+        parsed.insert("user", failed.user);
+        parsed.insert("login.tty", failed.tty);
+        if let Some(host) = failed.host {
+            parsed.insert("login.host", host);
+        }
+        parsed.record(Action::ConsoleLogin, Outcome::Failure);
+        return;
+    }
+
+    if let Some(session) = PamSession::parse(text)
+        && session.service == "login"
+    {
+        parsed.insert("user", session.user);
+        let action =
+            if session.is_open { Action::ConsoleLogin } else { Action::ConsoleLogout };
+        parsed.record(action, Outcome::Success);
     }
 }
 
@@ -510,6 +568,47 @@ mod tests {
 
         let nested = parse("sshd[9]: kex[2]: Invalid user x from 1.2.3.4 port 5");
         assert_eq!(nested.attributes["process.name"], "sshd");
+    }
+
+    #[test]
+    fn reads_console_logins() {
+        let opened = parse(
+            "login[620]: pam_unix(login:session): session opened for user tester(uid=1000) by tester(uid=0)",
+        );
+        assert_eq!(event(&opened), ("console_login", "success"));
+        assert_eq!(opened.attributes["user"], "tester");
+
+        let closed =
+            parse("login[620]: pam_unix(login:session): session closed for user tester");
+        assert_eq!(event(&closed), ("console_logout", "success"));
+
+        let failed = parse(
+            "login[620]: FAILED LOGIN (1) on '/dev/pts/1' FOR 'tester', Authentication failure",
+        );
+        assert_eq!(event(&failed), ("console_login", "failure"));
+        assert_eq!(failed.severity, Some(13));
+        assert_eq!(failed.attributes["user"], "tester");
+        assert_eq!(failed.attributes["login.tty"], "/dev/pts/1");
+
+        let remote = parse(
+            "login[7]: FAILED LOGIN (2) on '/dev/pts/2' from 'gateway.local' FOR 'root', Authentication failure",
+        );
+        assert_eq!(remote.attributes["login.host"], "gateway.local");
+        assert_eq!(remote.attributes["user"], "root");
+
+        let util_linux =
+            parse("login[8]: FAILED LOGIN 1 FROM tty1 FOR root, Authentication failure");
+        assert_eq!(event(&util_linux), ("console_login", "failure"));
+        assert_eq!(util_linux.attributes["login.tty"], "tty1");
+        assert_eq!(util_linux.attributes["user"], "root");
+
+        let banner = parse("login[8]: LOGIN ON tty1 BY root");
+        assert!(!banner.attributes.contains_key("event.action"));
+
+        let elsewhere = parse(
+            "myapp[1]: FAILED LOGIN (1) on '/dev/pts/1' FOR 'root', Authentication failure",
+        );
+        assert!(!elsewhere.attributes.contains_key("event.action"));
     }
 
     #[test]

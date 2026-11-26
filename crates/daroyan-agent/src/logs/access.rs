@@ -4,12 +4,13 @@ use serde_json::Value;
 
 pub const ACCESS_KEY: &str = "daroyan/access";
 const JOURNAL_SOCKET: &str = "/run/systemd/journal/socket";
-const COMMANDS: [&str; 14] = [
+const COMMANDS: [&str; 15] = [
     "sshd",
     "sshd-session",
     "sshd-auth",
     "sudo",
     "su",
+    "login",
     "useradd",
     "userdel",
     "usermod",
@@ -20,7 +21,7 @@ const COMMANDS: [&str; 14] = [
     "passwd",
     "chpasswd",
 ];
-const NOISE: [&str; 14] = [
+const NOISE: [&str; 17] = [
     "Received disconnect from ",
     "Disconnected from user ",
     "Connection reset by ",
@@ -29,6 +30,9 @@ const NOISE: [&str; 14] = [
     "error: kex_exchange_identification: ",
     "banner exchange: ",
     "pam_unix(sudo:session): ",
+    "pam_unix(login:auth): authentication failure",
+    "PAM unable to dlopen(",
+    "PAM adding faulty module: ",
     "pam_unix(su:session): ",
     "pam_unix(su-l:session): ",
     "pam_unix(sshd:session): session opened ",
@@ -150,6 +154,10 @@ mod tests {
             "pam_unix(su-l:session): session opened for user tester(uid=1000) by (uid=0)"
         ));
         assert!(!is_noise("pam_unix(sshd:session): session closed for user arik"));
+        assert!(is_noise("PAM adding faulty module: pam_lastlog.so"));
+        assert!(!is_noise(
+            "pam_unix(login:session): session opened for user tester(uid=1000) by tester(uid=0)"
+        ));
         assert!(!is_noise(
             "Connection closed by authenticating user root 45.155.205.233 port 41022 [preauth]"
         ));
