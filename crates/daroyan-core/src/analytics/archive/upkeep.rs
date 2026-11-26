@@ -183,7 +183,8 @@ pub fn merge_files(
     let (min_logged_at, max_logged_at, rows, services) = conn.query_row(
         &format!(
             "SELECT min(logged_at), max(logged_at), count(*), \
-             CAST(to_json(list_sort(list_distinct(list(service)))) AS VARCHAR) \
+             (SELECT CAST(to_json(list(service ORDER BY service)) AS VARCHAR) \
+              FROM (SELECT DISTINCT service FROM read_parquet('{target_text}'))) \
              FROM read_parquet('{target_text}')"
         ),
         [],

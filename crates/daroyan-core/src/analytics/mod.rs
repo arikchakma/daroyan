@@ -176,6 +176,10 @@ impl Analytics {
         Self::try_from(Connection::open(path)?)
     }
 
+    pub fn limit_memory(&self, megabytes: u64) -> duckdb::Result<()> {
+        lock(&self.conn).execute_batch(&format!("SET memory_limit = '{megabytes}MB'"))
+    }
+
     pub fn run<T>(
         &self,
         f: impl FnOnce(&Connection) -> duckdb::Result<T>,

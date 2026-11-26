@@ -246,7 +246,8 @@ fn stage_hour(
     let (min_logged_at, max_logged_at, rows, services) = conn.query_row(
         &format!(
             "SELECT min(logged_at), max(logged_at), count(*), \
-             CAST(to_json(list_sort(list_distinct(list(service)))) AS VARCHAR) \
+             (SELECT CAST(to_json(list(service ORDER BY service)) AS VARCHAR) \
+              FROM (SELECT DISTINCT service FROM log_lines WHERE {scope})) \
              FROM log_lines WHERE {scope}"
         ),
         [],
@@ -276,13 +277,16 @@ fn read_fields(
 ) -> duckdb::Result<Vec<Field>> {
     let column = source.column();
     let mut statement = conn.prepare(&format!(
-        "SELECT key, count(*) AS found, \
-         CAST(to_json(list_distinct(list(CASE WHEN contains(key, '\"') THEN 'VARCHAR' \
-              WHEN json_type({column}, '$.\"' || key || '\"') = 'UBIGINT' \
-                   AND TRY_CAST(json_extract_string({column}, '$.\"' || key || '\"') AS BIGINT) IS NULL THEN 'VARCHAR' \
-              ELSE json_type({column}, '$.\"' || key || '\"') END))) AS VARCHAR) \
-         FROM (SELECT {column}, unnest(json_keys({column})) AS key FROM log_lines \
-               WHERE {scope} AND {column} IS NOT NULL) \
+        "SELECT key, CAST(sum(found) AS BIGINT) AS found, \
+         CAST(to_json(list(kind ORDER BY kind)) AS VARCHAR) \
+         FROM (SELECT key, kind, count(*) AS found \
+               FROM (SELECT key, CASE WHEN contains(key, '\"') THEN 'VARCHAR' \
+                         WHEN json_type({column}, '$.\"' || key || '\"') = 'UBIGINT' \
+                              AND TRY_CAST(json_extract_string({column}, '$.\"' || key || '\"') AS BIGINT) IS NULL THEN 'VARCHAR' \
+                         ELSE json_type({column}, '$.\"' || key || '\"') END AS kind \
+                     FROM (SELECT {column}, unnest(json_keys({column})) AS key FROM log_lines \
+                           WHERE {scope} AND {column} IS NOT NULL)) \
+               GROUP BY key, kind) \
          GROUP BY key ORDER BY found DESC, key LIMIT {limit}"
     ))?;
 
@@ -492,6 +496,33 @@ mod tests {
             (services.as_str(), columns.as_str()),
             ("[api]", "[a.a, r.service.name]")
         );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn stages_a_busy_hour_in_little_memory() {
+        let dir = scratch("busy");
+        let conn = open(&dir);
+        conn.execute_batch(&format!(
+            "INSERT INTO log_lines (server_id, logged_at, service, stream, severity, message, attributes, resource, ingested_at) \
+             SELECT 'srv_1', {HOUR_MS} * 10 + i % {HOUR_MS}, 'api' || (i % 20), 'otlp', 9, 'done', \
+                    json_object('user.id', 'u_' || i, 'request.id', md5(i::VARCHAR), 'route', '/r/' || (i % 50), \
+                                'status', 200 + i % 5, 'took', i * 0.37, 'path', '/a/b/' || i), \
+                    json_object('service.name', 'api' || (i % 20), 'host.name', 'web-' || (i % 4)), 1 \
+             FROM range(600000) t(i); \
+             SET memory_limit = '112MB'; SET threads = 2;"
+        ))
+        .unwrap();
+
+        let staging = dir.join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        let export = stage_logs_with(&conn, &staging, 2, 64).unwrap();
+
+        assert_eq!(export.files.len(), 1);
+        assert_eq!(export.files[0].rows, 600_000);
+        assert_eq!(export.files[0].services.len(), 20);
+        assert_eq!(export.files[0].columns.len(), 8);
 
         fs::remove_dir_all(dir).ok();
     }

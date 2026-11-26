@@ -17,6 +17,7 @@ pub struct Config {
     pub metrics: MetricSettings,
     pub backup_dir: Option<PathBuf>,
     pub duckdb_max_bytes: Option<u64>,
+    pub duckdb_memory_mb: u64,
     pub archive: Option<ArchiveConfig>,
     pub trusted_proxies: Vec<IpNet>,
     pub client_ip_header: String,
@@ -101,6 +102,7 @@ impl Config {
                 .map_err(|_| anyhow::anyhow!("DUCKDB_MAX_SIZE_GB must be a number"))?
                 .filter(|gigabytes| *gigabytes > 0)
                 .map(|gigabytes| gigabytes * 1024 * 1024 * 1024),
+            duckdb_memory_mb: read_number("DUCKDB_MEMORY_MB", 512)?,
             archive: ArchiveConfig::from_env()?,
             trusted_proxies: parse_trusted_proxies(
                 &env::var("TRUSTED_PROXIES")

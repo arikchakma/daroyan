@@ -95,6 +95,7 @@ async fn open_test_state(dir: &Path) -> AppState {
         metrics: daroyan_core::config::MetricSettings::default(),
         backup_dir: None,
         duckdb_max_bytes: None,
+        duckdb_memory_mb: 512,
         archive: None,
         trusted_proxies: Vec::new(),
         client_ip_header: "cf-connecting-ip".to_string(),
