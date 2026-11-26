@@ -38,7 +38,7 @@ start. Put TLS in front of it with a reverse proxy.
 | `DUCKDB_PATH` | No | `data/daroyan.duckdb` | DuckDB metrics/logs/traces store. Put it on the same volume. |
 | `DUCKDB_BACKUP_DIR` | No | – | If set, a DuckDB backup is written here every 6 hours and the newest 8 are kept. Use a different disk from `DUCKDB_PATH`. With `ARCHIVE_URL` set, each backup is also uploaded to the bucket, see [Data and backups](#8-data-and-backups). |
 | `DUCKDB_MAX_SIZE_GB` | No | – | The most data DuckDB keeps, in GB. When the data passes it, the API deletes the oldest logs and traces, even if they are newer than the retention days, but it keeps the newest hour. Leave it empty or `0` for no limit. |
-| `DUCKDB_MEMORY_MB` | No | `512` | The most memory DuckDB uses for queries, in MB. Raise it if the log archive export or long searches fail with `Out of Memory`. The archive merge uses up to 256 MB more, and the rest of the API about 300 MB, so leave room for both. |
+| `DUCKDB_MAX_MEMORY_MB` | No | `512` | The most memory DuckDB uses for queries, in MB. Raise it if the log archive export or long searches fail with `Out of Memory`. The archive merge uses up to 256 MB more, and the rest of the API about 300 MB, so leave room for both. |
 | `RETENTION_DAYS` | No | `30` | Days of server metrics and traces kept. |
 | `LOG_RETENTION_DAYS` | No | `7` | Days of logs kept. |
 | `ARCHIVE_URL` | No | – | A bucket for old logs, like `s3://daroyan-logs/prod`. When set, the API copies new logs to Parquet files in the bucket every hour. See [Log archive](#log-archive). |

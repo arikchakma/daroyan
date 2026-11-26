@@ -102,8 +102,8 @@ impl Config {
                 .map_err(|_| anyhow::anyhow!("DUCKDB_MAX_SIZE_GB must be a number"))?
                 .filter(|gigabytes| *gigabytes > 0)
                 .map(|gigabytes| gigabytes * 1024 * 1024 * 1024),
-            duckdb_memory_bytes: match read_number::<u64>("DUCKDB_MEMORY_MB", 512)? {
-                0 => anyhow::bail!("DUCKDB_MEMORY_MB must be more than 0"),
+            duckdb_memory_bytes: match read_number::<u64>("DUCKDB_MAX_MEMORY_MB", 512)? {
+                0 => anyhow::bail!("DUCKDB_MAX_MEMORY_MB must be more than 0"),
                 megabytes => megabytes.saturating_mul(1024 * 1024),
             },
             archive: ArchiveConfig::from_env()?,
