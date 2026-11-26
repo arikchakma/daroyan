@@ -278,7 +278,7 @@ fn read_fields(
     let column = source.column();
     let mut statement = conn.prepare(&format!(
         "SELECT key, CAST(sum(found) AS BIGINT) AS found, \
-         CAST(to_json(list(kind ORDER BY kind)) AS VARCHAR) \
+         CAST(to_json(list(kind ORDER BY kind) FILTER (WHERE kind IS NOT NULL)) AS VARCHAR) \
          FROM (SELECT key, kind, count(*) AS found \
                FROM (SELECT key, CASE WHEN contains(key, '\"') THEN 'VARCHAR' \
                          WHEN json_type({column}, '$.\"' || key || '\"') = 'UBIGINT' \

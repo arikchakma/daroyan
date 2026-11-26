@@ -67,7 +67,7 @@ async fn publishes_incidents_and_maintenance_on_status_pages() {
         metrics: daroyan_core::config::MetricSettings::default(),
         backup_dir: None,
         duckdb_max_bytes: None,
-        duckdb_memory_mb: 512,
+        duckdb_memory_bytes: 512 * 1024 * 1024,
         archive: None,
         trusted_proxies: Vec::new(),
         client_ip_header: "cf-connecting-ip".to_string(),

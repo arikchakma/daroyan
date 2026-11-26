@@ -44,7 +44,7 @@ use crate::config::Config;
 use crate::error::{Error, ErrorName, Result};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
-const MEMORY_SETTINGS: &str = "SET memory_limit = '512MB'; SET threads = 2;";
+const THREAD_SETTINGS: &str = "SET threads = 2;";
 const PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const UPTIME_RETENTION_DAYS: i64 = 90;
 const MAX_PENDING_ROWS: usize = 200_000;
@@ -156,7 +156,7 @@ impl TryFrom<Connection> for Analytics {
     type Error = duckdb::Error;
 
     fn try_from(conn: Connection) -> duckdb::Result<Self> {
-        conn.execute_batch(MEMORY_SETTINGS)?;
+        conn.execute_batch(THREAD_SETTINGS)?;
         let reader = conn.try_clone()?;
 
         Ok(Self {
@@ -176,8 +176,8 @@ impl Analytics {
         Self::try_from(Connection::open(path)?)
     }
 
-    pub fn limit_memory(&self, megabytes: u64) -> duckdb::Result<()> {
-        lock(&self.conn).execute_batch(&format!("SET memory_limit = '{megabytes}MB'"))
+    pub fn limit_memory(&self, bytes: u64) -> duckdb::Result<()> {
+        lock(&self.conn).execute_batch(&format!("SET memory_limit = '{bytes}B'"))
     }
 
     pub fn run<T>(

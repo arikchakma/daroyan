@@ -43,7 +43,7 @@ pub async fn open_state(config: Config) -> anyhow::Result<AppState> {
     let database = connect_database(&config).await?;
     Migrator::up(&database.conn, None).await?;
     let analytics = Analytics::try_from(open_duckdb(&config.duckdb_path)?)?;
-    analytics.limit_memory(config.duckdb_memory_mb)?;
+    analytics.limit_memory(config.duckdb_memory_bytes)?;
     let archive = open_archive(&config, &analytics).await?;
     restrict_data_files(&config);
     let uptime = Uptime::new(database.clone(), analytics.clone());
