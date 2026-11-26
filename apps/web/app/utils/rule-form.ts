@@ -8,8 +8,9 @@ import {
   hasThreshold,
   isCheckKind,
   isCronKind,
-  isTraceKind,
+  isServiceKind,
   readLogCondition,
+  readMetricCondition,
   readSubjectName,
   readThreshold,
   readTraceCondition,
@@ -17,7 +18,9 @@ import {
   RESOLVE_OPTIONS,
   WINDOW_OPTIONS,
 } from '~/utils/alerts';
-import { joinNames, pluralize } from '~/utils/format';
+import { getUnitSuffix, joinNames, pluralize } from '~/utils/format';
+import { getAggregations, getDefaultAggregation, getMetricLimitUnit } from '~/utils/metrics';
+import type { MetricAggregation, MetricSummary } from '~/utils/metrics';
 
 export type ScopeKind = 'all' | 'label' | 'picked';
 
@@ -56,6 +59,13 @@ export type RuleFormState = {
   tracePercentile: Schemas['Percentile'];
   traceSpans: Schemas['TraceSpans'];
   traceGroupBy: Schemas['TraceGroup'];
+  metricName: string;
+  metricAggregation: MetricAggregation | '';
+  metricBelow: boolean;
+  metricWithin: number;
+  metricService: string;
+  metricFilters: string[];
+  metricGroupBy: string;
   scopeKind: ScopeKind;
   label: string;
   pickedIds: string[];
@@ -72,6 +82,7 @@ export type RuleDraft = {
   condition: Schemas['Condition'];
   scope?: Scope;
   forSecs?: number;
+  critical?: string;
 };
 
 export type RuleTemplate = {
@@ -140,6 +151,7 @@ export const CONDITION_LABELS: Record<ConditionKind, string> = {
   logs: 'Log lines match',
   trace_errors: 'Error rate above a limit',
   trace_latency: 'Latency above a limit',
+  metric: 'Metric past a limit',
 };
 
 export const DECLARE_SEVERITY_OPTIONS = [
@@ -173,14 +185,21 @@ export function isOptionalNumber(value: string) {
   return number === null || Number.isFinite(number);
 }
 
+function readLimitValue(kind: ConditionKind, text: string) {
+  const value = readNumber(text);
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+  return kind === 'metric' || value > 0 ? value : null;
+}
+
 export function readLimit(form: RuleFormState) {
-  const value = readNumber(form.critical);
-  return value !== null && Number.isFinite(value) && value > 0 ? value : null;
+  return readLimitValue(form.kind, form.critical);
 }
 
 function readRecoveryLimit(form: RuleFormState) {
-  const warning = readNumber(form.warning);
-  if (hasWarning(form.kind) && form.isWarningOpen && warning !== null && Number.isFinite(warning) && warning > 0) {
+  const warning = readLimitValue(form.kind, form.warning);
+  if (hasWarning(form.kind) && form.isWarningOpen && warning !== null) {
     return warning;
   }
   return readLimit(form);
@@ -194,7 +213,8 @@ export function readRecovery(form: RuleFormState) {
     return null;
   }
 
-  const isSafe = form.kind === 'cert_days' ? recovery >= limit : recovery <= limit;
+  const isBelow = form.kind === 'cert_days' || (form.kind === 'metric' && form.metricBelow);
+  const isSafe = isBelow ? recovery >= limit : recovery <= limit;
   return isSafe ? recovery : null;
 }
 
@@ -212,6 +232,23 @@ export function getTraceLimitHint(form: RuleFormState) {
     return `Fires when ${form.tracePercentile} latency is above ${form.critical} ms within ${window}, ${minimum}.`;
   }
   return `Fires when more than ${form.critical}% of ${requests} fail within ${window}, ${minimum}.`;
+}
+
+export function getMetricLimitHint(form: RuleFormState, metric: MetricSummary) {
+  const value = form.metricAggregation || getDefaultAggregation(metric);
+  const aggregation = getAggregations(metric).find((item) => item.value === value);
+  const side = form.metricBelow ? 'below' : 'above';
+  const group = form.metricGroupBy ? ` for each ${form.metricGroupBy}` : '';
+  const limit = formatAmount(form.critical, getMetricLimitUnit(metric.unit, value));
+
+  return `Fires when the ${aggregation?.label.toLowerCase() ?? 'value'} of ${metric.name} is ${side} ${limit} within ${formatSpan(form.metricWithin)}${group}.`;
+}
+
+export function getServiceScopeText(kind: ConditionKind) {
+  if (kind === 'metric') {
+    return 'Covers every service that sends this metric, with one alert per group. Pick a service, filter or grouping in the rule to narrow it.';
+  }
+  return 'Covers every service that sends traces, with one alert per service. Pick a service in the rule to watch only that one.';
 }
 
 export function readMinRequests(form: RuleFormState) {
@@ -243,7 +280,7 @@ export function readTargetNoun(kind: ConditionKind): TargetNoun {
   if (isCheckKind(kind)) {
     return 'check';
   }
-  if (isTraceKind(kind)) {
+  if (isServiceKind(kind)) {
     return 'service';
   }
   return isCronKind(kind) ? 'cron' : 'server';
@@ -257,11 +294,8 @@ export function hasWarning(kind: ConditionKind) {
   return hasThreshold(kind) && kind !== 'logs';
 }
 
-export function formatAmount(value: number, unit: string) {
-  if (unit === '%') {
-    return `${value}%`;
-  }
-  return unit ? `${value} ${unit}` : `${value}`;
+export function formatAmount(value: number | string, unit: string) {
+  return `${value}${getUnitSuffix(unit)}`;
 }
 
 export function formatSpan(seconds: number) {
@@ -277,6 +311,16 @@ export function getMatchesText(names: string[], noun: string) {
   return `Matches ${count}: ${joinNames(names)}.`;
 }
 
+function getInitialCritical(initial?: Schemas['Condition'], draft?: RuleDraft) {
+  if (draft?.critical !== undefined) {
+    return draft.critical;
+  }
+  if (initial) {
+    return readThreshold(initial)?.toString() ?? '';
+  }
+  return DEFAULT_THRESHOLDS.cpu ?? '';
+}
+
 type ReadInitialRuleFormOptions = {
   rule?: Schemas['AlertRule'];
   draft?: RuleDraft;
@@ -290,12 +334,13 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
   const initial = rule?.condition ?? draft?.condition;
   const savedLog = readLogCondition(initial);
   const savedTrace = readTraceCondition(initial);
+  const savedMetric = readMetricCondition(initial);
   const scope = rule?.scope ?? draft?.scope;
 
   return {
     name: rule?.name ?? draft?.name ?? '',
     kind: initial?.kind ?? 'cpu',
-    critical: initial ? (readThreshold(initial)?.toString() ?? '') : (DEFAULT_THRESHOLDS.cpu ?? ''),
+    critical: getInitialCritical(initial, draft),
     warning: saved?.warning?.toString() ?? '',
     isWarningOpen: saved?.warning != null,
     recovery: saved?.resolve_at?.toString() ?? '',
@@ -321,6 +366,13 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
     tracePercentile: (savedTrace?.kind === 'trace_latency' ? savedTrace.percentile : undefined) ?? 'p95',
     traceSpans: savedTrace?.spans ?? 'entry',
     traceGroupBy: savedTrace?.group_by ?? 'service',
+    metricName: savedMetric?.name ?? '',
+    metricAggregation: savedMetric?.aggregation ?? '',
+    metricBelow: savedMetric?.below ?? false,
+    metricWithin: savedMetric?.within_secs ?? 300,
+    metricService: savedMetric?.service ?? '',
+    metricFilters: savedMetric?.filters ?? [],
+    metricGroupBy: savedMetric?.group_by ?? '',
     scopeKind: readScopeKind(scope),
     label: scope?.kind === 'label' ? scope.label : '',
     pickedIds: readPickedIds(scope),
@@ -424,6 +476,22 @@ export function readCondition(form: RuleFormState): Schemas['Condition'] | undef
 
       return kind === 'trace_errors' ? { kind, ...filters } : { kind, percentile: form.tracePercentile, ...filters };
     }
+    case 'metric':
+      if (!form.metricName) {
+        return undefined;
+      }
+
+      return {
+        kind,
+        name: form.metricName,
+        aggregation: form.metricAggregation || null,
+        threshold: limit,
+        below: form.metricBelow,
+        within_secs: form.metricWithin,
+        service: form.metricService || null,
+        filters: form.metricFilters.map((filter) => filter.trim()).filter(Boolean),
+        group_by: form.metricGroupBy || null,
+      };
     case 'cert_days':
       return { kind, below: limit };
     case 'cpu':

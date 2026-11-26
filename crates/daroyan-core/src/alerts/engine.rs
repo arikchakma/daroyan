@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -10,8 +10,8 @@ use tokio::task::JoinHandle;
 use crate::agents::Agents;
 use crate::alerts::deploys::{DEPLOY_WINDOW_SECS, DeployNote, DeployWatch};
 use crate::alerts::evaluate::{
-    Level, NO_DATA, Reading, ServerSnapshot, find_readings, find_trace_readings,
-    format_percent, is_past, make_log_reading, make_reading, rate,
+    Level, NO_DATA, Reading, ServerSnapshot, find_metric_readings, find_readings,
+    find_trace_readings, format_percent, is_past, make_log_reading, make_reading, rate,
 };
 use crate::alerts::facts::{AlertFacts, CheckCount, FactSources};
 use crate::alerts::integrations::IntegrationConfig;
@@ -21,13 +21,16 @@ use crate::alerts::notify::{
     update_parent,
 };
 use crate::alerts::rules::{
-    Condition, NoData, RuleOptions, Scope, Target, TraceRule, describe_rule,
-    format_clock, format_duration, format_ms, read_log_severity, read_time_zone,
+    Condition, MAX_METRIC_GROUPS, NoData, RuleOptions, Scope, Target, TraceRule,
+    describe_rule, format_clock, format_duration, format_ms, read_log_severity,
+    read_time_zone,
 };
 use crate::analytics::Analytics;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source,
 };
+use crate::analytics::metrics::query::{MetricQuery, Ranking, measure_metric};
+use crate::analytics::metrics::{METRICS_TARGET_ID, METRICS_TARGET_NAME};
 use crate::analytics::server_states::aggregate_server_metric;
 use crate::analytics::spans::{
     SpanOrder, TRACES_TARGET_ID, TRACES_TARGET_NAME, measure_spans,
@@ -97,6 +100,7 @@ struct TargetReadings {
     name: String,
     target: Target,
     readings: Option<Vec<Reading>>,
+    cut: Vec<String>,
 }
 
 pub struct AlertEngine {
@@ -115,6 +119,29 @@ pub struct AlertEngine {
     checks: HashMap<String, UptimeCheck>,
     down: HashSet<String>,
     deploys: DeployWatch,
+    read_errors: ReadErrors,
+}
+
+#[derive(Default)]
+struct ReadErrors(HashMap<String, String>);
+
+impl ReadErrors {
+    fn is_new(&mut self, rule_id: &str, error: &str) -> bool {
+        if self.0.get(rule_id).is_some_and(|known| known == error) {
+            return false;
+        }
+
+        self.0.insert(rule_id.to_string(), error.to_string());
+        true
+    }
+
+    fn clear(&mut self, rule_id: &str) {
+        self.0.remove(rule_id);
+    }
+
+    fn keep(&mut self, rule_ids: &HashSet<String>) {
+        self.0.retain(|rule_id, _| rule_ids.contains(rule_id));
+    }
 }
 
 enum Slot {
@@ -160,6 +187,7 @@ fn get_target(alert: &Alert) -> Target {
         (_, Some(_), _) => Target::Cron,
         (_, _, Some(OTLP_SERVER_ID)) => Target::Telemetry,
         (_, _, Some(TRACES_TARGET_ID)) => Target::Traces,
+        (_, _, Some(METRICS_TARGET_ID)) => Target::Metrics,
         _ => Target::Server,
     }
 }
@@ -202,7 +230,35 @@ impl AlertEngine {
             checks: HashMap::new(),
             down: HashSet::new(),
             deploys: DeployWatch::default(),
+            read_errors: ReadErrors::default(),
         }
+    }
+
+    fn find_silent(
+        &self,
+        rule_id: &str,
+        target: &TargetReadings,
+        firing: &HashMap<AlertKey, &Alert>,
+    ) -> Vec<String> {
+        let reported: HashSet<&str> = target
+            .readings
+            .iter()
+            .flatten()
+            .map(|reading| reading.subject.as_str())
+            .chain(target.cut.iter().map(String::as_str))
+            .chain([NO_DATA])
+            .collect();
+
+        let open: BTreeSet<&str> = self
+            .pending
+            .keys()
+            .chain(firing.keys())
+            .filter(|(rule, target_id, _)| rule == rule_id && *target_id == target.id)
+            .map(|(_, _, subject)| subject.as_str())
+            .filter(|subject| !reported.contains(subject))
+            .collect();
+
+        open.into_iter().map(str::to_string).collect()
     }
 
     async fn count_logs(
@@ -243,6 +299,7 @@ impl AlertEngine {
             name: OTLP_SERVER_NAME.to_string(),
             target: Target::Telemetry,
             readings: Some(readings),
+            cut: Vec::new(),
         })
     }
 
@@ -266,6 +323,40 @@ impl AlertEngine {
             name: TRACES_TARGET_NAME.to_string(),
             target: Target::Traces,
             readings: find_trace_readings(trace, &stats),
+            cut: Vec::new(),
+        })
+    }
+
+    async fn read_metric_target(
+        &self,
+        query: MetricQuery,
+        is_below: bool,
+    ) -> Result<TargetReadings> {
+        let name = query.name.clone();
+        let ranking = Ranking {
+            max_groups: MAX_METRIC_GROUPS,
+            is_lowest_first: is_below,
+        };
+        let measure = measure_metric(&self.analytics, query, ranking).await?;
+        let readings = measure
+            .as_ref()
+            .and_then(|measure| find_metric_readings(&name, measure));
+        let cut = measure
+            .map(|measure| {
+                measure
+                    .cut_groups
+                    .into_iter()
+                    .map(|group| group.unwrap_or_else(|| name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(TargetReadings {
+            id: METRICS_TARGET_ID.to_string(),
+            name: METRICS_TARGET_NAME.to_string(),
+            target: Target::Metrics,
+            readings,
+            cut,
         })
     }
 
@@ -329,6 +420,11 @@ impl AlertEngine {
             return Ok(vec![self.read_trace_target(&trace, now).await?]);
         }
 
+        if let Some(query) = parsed.condition.metric_query(now.timestamp_millis()) {
+            let is_below = parsed.condition.is_below();
+            return Ok(vec![self.read_metric_target(query, is_below).await?]);
+        }
+
         if parsed.condition.target() == Target::Cron {
             let (kind, label) = match parsed.condition {
                 Condition::CronMissed => ("missed", "Missed"),
@@ -350,6 +446,7 @@ impl AlertEngine {
                             .into_iter()
                             .collect(),
                     ),
+                    cut: Vec::new(),
                 })
                 .collect());
         }
@@ -387,6 +484,7 @@ impl AlertEngine {
                         name: check.name.clone(),
                         target: Target::Check,
                         readings,
+                        cut: Vec::new(),
                     }
                 })
                 .collect());
@@ -439,6 +537,7 @@ impl AlertEngine {
                     name: server.server.name.clone(),
                     target: Target::Server,
                     readings,
+                    cut: Vec::new(),
                 }
             })
             .collect();
@@ -501,6 +600,7 @@ impl AlertEngine {
             .chain([
                 (OTLP_SERVER_ID.to_string(), OTLP_SERVER_NAME.to_string()),
                 (TRACES_TARGET_ID.to_string(), TRACES_TARGET_NAME.to_string()),
+                (METRICS_TARGET_ID.to_string(), METRICS_TARGET_NAME.to_string()),
             ])
             .collect();
         self.end_mutes(&rules, &firing, &target_names, &integrations, now)
@@ -510,6 +610,8 @@ impl AlertEngine {
 
         let mut in_scope = HashSet::new();
         let mut evaluated = HashSet::new();
+        let mut unread = HashSet::new();
+        let mut kept = HashSet::new();
         let mut breaching = HashSet::new();
         let mut values: HashMap<AlertKey, f64> = HashMap::new();
         let mut names: HashMap<String, String> = HashMap::new();
@@ -519,7 +621,7 @@ impl AlertEngine {
                 continue;
             };
             let for_secs = rule.for_secs;
-            for target in self
+            let targets = match self
                 .read_targets(
                     &parsed,
                     &facts,
@@ -529,21 +631,58 @@ impl AlertEngine {
                     &cron_failures,
                     now,
                 )
-                .await?
+                .await
             {
+                Ok(targets) => {
+                    self.read_errors.clear(&rule.id);
+                    targets
+                }
+                Err(error) => {
+                    if self.read_errors.is_new(&rule.id, &error.to_string()) {
+                        tracing::warn!(rule_id = %rule.id, error = ?error, "skipped an alert rule that could not be read");
+                    }
+                    unread.insert(rule.id.clone());
+                    continue;
+                }
+            };
+
+            for target in targets {
                 names.insert(target.id.clone(), target.name.clone());
                 let pair = (rule.id.clone(), target.id.clone());
                 in_scope.insert(pair.clone());
-                let (readings, forced) = match (target.readings, parsed.options.no_data) {
-                    (Some(readings), _) => (readings, false),
+
+                let silent = if target.target == Target::Metrics {
+                    self.find_silent(&rule.id, &target, &firing_by_key)
+                } else {
+                    Vec::new()
+                };
+                let no_data = parsed.options.no_data;
+                let mut readings: Vec<(Reading, bool)> = match (target.readings, no_data)
+                {
+                    (Some(readings), _) => {
+                        readings.into_iter().map(|reading| (reading, false)).collect()
+                    }
+                    (None, _) if !silent.is_empty() => Vec::new(),
                     (None, NoData::Keep) => continue,
-                    (None, NoData::Resolve) => (Vec::new(), false),
+                    (None, NoData::Resolve) => Vec::new(),
                     (None, NoData::Alert) => {
-                        (vec![make_reading(NO_DATA, 0.0, NO_DATA.to_string())], true)
+                        vec![(make_reading(NO_DATA, 0.0, NO_DATA.to_string()), true)]
                     }
                 };
+
+                let to_key =
+                    |subject: String| (rule.id.clone(), target.id.clone(), subject);
+                kept.extend(target.cut.into_iter().map(to_key));
+                match no_data {
+                    NoData::Keep => kept.extend(silent.into_iter().map(to_key)),
+                    NoData::Alert => readings.extend(silent.into_iter().map(|subject| {
+                        (make_reading(&subject, 0.0, NO_DATA.to_string()), true)
+                    })),
+                    NoData::Resolve => {}
+                }
+
                 evaluated.insert(pair);
-                for reading in readings {
+                for (reading, forced) in readings {
                     let key =
                         (rule.id.clone(), target.id.clone(), reading.subject.clone());
                     let level = if forced {
@@ -610,6 +749,10 @@ impl AlertEngine {
 
         for alert in &firing {
             let key = to_alert_key(alert);
+            if unread.contains(&alert.rule_id) || kept.contains(&key) {
+                continue;
+            }
+
             let pair = (key.0.clone(), key.1.clone());
             let rule = rules.iter().find(|rule| rule.id == alert.rule_id && rule.enabled);
             let Some(rule) = rule.filter(|_| in_scope.contains(&pair)) else {
@@ -646,7 +789,10 @@ impl AlertEngine {
         }
 
         self.send_deploy_notes(&rules, &facts, &integrations, now);
-        self.pending.retain(|key, _| breaching.contains(key));
+        self.pending.retain(|key, _| {
+            breaching.contains(key) || kept.contains(key) || unread.contains(&key.0)
+        });
+        self.read_errors.keep(&unread);
         let open: HashSet<AlertKey> = firing.iter().map(to_alert_key).collect();
         self.clearing.retain(|key, _| open.contains(key));
         Ok(())
@@ -788,7 +934,8 @@ impl AlertEngine {
                 rule_id: rule.id.clone(),
                 server_id: target_of(Target::Server)
                     .or_else(|| target_of(Target::Telemetry))
-                    .or_else(|| target_of(Target::Traces)),
+                    .or_else(|| target_of(Target::Traces))
+                    .or_else(|| target_of(Target::Metrics)),
                 check_id: target_of(Target::Check),
                 cron_id: target_of(Target::Cron),
                 subject: reading.subject,
@@ -839,7 +986,10 @@ impl AlertEngine {
             rule,
             target_kind: target.kind(),
             target_id,
-            target_name: if matches!(target, Target::Telemetry | Target::Traces) {
+            target_name: if matches!(
+                target,
+                Target::Telemetry | Target::Traces | Target::Metrics
+            ) {
                 &alert.subject
             } else {
                 target_name
@@ -1578,4 +1728,24 @@ fn describe_alert(
         "started_at": alert.started_at.format(crate::time::ISO_FORMAT).to_string(),
         "resolved_at": alert.resolved_at.map(|at| at.format(crate::time::ISO_FORMAT).to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logs_each_read_error_once_per_rule() {
+        let mut errors = ReadErrors::default();
+        assert!(errors.is_new("rule_1", "wrong kind"));
+        assert!(!errors.is_new("rule_1", "wrong kind"));
+        assert!(errors.is_new("rule_2", "wrong kind"));
+        assert!(errors.is_new("rule_1", "missing metric"));
+
+        errors.clear("rule_1");
+        assert!(errors.is_new("rule_1", "missing metric"));
+
+        errors.keep(&HashSet::from(["rule_1".to_string()]));
+        assert!(errors.is_new("rule_2", "wrong kind"));
+    }
 }

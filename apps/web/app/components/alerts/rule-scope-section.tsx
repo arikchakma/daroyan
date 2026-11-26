@@ -9,7 +9,7 @@ import { SettingRow } from '~/components/alerts/setting-row';
 import { cronQueries } from '~/queries/crons';
 import { serverQueries } from '~/queries/servers';
 import { uptimeCheckQueries } from '~/queries/uptime';
-import { getMatchesText, readTargetNoun, readTargetNouns } from '~/utils/rule-form';
+import { getMatchesText, getServiceScopeText, readTargetNoun, readTargetNouns } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState, ScopeKind, TargetNoun } from '~/utils/rule-form';
 
 type RuleScopeSectionProps = {
@@ -38,9 +38,7 @@ export function RuleScopeSection(props: RuleScopeSectionProps) {
   if (noun === 'service') {
     return (
       <FormSection title={nouns}>
-        <p className="p-3.5 text-caption leading-4.5 text-text-secondary">
-          Covers every service that sends traces, with one alert per service. Pick a service in the rule to watch only that one.
-        </p>
+        <p className="p-3.5 text-caption leading-4.5 text-text-secondary">{getServiceScopeText(form.kind)}</p>
       </FormSection>
     );
   }

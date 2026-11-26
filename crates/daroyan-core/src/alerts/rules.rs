@@ -5,6 +5,9 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::analytics::metrics::query::{
+    Aggregation as MetricAggregation, GroupBy, MetricFilter, MetricQuery,
+};
 use crate::analytics::spans::SpanMatch;
 use crate::error::{Error, ErrorName, Result};
 
@@ -82,11 +85,30 @@ pub enum Condition {
         #[serde(default)]
         group_by: TraceGroup,
     },
+    Metric {
+        name: String,
+        #[serde(default)]
+        aggregation: Option<MetricAggregation>,
+        threshold: f64,
+        #[serde(default)]
+        below: bool,
+        within_secs: u32,
+        service: Option<String>,
+        #[serde(default)]
+        filters: Vec<String>,
+        #[schema(value_type = Option<String>)]
+        group_by: Option<GroupBy>,
+    },
 }
 
 pub const DEFAULT_MIN_REQUESTS: u32 = 10;
 pub const MAX_TRACE_WINDOW_SECS: u32 = 3600;
 const MAX_TRACE_FILTER: usize = 200;
+pub const MAX_METRIC_WINDOW_SECS: u32 = 3600;
+const MAX_METRIC_NAME: usize = 255;
+const MAX_METRIC_FILTER: usize = 200;
+const MAX_METRIC_FILTERS: usize = 20;
+pub const MAX_METRIC_GROUPS: usize = 200;
 const ROUTE_SEPARATOR: &str = " · ";
 
 fn default_min_requests() -> u32 {
@@ -240,6 +262,7 @@ pub enum Target {
     Cron,
     Telemetry,
     Traces,
+    Metrics,
 }
 
 impl Target {
@@ -248,7 +271,7 @@ impl Target {
             Self::Server => "Server",
             Self::Check => "Check",
             Self::Cron => "Cron",
-            Self::Telemetry | Self::Traces => "Source",
+            Self::Telemetry | Self::Traces | Self::Metrics => "Source",
         }
     }
 
@@ -259,6 +282,7 @@ impl Target {
             Self::Cron => "cron",
             Self::Telemetry => "telemetry",
             Self::Traces => "traces",
+            Self::Metrics => "metrics",
         }
     }
 
@@ -270,6 +294,7 @@ impl Target {
             Self::Cron => format!("{app_url}/crons/{id}"),
             Self::Telemetry => format!("{app_url}/logs?server_id={id}"),
             Self::Traces => format!("{app_url}/traces"),
+            Self::Metrics => format!("{app_url}/metrics"),
         }
     }
 }
@@ -283,6 +308,7 @@ impl Condition {
             | Self::CertDays { .. } => Target::Check,
             Self::CronMissed | Self::CronFailed => Target::Cron,
             Self::TraceErrors { .. } | Self::TraceLatency { .. } => Target::Traces,
+            Self::Metric { .. } => Target::Metrics,
             _ => Target::Server,
         }
     }
@@ -298,6 +324,7 @@ impl Condition {
             | Self::TraceErrors { above, .. }
             | Self::TraceLatency { above, .. } => Some(*above),
             Self::CertDays { below } => Some(*below),
+            Self::Metric { threshold, .. } => Some(*threshold),
             Self::Logs { count, .. } => Some(f64::from(*count)),
             _ => None,
         }
@@ -367,7 +394,33 @@ impl Condition {
     }
 
     pub fn is_below(&self) -> bool {
-        matches!(self, Self::CertDays { .. })
+        matches!(self, Self::CertDays { .. } | Self::Metric { below: true, .. })
+    }
+
+    pub fn metric_query(&self, now_ms: i64) -> Option<MetricQuery> {
+        let Self::Metric {
+            name,
+            aggregation,
+            within_secs,
+            service,
+            filters,
+            group_by,
+            ..
+        } = self
+        else {
+            return None;
+        };
+
+        Some(MetricQuery {
+            name: name.clone(),
+            aggregation: *aggregation,
+            service: service.clone(),
+            filters: filters.iter().filter_map(|text| text.parse().ok()).collect(),
+            group_by: group_by.clone(),
+            since: now_ms - i64::from(*within_secs) * 1000,
+            until: now_ms,
+            ..MetricQuery::default()
+        })
     }
 
     pub fn has_aggregation(&self) -> bool {
@@ -656,6 +709,38 @@ pub fn validate_options(
         Condition::TraceLatency { above, .. } if !(1.0..=600_000.0).contains(above) => {
             return invalid("The latency must be between 1 ms and 10 minutes");
         }
+        Condition::Metric { name, .. }
+            if name.trim().is_empty() || name.len() > MAX_METRIC_NAME =>
+        {
+            return invalid("Pick a metric");
+        }
+        Condition::Metric { threshold, .. } if !threshold.is_finite() => {
+            return invalid("The threshold must be a number");
+        }
+        Condition::Metric { within_secs, .. }
+            if !(60..=MAX_METRIC_WINDOW_SECS).contains(within_secs) =>
+        {
+            return invalid("The window must be between 1 minute and 1 hour");
+        }
+        Condition::Metric { service, filters, group_by, .. }
+            if [service.as_deref(), group_by.as_ref().and_then(GroupBy::attribute)]
+                .into_iter()
+                .flatten()
+                .chain(filters.iter().map(String::as_str))
+                .any(|text| text.trim().is_empty() || text.len() > MAX_METRIC_FILTER) =>
+        {
+            return invalid(
+                "Leave the service, filter and grouping out to match any, or give up to 200 characters",
+            );
+        }
+        Condition::Metric { filters, .. } if filters.len() > MAX_METRIC_FILTERS => {
+            return invalid("Use up to 20 filters");
+        }
+        Condition::Metric { filters, .. }
+            if filters.iter().any(|text| text.parse::<MetricFilter>().is_err()) =>
+        {
+            return invalid("Write each filter as key=value or key!=value");
+        }
         _ => {}
     }
 
@@ -681,6 +766,11 @@ pub fn validate_options(
         (Target::Traces, scope) if *scope != Scope::All => {
             return invalid(
                 "Trace rules cover all services. Pick a service in the rule to narrow it",
+            );
+        }
+        (Target::Metrics, scope) if *scope != Scope::All => {
+            return invalid(
+                "Metric rules cover all services. Pick a service or filter in the rule to narrow it",
             );
         }
         (_, Scope::Label { label }) if label.trim().is_empty() => {
@@ -845,6 +935,26 @@ pub fn describe_condition(condition: &Condition, for_secs: u32) -> String {
             .trace_rule()
             .map(|trace| trace.to_string())
             .unwrap_or_default(),
+        Condition::Metric {
+            name,
+            aggregation,
+            threshold,
+            below,
+            within_secs,
+            group_by,
+            ..
+        } => {
+            let measure = aggregation.map(MetricAggregation::label).unwrap_or("value");
+            let side = if *below { "below" } else { "above" };
+            let mut what = format!(
+                "{name} {measure} {side} {threshold} over {}",
+                format_duration(*within_secs)
+            );
+            if let Some(group_by) = group_by {
+                what.push_str(&format!(" per {group_by}"));
+            }
+            what
+        }
     };
     if for_secs == 0 { what } else { format!("{what} for {}", format_duration(for_secs)) }
 }
@@ -1114,5 +1224,32 @@ mod tests {
             describe_rule(&Condition::Memory { above: 90.0 }, &windowed, 0),
             "Max memory above 90% over 1m"
         );
+    }
+
+    #[test]
+    fn validates_metric_rules() {
+        let read = |extra: &str| -> Condition {
+            serde_json::from_str(&format!(
+                r#"{{"kind":"metric","name":"queue.depth","threshold":5,"within_secs":300{extra}}}"#
+            ))
+            .unwrap()
+        };
+
+        let condition =
+            read(r#","filters":["$env=prod","url=/a?b=1,2"],"group_by":"server_id""#);
+        assert!(validate_rule(&condition, &Scope::All, 0).is_ok());
+        assert!(matches!(
+            condition,
+            Condition::Metric { group_by: Some(GroupBy::Server), .. }
+        ));
+
+        let query = condition.metric_query(0).unwrap();
+        assert_eq!(query.filters[1].value, "/a?b=1,2");
+
+        assert!(validate_rule(&read(r#","filters":["route"]"#), &Scope::All, 0).is_err());
+        assert!(validate_rule(&read(r#","filters":["=x"]"#), &Scope::All, 0).is_err());
+        assert!(validate_rule(&read(r#","group_by":"  ""#), &Scope::All, 0).is_err());
+        let long = format!(r#","group_by":"{}""#, "k".repeat(MAX_METRIC_FILTER + 1));
+        assert!(validate_rule(&read(&long), &Scope::All, 0).is_err());
     }
 }

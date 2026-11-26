@@ -31,6 +31,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { label: 'Issues', icon: 'triangle-alert', path: '/issues', shortcut: 'E' },
       { label: 'Traces', icon: 'layers', path: '/traces', shortcut: 'T' },
       { label: 'Logs', icon: 'terminal', path: '/logs', shortcut: 'L' },
+      { label: 'Metrics', icon: 'chart-line', path: '/metrics', shortcut: 'M' },
     ],
   },
   {

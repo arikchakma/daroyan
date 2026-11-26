@@ -1,6 +1,8 @@
 import { describeRequest } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
 import { DAY_MS, formatBytes, formatClock, formatDate, HOUR_MS, pluralize } from '~/utils/format';
+import { getTimeRanges } from '~/utils/time-range';
+import type { TimeRange } from '~/utils/time-range';
 
 export const OTLP_SERVER_ID = 'otlp';
 export const OTLP_SERVER_NAME = 'OpenTelemetry';
@@ -98,16 +100,11 @@ export function getScanNote(scan: { files: number; bytes: number } | null | unde
   return `Read ${pluralize(scan.files, 'archived file')}, ${formatBytes(scan.bytes)}`;
 }
 
-export type LogRange = { value: string; label: string; ms: number };
+export type LogRange = TimeRange;
 
 export const DEFAULT_LOG_RANGE = '24h';
 
-const HOT_RANGES: LogRange[] = [
-  { value: '15m', label: 'Last 15 Minutes', ms: 15 * 60_000 },
-  { value: '1h', label: 'Last Hour', ms: HOUR_MS },
-  { value: '24h', label: 'Last 24 Hours', ms: DAY_MS },
-  { value: '7d', label: 'Last 7 Days', ms: 7 * DAY_MS },
-];
+const HOT_RANGES = getTimeRanges(['15m', '1h', '24h', '7d']);
 
 const ARCHIVE_DAYS = [30, 90];
 

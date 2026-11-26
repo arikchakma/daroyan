@@ -34,3 +34,14 @@ export function getArchiveStatus(archive: Schemas['Archive']) {
 
   return `${size}${since}, exported ${formatRelative(archive.exported_at)}`;
 }
+
+export function getIngestTokenDetail(token: Schemas['IngestToken']) {
+  const parts = [
+    token.throttled_log_records > 0 &&
+      `${token.throttled_log_records.toLocaleString()} log records throttled over the budget`,
+    token.rejected_metric_points > 0 &&
+      `${token.rejected_metric_points.toLocaleString()} metric points dropped over the series limit or point budget`,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join(' · ') : undefined;
+}

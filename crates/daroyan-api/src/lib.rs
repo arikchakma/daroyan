@@ -29,6 +29,7 @@ pub struct AppState {
     pub agents: Agents,
     pub limits: Limits,
     pub log_budgets: LogBudgets,
+    pub metric_budgets: LogBudgets,
     pub hosts: HostCache,
     pub connects: ConnectStates,
     pub uptime: Uptime,

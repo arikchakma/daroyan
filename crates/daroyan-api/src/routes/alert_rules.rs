@@ -8,6 +8,7 @@ use daroyan_core::alerts::rules::{
     Condition, RuleOptions, Scope, describe_condition, parse_runbook_url,
     validate_options,
 };
+use daroyan_core::analytics::metrics::query::check_aggregation;
 use daroyan_core::db::entities::alert_rules::Model as AlertRule;
 use daroyan_core::db::ids::AlertRuleId;
 use daroyan_core::db::queries::alert_rules::{
@@ -191,6 +192,14 @@ async fn check_integrations(state: &AppState, integration_ids: &[String]) -> Res
     Ok(())
 }
 
+async fn check_metric(state: &AppState, condition: &Condition) -> Result<()> {
+    let Condition::Metric { name, aggregation: Some(aggregation), .. } = condition else {
+        return Ok(());
+    };
+
+    check_aggregation(&state.analytics, name, *aggregation).await
+}
+
 #[utoipa::path(get, path = "/v1/alert-rules", responses((status = 200, body = Vec<AlertRuleView>)))]
 async fn list_alert_rules(
     State(state): State<AppState>,
@@ -213,6 +222,7 @@ async fn create_alert_rule(
 ) -> Result<(StatusCode, Json<AlertRuleView>)> {
     let options = read_options(body.options);
     validate_options(&body.condition, &options, &body.scope, body.for_secs)?;
+    check_metric(&state, &body.condition).await?;
     check_integrations(&state, &body.integration_ids).await?;
     check_integrations(&state, &options.warning_integration_ids).await?;
     let declare = read_declare(
@@ -264,6 +274,9 @@ async fn update_alert_rule(
         body.scope.as_ref().unwrap_or(&current.scope),
         body.for_secs.unwrap_or(for_secs),
     )?;
+    if let Some(condition) = &body.condition {
+        check_metric(&state, condition).await?;
+    }
     if let Some(integration_ids) = &body.integration_ids {
         check_integrations(&state, integration_ids).await?;
     }
@@ -381,6 +394,7 @@ async fn backtest_alert_rule(
         &body.scope,
         body.for_secs,
     )?;
+    check_metric(&state, &body.condition).await?;
     let hits = backtest_rule(
         &state.database,
         &state.analytics,

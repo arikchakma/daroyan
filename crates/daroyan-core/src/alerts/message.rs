@@ -14,6 +14,7 @@ use crate::alerts::rules::{
     format_moment, format_ms, parse_runbook_url, read_time_zone,
 };
 use crate::analytics::log_lines::read_level;
+use crate::analytics::metrics::query::GroupBy;
 use crate::analytics::spans::SpanStat;
 use crate::db::entities::alert_rules::Model as AlertRule;
 use crate::db::entities::alerts::Model as Alert;
@@ -90,6 +91,7 @@ impl AlertMessage<'_> {
             (_, AlertFacts::Offline(facts)) => self.offline(facts),
             (_, AlertFacts::Cert(facts)) => self.cert(facts),
             (_, AlertFacts::Traces(facts)) => self.traces(facts),
+            (_, AlertFacts::Metric(_)) => self.metric(),
             (_, AlertFacts::None) => self.generic(),
         };
 
@@ -109,7 +111,26 @@ impl AlertMessage<'_> {
         if self.target == Target::Traces {
             return self.traces_link().map(|link| link.url);
         }
+        if self.target == Target::Metrics {
+            return self.metrics_link().map(|link| link.url);
+        }
         self.target_url()
+    }
+
+    fn metric(&self) -> Details {
+        let alert = self.alert;
+        Details {
+            summary: Text::from(format!("{}: ", alert.subject))
+                .bold(alert.value.as_str())
+                .plain(format!(". {}", self.describe_trigger())),
+            fields: vec![
+                self.target_field(),
+                self.started_field(),
+                Field::new("Rule", &self.rule.name),
+            ],
+            links: self.metrics_link().into_iter().map(Link::primary).collect(),
+            ..Details::default()
+        }
     }
 
     fn generic(&self) -> Details {
@@ -127,7 +148,10 @@ impl AlertMessage<'_> {
                     describe_rule(self.condition, self.options, self.for_secs()),
                 ),
             ],
-            links: self.open_target(),
+            links: match self.metrics_link() {
+                Some(link) => vec![link.primary()],
+                None => self.open_target(),
+            },
             ..Details::default()
         }
     }
@@ -696,6 +720,15 @@ impl AlertMessage<'_> {
             Condition::TraceLatency { above, .. } => {
                 format!("{trigger} above {}{held}.", format_ms(warning.unwrap_or(*above)))
             }
+            Condition::Metric { threshold, below, .. } => {
+                let side = if *below { "below" } else { "above" };
+                let limit = warning.unwrap_or(*threshold);
+                let limit = match self.facts {
+                    AlertFacts::Metric(format) => format.format(limit),
+                    _ => limit.to_string(),
+                };
+                format!("{trigger} {side} {limit}{held}.")
+            }
             _ => format!(
                 "The rule fires on: {}.",
                 describe_rule(self.condition, self.options, self.for_secs())
@@ -773,6 +806,7 @@ impl AlertMessage<'_> {
                     | Condition::UptimeDown
                     | Condition::TraceErrors { .. }
                     | Condition::TraceLatency { .. }
+                    | Condition::Metric { .. }
             )
             && let Some(link) = self.target_link("Declare incident", "declare", id)
         {
@@ -824,6 +858,46 @@ impl AlertMessage<'_> {
 
         let url = Url::parse_with_params(&format!("{app_url}/traces"), params).ok()?;
         Some(Link::new("Open traces", url.as_str()))
+    }
+
+    fn metrics_link(&self) -> Option<Link> {
+        let app_url = self.app_url()?;
+        let Condition::Metric { name, aggregation, service, filters, group_by, .. } =
+            self.condition
+        else {
+            return None;
+        };
+
+        let subject = (self.alert.subject != *name && self.alert.subject != NO_DATA)
+            .then_some(self.alert.subject.as_str());
+        let mut filters = filters.clone();
+        let mut service = service.clone();
+        let mut server = None;
+
+        match (group_by, subject) {
+            (Some(GroupBy::Service), Some(subject)) => {
+                service = Some(subject.to_string());
+            }
+            (Some(GroupBy::Server), Some(subject)) => server = Some(subject.to_string()),
+            (Some(GroupBy::Attribute(key)), Some(subject)) => {
+                filters.push(format!("{key}={subject}"));
+            }
+            _ => {}
+        }
+
+        let mut params = vec![("range", "1h".to_string())];
+        params.extend(
+            aggregation.map(|aggregation| ("agg", aggregation.as_str().to_string())),
+        );
+        params.extend(service.map(|service| ("service", service)));
+        params.extend(server.map(|server| ("server", server)));
+        params.extend(filters.into_iter().map(|filter| ("filter", filter)));
+
+        let mut url =
+            Url::parse_with_params(&format!("{app_url}/metrics"), params).ok()?;
+        url.path_segments_mut().ok()?.push(name);
+
+        Some(Link::new("Open metric", url.as_str()))
     }
 
     fn firing_links(&self) -> Vec<Link> {
@@ -969,6 +1043,9 @@ mod tests {
     use crate::alerts::facts::{CheckCount, CheckResult, LogLine};
     use crate::alerts::rules::LogGroup;
     use crate::analytics::log_lines::LogRun;
+    use crate::analytics::metrics::query::{
+        Aggregation as MetricAggregation, MetricFormat,
+    };
     use crate::analytics::server_events::ProcessExit;
     use crate::analytics::server_states::DiskTrend;
 
@@ -1656,6 +1733,40 @@ mod tests {
         assert_eq!(
             format_used_of(65 * 1024_u64.pow(3), 75 * 1024_u64.pow(3)),
             "65 of 75 GB"
+        );
+    }
+
+    #[test]
+    fn formats_metric_thresholds_with_the_unit() {
+        let condition: Condition = serde_json::from_value(json!({
+            "kind": "metric",
+            "name": "http.server.request.duration",
+            "aggregation": "p95",
+            "threshold": 0.5,
+            "within_secs": 300,
+            "filters": ["url=/a?b=1,2"],
+            "group_by": "route"
+        }))
+        .unwrap();
+        let format = MetricFormat {
+            aggregation: MetricAggregation::P95,
+            unit: "s".to_string(),
+        };
+        let mut case = Case::new(
+            condition,
+            make_alert("/checkout", "750 ms"),
+            AlertFacts::Metric(format),
+        );
+        case.target = Target::Metrics;
+        let details = case.details(Moment::Firing);
+
+        assert_eq!(
+            details.summary.to_string(),
+            "/checkout: 750 ms. The rule fires above 500 ms."
+        );
+        assert_eq!(
+            details.links[0].url,
+            "https://daroyan.test/metrics/http.server.request.duration?range=1h&agg=p95&filter=url%3D%2Fa%3Fb%3D1%2C2&filter=route%3D%2Fcheckout"
         );
     }
 }

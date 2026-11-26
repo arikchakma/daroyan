@@ -14,6 +14,7 @@ pub struct Config {
     pub retention_days: u32,
     pub log_retention_days: u32,
     pub otlp_log_budget: u64,
+    pub metrics: MetricSettings,
     pub backup_dir: Option<PathBuf>,
     pub duckdb_max_bytes: Option<u64>,
     pub archive: Option<ArchiveConfig>,
@@ -92,6 +93,7 @@ impl Config {
             retention_days: read_number("RETENTION_DAYS", 30)?,
             log_retention_days: read_number("LOG_RETENTION_DAYS", 7)?,
             otlp_log_budget: read_number::<u64>("OTLP_LOG_BUDGET_KB", 1024)? * 1024,
+            metrics: MetricSettings::from_env()?,
             backup_dir: read_optional("DUCKDB_BACKUP_DIR").map(PathBuf::from),
             duckdb_max_bytes: read_optional("DUCKDB_MAX_SIZE_GB")
                 .map(|value| value.parse::<u64>())
@@ -126,6 +128,63 @@ impl Config {
             allow_private_targets: read_optional("ALLOW_PRIVATE_TARGETS")
                 .is_some_and(|value| value == "true"),
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MetricSettings {
+    pub retention_days: u32,
+    pub rollup_retention_days: u32,
+    pub series_limit: usize,
+    pub series_per_metric: usize,
+    pub point_budget: u64,
+}
+
+impl Default for MetricSettings {
+    fn default() -> Self {
+        Self {
+            retention_days: 7,
+            rollup_retention_days: 30,
+            series_limit: 10_000,
+            series_per_metric: 2_000,
+            point_budget: 100_000,
+        }
+    }
+}
+
+impl MetricSettings {
+    fn from_env() -> Result<Self> {
+        let defaults = Self::default();
+
+        Self {
+            retention_days: read_number(
+                "METRIC_RETENTION_DAYS",
+                defaults.retention_days,
+            )?,
+            rollup_retention_days: read_number(
+                "METRIC_ROLLUP_RETENTION_DAYS",
+                defaults.rollup_retention_days,
+            )?,
+            series_limit: read_number("METRIC_SERIES_LIMIT", defaults.series_limit)?,
+            series_per_metric: read_number(
+                "METRIC_SERIES_PER_METRIC",
+                defaults.series_per_metric,
+            )?,
+            point_budget: read_number("METRIC_POINT_BUDGET", defaults.point_budget)?,
+        }
+        .validate()
+    }
+
+    fn validate(self) -> Result<Self> {
+        if self.rollup_retention_days < self.retention_days {
+            anyhow::bail!(
+                "METRIC_ROLLUP_RETENTION_DAYS ({}) must be at least METRIC_RETENTION_DAYS ({})",
+                self.rollup_retention_days,
+                self.retention_days
+            );
+        }
+
+        Ok(self)
     }
 }
 
@@ -189,5 +248,18 @@ mod tests {
         );
         assert!(parse_archive_url("https://daroyan-logs").is_err());
         assert!(parse_archive_url("s3:///prod").is_err());
+    }
+
+    #[test]
+    fn keeps_metric_rollups_at_least_as_long_as_points() {
+        let settings = |retention_days, rollup_retention_days| MetricSettings {
+            retention_days,
+            rollup_retention_days,
+            ..MetricSettings::default()
+        };
+
+        assert!(settings(7, 30).validate().is_ok());
+        assert!(settings(7, 7).validate().is_ok());
+        assert!(settings(30, 7).validate().is_err());
     }
 }

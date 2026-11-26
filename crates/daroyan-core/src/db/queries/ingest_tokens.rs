@@ -25,6 +25,7 @@ impl Database {
             created_at: Set(Utc::now()),
             last_used_at: Set(None),
             throttled_log_records: Set(0),
+            rejected_metric_points: Set(0),
         }
         .insert(&self.conn)
         .await
@@ -68,6 +69,23 @@ impl Database {
             .col_expr(
                 Column::ThrottledLogRecords,
                 Expr::col(Column::ThrottledLogRecords)
+                    .add(i64::try_from(count).unwrap_or(i64::MAX)),
+            )
+            .filter(Column::Id.eq(id))
+            .exec(&self.conn)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn add_rejected_metric_points(
+        &self,
+        id: &str,
+        count: u64,
+    ) -> Result<(), DbErr> {
+        Entity::update_many()
+            .col_expr(
+                Column::RejectedMetricPoints,
+                Expr::col(Column::RejectedMetricPoints)
                     .add(i64::try_from(count).unwrap_or(i64::MAX)),
             )
             .filter(Column::Id.eq(id))

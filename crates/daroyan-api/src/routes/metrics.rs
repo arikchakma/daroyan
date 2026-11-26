@@ -1,0 +1,138 @@
+use axum::Json;
+use axum::extract::{Path, Query, RawQuery, State};
+use chrono::Utc;
+use daroyan_core::analytics::metrics::query::{
+    Aggregation, GroupBy, MetricAttribute, MetricFilter, MetricQuery, MetricResult,
+    MetricSummary, list_metric_attributes, list_metrics, query_metric,
+};
+use daroyan_core::error::{Error, ErrorName, Result};
+use serde::Deserialize;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
+
+use crate::AppState;
+use crate::extract::CurrentUser;
+
+const DAY_MS: i64 = 86_400_000;
+const CATALOG_WINDOW_MS: i64 = 30 * DAY_MS;
+const QUERY_WINDOW_MS: i64 = 3_600_000;
+const MAX_QUERY_RANGE_MS: i64 = 400 * DAY_MS;
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(get_metrics))
+        .routes(routes!(get_metric_attributes))
+        .routes(routes!(get_metric_query))
+}
+
+#[derive(Deserialize)]
+struct CatalogQuery {
+    since: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/metrics",
+    params(("since" = Option<i64>, Query, description = "Only metrics seen at or after this time in ms. Defaults to the last 30 days")),
+    responses((status = 200, body = Vec<MetricSummary>))
+)]
+async fn get_metrics(
+    State(state): State<AppState>,
+    _user: CurrentUser,
+    Query(query): Query<CatalogQuery>,
+) -> Result<Json<Vec<MetricSummary>>> {
+    let since = query
+        .since
+        .unwrap_or_else(|| Utc::now().timestamp_millis() - CATALOG_WINDOW_MS);
+
+    Ok(Json(list_metrics(&state.analytics, since).await?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/metrics/{name}/attributes",
+    params(("name" = String, Path, description = "Metric name, like http.server.request.duration")),
+    responses((status = 200, body = Vec<MetricAttribute>))
+)]
+async fn get_metric_attributes(
+    State(state): State<AppState>,
+    _user: CurrentUser,
+    Path(name): Path<String>,
+) -> Result<Json<Vec<MetricAttribute>>> {
+    Ok(Json(list_metric_attributes(&state.analytics, name).await?))
+}
+
+#[derive(Deserialize)]
+struct MetricQueryParams {
+    agg: Option<Aggregation>,
+    service: Option<String>,
+    server_id: Option<String>,
+    group_by: Option<String>,
+    since: Option<i64>,
+    until: Option<i64>,
+    step_ms: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/metrics/{name}/query",
+    params(
+        ("name" = String, Path, description = "Metric name, like http.server.request.duration"),
+        ("agg" = Option<Aggregation>, Query, description = "Counters: rate (per second), rate_per_minute or increase. Gauges: last (summed across series), avg, min or max. Histograms: p50, p90, p95, p99, avg, min, max or count_rate. Defaults to rate_per_minute, last or p95"),
+        ("service" = Option<String>, Query),
+        ("server_id" = Option<String>, Query),
+        ("filter" = Option<Vec<String>>, Query, explode, description = "One attribute filter per parameter, like filter=route=/checkout&filter=status!=200. Each is key=value or key!=value, split at the first != or else the first =, so the value may hold commas and equals signs"),
+        ("group_by" = Option<String>, Query, description = "service, server or an attribute key. At most 50 groups, largest first"),
+        ("since" = Option<i64>, Query, description = "Time in ms. Defaults to the last hour"),
+        ("until" = Option<i64>, Query, description = "Time in ms. Defaults to now"),
+        ("step_ms" = Option<i64>, Query, description = "Bucket size in ms. Defaults to about 120 buckets. A step as long as the range returns one bucket")
+    ),
+    responses((status = 200, body = MetricResult))
+)]
+async fn get_metric_query(
+    State(state): State<AppState>,
+    _user: CurrentUser,
+    Path(name): Path<String>,
+    Query(params): Query<MetricQueryParams>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<MetricResult>> {
+    let until = params.until.unwrap_or_else(|| Utc::now().timestamp_millis());
+    let since = params.since.unwrap_or(until.saturating_sub(QUERY_WINDOW_MS));
+    if since >= until {
+        return Err(Error::new(ErrorName::ValidationError, "since must be before until"));
+    }
+
+    if until
+        .checked_sub(since)
+        .is_none_or(|range| range > MAX_QUERY_RANGE_MS)
+    {
+        return Err(Error::new(
+            ErrorName::ValidationError,
+            "The range can be at most 400 days",
+        ));
+    }
+
+    let query = MetricQuery {
+        name,
+        aggregation: params.agg,
+        service: params.service.filter(|service| !service.is_empty()),
+        server_id: params.server_id.filter(|server_id| !server_id.is_empty()),
+        filters: read_filters(raw.as_deref())?,
+        group_by: params.group_by.as_deref().and_then(GroupBy::read),
+        since,
+        until,
+        step_ms: params.step_ms.filter(|step| *step > 0),
+    };
+
+    let retention_ms = i64::from(state.config.metrics.retention_days) * DAY_MS;
+    let points_since = Utc::now().timestamp_millis() - retention_ms;
+
+    Ok(Json(query_metric(&state.analytics, query, points_since).await?))
+}
+
+fn read_filters(raw: Option<&str>) -> Result<Vec<MetricFilter>> {
+    form_urlencoded::parse(raw.unwrap_or_default().as_bytes())
+        .filter(|(key, _)| key == "filter")
+        .map(|(_, text)| text.parse())
+        .collect()
+}

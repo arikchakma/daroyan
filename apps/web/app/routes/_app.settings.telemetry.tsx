@@ -25,6 +25,7 @@ import {
   deleteIngestTokenOptions,
   ingestTokenQueries,
 } from "~/queries/traces";
+import { getIngestTokenDetail } from "~/utils/settings";
 
 export function meta() {
   return [{ title: "Telemetry · Daroyan" }];
@@ -35,10 +36,7 @@ export default function TelemetryPage() {
   const { data, isLoading } = useQuery(ingestTokenQueries.list());
   const tokens = data?.map((token) => ({
     ...token,
-    detail:
-      token.throttled_log_records > 0
-        ? `${token.throttled_log_records.toLocaleString()} log records throttled over the budget`
-        : undefined,
+    detail: getIngestTokenDetail(token),
   }));
   const [isAdding, setIsAdding] = useState(false);
   const [revoking, setRevoking] = useState<TokenItem>();
@@ -59,7 +57,7 @@ export default function TelemetryPage() {
     <SettingsPage title="Telemetry" icon="layers">
       <SettingsBlock
         title="Ingest Tokens"
-        description="OpenTelemetry SDKs send traces and logs with one of these tokens. Revoke a token to stop accepting data from it."
+        description="OpenTelemetry SDKs send traces, logs and metrics with one of these tokens. Revoke a token to stop accepting data from it."
       >
         <TokenCard
           tokens={tokens}
@@ -74,7 +72,7 @@ export default function TelemetryPage() {
 
       <SettingsBlock
         title="Setup Guide"
-        description="Send traces and logs from Node.js, Python, Go or Rust. Every SDK exports to this endpoint."
+        description="Send traces, logs and metrics from Node.js, Python, Go or Rust. Every SDK exports to this endpoint."
       >
         <SettingsCard className="[&>*+*]:border-t [&>*+*]:border-border-row">
           <div className="flex items-center gap-3 py-2.5 pr-2.5 pl-4">
@@ -144,7 +142,7 @@ export default function TelemetryPage() {
           <>
             SDKs using{" "}
             <span className="font-mono">dy_ingest_…{revoking?.hint}</span> stop
-            sending traces and logs right away. Data already received is kept.
+            sending traces, logs and metrics right away. Data already received is kept.
           </>
         }
         confirmLabel="Revoke Token"

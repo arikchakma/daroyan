@@ -1,4 +1,4 @@
-import { defineChart, lineY, ruleY } from '@tanstack/charts';
+import { areaY, defineChart, dot, lineY, ruleY, text } from '@tanstack/charts';
 import { crosshair } from '@tanstack/charts/crosshair';
 import { Chart } from '@tanstack/charts/react/tooltip';
 import { scaleLinear } from '@tanstack/charts/scales/linear';
@@ -6,6 +6,7 @@ import { tooltip } from '@tanstack/charts/tooltip';
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 
+import { SMOOTH_CURVE } from '~/utils/chart';
 import { cn } from '~/utils/classname';
 import { DAY_MS, formatClock, formatDate } from '~/utils/format';
 
@@ -13,8 +14,9 @@ const CHART_HEIGHT = 112;
 
 export type ChartSeries = {
   label: string;
-  values: number[];
+  values: (number | null)[];
   isSecondary?: boolean;
+  color?: string;
 };
 
 type ChartRow = {
@@ -33,11 +35,15 @@ type MetricChartProps = {
   from: number;
   to: number;
   bucketMs: number;
+  min?: number;
   max: number;
   maxLabel: string;
   formatValue: (value: number) => string;
   limit?: number;
+  limitLabel?: string;
   legend?: ReactNode;
+  footer?: ReactNode;
+  height?: number;
 };
 
 function formatTick(value: number, from: number, to: number) {
@@ -49,6 +55,13 @@ function formatTick(value: number, from: number, to: number) {
 
 function formatTooltipTime(value: number, from: number, to: number) {
   return to - from > DAY_MS ? `${formatDate(value)}, ${formatClock(value)}` : formatClock(value);
+}
+
+function getLineColor(line: Pick<ChartSeries, 'isSecondary' | 'color'>) {
+  if (line.color) {
+    return line.color;
+  }
+  return line.isSecondary ? 'var(--color-chart-secondary)' : 'var(--color-chart-primary)';
 }
 
 function buildRows(series: ChartSeries[], times: number[], bucketMs: number) {
@@ -67,6 +80,12 @@ function buildRows(series: ChartSeries[], times: number[], bucketMs: number) {
   return rows;
 }
 
+function getLoneRows(rows: ChartRow[]) {
+  return rows.filter(
+    (row, index) => row.value !== null && (rows[index - 1]?.value ?? null) === null && (rows[index + 1]?.value ?? null) === null
+  );
+}
+
 export function MetricChart(props: MetricChartProps) {
   const {
     title,
@@ -78,11 +97,15 @@ export function MetricChart(props: MetricChartProps) {
     from,
     to,
     bucketMs,
+    min = 0,
     max,
     maxLabel,
     formatValue,
     limit,
+    limitLabel,
     legend,
+    footer,
+    height = CHART_HEIGHT,
   } = props;
 
   const { definition, rowsByTime } = useMemo(() => {
@@ -94,10 +117,36 @@ export function MetricChart(props: MetricChartProps) {
       }
     }
 
+    const hasLimit = limit !== undefined && limit >= min && limit <= max;
+    const lines = series.slice().reverse();
+
     const definition = defineChart({
+      gradients: series.map((line, index) => ({
+        id: `area-${index}`,
+        x1: 0,
+        y1: 0,
+        x2: 0,
+        y2: 1,
+        stops: [
+          { offset: 0, color: getLineColor(line), opacity: 0.16 },
+          { offset: 1, color: getLineColor(line), opacity: 0 },
+        ],
+      })),
       marks: [
         crosshair({ x: { stroke: 'var(--color-border-strong)' }, y: false }),
-        ...(limit !== undefined && limit <= max
+        ...lines.map((line) =>
+          areaY(
+            rows.filter((row) => row.series === line.label),
+            {
+              id: `${line.label}-area`,
+              x: 'at',
+              y: 'value',
+              fill: `url(#area-${series.indexOf(line)})`,
+              curve: SMOOTH_CURVE,
+            }
+          )
+        ),
+        ...(hasLimit
           ? [
               ruleY([limit], {
                 stroke: 'var(--color-tone-critical-fg)',
@@ -106,21 +155,41 @@ export function MetricChart(props: MetricChartProps) {
               }),
             ]
           : []),
-        ...series
-          .slice()
-          .reverse()
-          .map((line) =>
-            lineY(
-              rows.filter((row) => row.series === line.label),
-              {
-                id: line.label,
+        ...(hasLimit && limitLabel
+          ? [
+              text([{ at: from, value: limit }], {
                 x: 'at',
                 y: 'value',
-                stroke: line.isSecondary ? 'var(--color-chart-secondary)' : 'var(--color-chart-primary)',
-                strokeWidth: 1.5,
-              }
-            )
-          ),
+                text: () => limitLabel,
+                fill: 'var(--color-tone-critical-fg)',
+                fontSize: 11,
+                anchor: 'start',
+                dy: -6,
+              }),
+            ]
+          : []),
+        ...lines.map((line) =>
+          lineY(
+            rows.filter((row) => row.series === line.label),
+            {
+              id: line.label,
+              x: 'at',
+              y: 'value',
+              stroke: getLineColor(line),
+              strokeWidth: 2,
+              curve: SMOOTH_CURVE,
+            }
+          )
+        ),
+        ...lines.map((line) =>
+          dot(getLoneRows(rows.filter((row) => row.series === line.label)), {
+            id: `${line.label}-dot`,
+            x: 'at',
+            y: 'value',
+            r: 2,
+            fill: getLineColor(line),
+          })
+        ),
       ],
       scales: {
         x: {
@@ -140,11 +209,11 @@ export function MetricChart(props: MetricChartProps) {
           },
         },
         y: {
-          scale: scaleLinear().domain([0, max]),
+          scale: scaleLinear().domain([min, max]),
           grid: { stroke: 'var(--color-chart-grid)', strokeOpacity: 1 },
           axis: {
             line: false,
-            ticks: { values: [0, max / 2, max], size: 0 },
+            ticks: { values: [min, (min + max) / 2, max], size: 0 },
             tickLabels: false,
           },
         },
@@ -160,7 +229,7 @@ export function MetricChart(props: MetricChartProps) {
     });
 
     return { definition, rowsByTime };
-  }, [series, times, from, to, bucketMs, max, limit]);
+  }, [series, times, from, to, bucketMs, min, max, limit, limitLabel]);
 
   return (
     <div className="@container flex min-w-0 flex-col gap-2.5 rounded-2xl border border-border-ring bg-surface-default px-4 pt-3.5 pb-3 shadow-card">
@@ -187,7 +256,7 @@ export function MetricChart(props: MetricChartProps) {
         </span>
         <Chart
           definition={definition}
-          height={CHART_HEIGHT}
+          height={height}
           initialWidth={240}
           ariaLabel={`${title} over time`}
           className="ts-chart-host text-axis [&_svg]:outline-none"
@@ -204,10 +273,8 @@ export function MetricChart(props: MetricChartProps) {
                   return (
                     <div key={row.series} className="flex items-center gap-2 text-caption">
                       <span
-                        className={cn(
-                          'size-1.75 rounded-full bg-chart-primary',
-                          line?.isSecondary && 'bg-chart-secondary'
-                        )}
+                        className="size-1.75 rounded-full"
+                        style={{ backgroundColor: line ? getLineColor(line) : undefined }}
                       />
                       <span className="flex-1 text-text-secondary">{row.series}</span>
                       <span className="pl-4 font-medium text-text-primary">{formatValue(row.value ?? 0)}</span>
@@ -219,12 +286,13 @@ export function MetricChart(props: MetricChartProps) {
           }}
         />
       </div>
+      {footer}
     </div>
   );
 }
 
 type ChartLegendProps = {
-  items: { label: string; isSecondary?: boolean }[];
+  items: { label: string; isSecondary?: boolean; color?: string }[];
 };
 
 export function ChartLegend(props: ChartLegendProps) {
@@ -234,12 +302,7 @@ export function ChartLegend(props: ChartLegendProps) {
     <div className="flex shrink-0 flex-wrap gap-x-3 gap-y-0.5 @[13rem]:flex-col @[13rem]:items-end">
       {items.map((item) => (
         <div key={item.label} className="flex items-center gap-1.25">
-          <span
-            className={cn(
-              'size-1.5 rounded-full bg-chart-primary',
-              item.isSecondary && 'bg-chart-secondary'
-            )}
-          />
+          <span className="size-1.5 rounded-full" style={{ backgroundColor: getLineColor(item) }} />
           <span className="text-axis text-text-secondary">{item.label}</span>
         </div>
       ))}
@@ -256,4 +319,17 @@ export function getNiceMax(values: number[]) {
   const steps = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
   const step = steps.find((candidate) => candidate * magnitude >= peak) ?? 10;
   return step * magnitude;
+}
+
+export function getNiceDomain(values: number[]) {
+  const max = getNiceMax(values);
+  const lowest = Math.min(...values, 0);
+  if (lowest >= 0) {
+    return { min: 0, max };
+  }
+
+  const min = -getNiceMax([-lowest]);
+  const highest = Math.max(...values, 0);
+
+  return { min, max: highest > 0 ? max : 0 };
 }

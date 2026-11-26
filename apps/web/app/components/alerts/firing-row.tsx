@@ -8,6 +8,7 @@ import { describeFiring, describeMuteEnd, getAlertTargetPath } from '~/utils/ale
 import { cn } from '~/utils/classname';
 import { formatClock, joinNames } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
+import { METRICS_TARGET_ID } from '~/utils/metrics';
 import { TRACES_TARGET_ID } from '~/utils/traces';
 
 function getOpenAction(alert: Schemas['Alert']): { icon: IconName; label: string } {
@@ -23,11 +24,15 @@ function getOpenAction(alert: Schemas['Alert']): { icon: IconName; label: string
   if (alert.server_id === TRACES_TARGET_ID) {
     return { icon: 'layers', label: 'Open Traces' };
   }
+  if (alert.server_id === METRICS_TARGET_ID) {
+    return { icon: 'chart-line', label: 'Open Metrics' };
+  }
   return { icon: 'server', label: 'Open Server' };
 }
 
 type FiringRowProps = {
   alert: Schemas['Alert'];
+  rule?: Schemas['AlertRule'];
   deliveries: Schemas['AlertDelivery'][];
   mute?: Schemas['AlertMute'];
   onMute: () => void;
@@ -35,7 +40,7 @@ type FiringRowProps = {
 };
 
 export function FiringRow(props: FiringRowProps) {
-  const { alert, deliveries, mute, onMute, onUnmute } = props;
+  const { alert, rule, deliveries, mute, onMute, onUnmute } = props;
 
   const openAction = getOpenAction(alert);
   const names = [...new Set(deliveries.map((delivery) => delivery.integration_name))];
@@ -77,7 +82,7 @@ export function FiringRow(props: FiringRowProps) {
           </Button>
           <Button
             nativeButton={false}
-            render={<Link to={getAlertTargetPath(alert)} />}
+            render={<Link to={getAlertTargetPath(alert, rule)} />}
             variant="secondary"
             className="w-fit"
           >

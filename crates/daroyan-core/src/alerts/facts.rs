@@ -10,6 +10,7 @@ use crate::analytics::log_lines::{
     LogMatch, LogRun, OTLP_SERVER_ID, list_last_lines, list_top_messages,
     summarize_log_run,
 };
+use crate::analytics::metrics::query::{MetricFormat, find_metric_format};
 use crate::analytics::server_events::{ProcessExit, find_last_exit};
 use crate::analytics::server_states::{DiskTrend, fit_disk_trend};
 use crate::analytics::spans::{SpanMatch, SpanOrder, SpanStat, measure_spans};
@@ -46,6 +47,7 @@ pub enum AlertFacts {
     Offline(OfflineFacts),
     Cert(CertFacts),
     Traces(TraceFacts),
+    Metric(MetricFormat),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -236,6 +238,12 @@ impl FactSources<'_> {
                 };
 
                 AlertFacts::Traces(TraceFacts { total, routes })
+            }
+            Condition::Metric { name, aggregation, .. } => {
+                match find_metric_format(self.analytics, name, *aggregation).await? {
+                    Some(format) => AlertFacts::Metric(format),
+                    None => AlertFacts::None,
+                }
             }
             Condition::Cpu { .. } | Condition::Memory { .. } | Condition::Load { .. } => {
                 let (Some(report), Some(host)) = (self.report(), self.host()) else {

@@ -3,6 +3,15 @@ import type { Schemas } from '@daroyan/client';
 import type { IconName } from '~/components/icons/icon-paths';
 import { formatClock, formatDate, formatUnit } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
+import {
+  formatMetricValue,
+  getDefaultAggregation,
+  getMetricLink,
+  METRICS_TARGET_ID,
+  readMetricFilters,
+  writeMetricFilters,
+} from '~/utils/metrics';
+import type { MetricAggregation, MetricSummary } from '~/utils/metrics';
 import { getTraceService, TRACES_TARGET_ID } from '~/utils/traces';
 
 export const CONNECTED_MESSAGE = 'daroyan:integration-connected';
@@ -53,6 +62,7 @@ export const METRIC_GROUPS: { label: string; items: { kind: ConditionKind; label
       { kind: 'trace_latency', label: 'Latency' },
     ],
   },
+  { label: 'Metrics', items: [{ kind: 'metric', label: 'Metric value' }] },
 ];
 
 export const CONDITION_OPTIONS = METRIC_GROUPS.flatMap((group) => group.items);
@@ -72,6 +82,10 @@ export function isCronKind(kind: ConditionKind) {
 
 export function isTraceKind(kind: ConditionKind) {
   return TRACE_KINDS.includes(kind);
+}
+
+export function isServiceKind(kind: ConditionKind) {
+  return isTraceKind(kind) || kind === 'metric';
 }
 
 export function hasAggregation(kind: ConditionKind) {
@@ -157,7 +171,7 @@ export function getAlertMute(mutes: Schemas['AlertMute'][], alert: MuteMatch) {
 }
 
 export function getMutedService(alert: Pick<Schemas['Alert'], 'server_id' | 'subject'>, rule?: Schemas['AlertRule']) {
-  if (alert.server_id === OTLP_SERVER_ID || alert.server_id === TRACES_TARGET_ID) {
+  if (alert.server_id === OTLP_SERVER_ID || alert.server_id === TRACES_TARGET_ID || alert.server_id === METRICS_TARGET_ID) {
     return alert.subject;
   }
   if (readLogCondition(rule?.condition)?.group_by === 'source') {
@@ -174,16 +188,18 @@ export type AlertTarget = {
   serverId?: string;
   checkId?: string;
   cronId?: string;
+  ruleIds?: string[];
 };
 
 export function getAlertsForTarget(alerts: Schemas['Alert'][], target: AlertTarget) {
-  const { serverId, checkId, cronId } = target;
+  const { serverId, checkId, cronId, ruleIds } = target;
 
   return alerts.filter(
     (alert) =>
       (serverId && alert.server_id === serverId) ||
       (checkId && alert.check_id === checkId) ||
-      (cronId && alert.cron_id === cronId)
+      (cronId && alert.cron_id === cronId) ||
+      ruleIds?.includes(alert.rule_id)
   );
 }
 
@@ -285,6 +301,42 @@ export function readTraceCondition(condition?: Schemas['Condition']): TraceCondi
   return undefined;
 }
 
+export type MetricCondition = Extract<Schemas['Condition'], { kind: 'metric' }>;
+
+export function readMetricCondition(condition?: Schemas['Condition']) {
+  return condition?.kind === 'metric' ? condition : undefined;
+}
+
+export type MetricView = {
+  aggregation?: MetricAggregation;
+  service?: string;
+  serverId?: string;
+  filters: string[];
+  groupBy?: string;
+};
+
+export function isMetricRuleInView(
+  rule: Pick<Schemas['AlertRule'], 'condition'>,
+  metric: Pick<MetricSummary, 'kind' | 'is_monotonic'>,
+  view: MetricView
+) {
+  const condition = readMetricCondition(rule.condition);
+  if (!condition || view.serverId) {
+    return false;
+  }
+
+  const aggregation = condition.aggregation ?? getDefaultAggregation(metric);
+  const filters = writeMetricFilters(readMetricFilters(condition.filters ?? [])).sort();
+  const viewFilters = [...view.filters].sort();
+
+  return (
+    aggregation === view.aggregation &&
+    (condition.service ?? '') === (view.service ?? '') &&
+    filters.join('\n') === viewFilters.join('\n') &&
+    (condition.group_by ?? '') === (view.groupBy ?? '')
+  );
+}
+
 export type LogCondition = Extract<Schemas['Condition'], { kind: 'logs' }>;
 
 export function readLogCondition(condition?: Schemas['Condition']) {
@@ -314,7 +366,7 @@ export function isIntegrationKind(value: string): value is IntegrationKind {
 }
 
 export function hasThreshold(kind: ConditionKind) {
-  return hasAggregation(kind) || isTraceKind(kind) || kind === 'cert_days' || kind === 'logs';
+  return hasAggregation(kind) || isServiceKind(kind) || kind === 'cert_days' || kind === 'logs';
 }
 
 export function isProcessKind(kind: ConditionKind) {
@@ -326,6 +378,9 @@ export function hasSubjectName(kind: ConditionKind) {
 }
 
 export function readThreshold(condition: Schemas['Condition']) {
+  if (condition.kind === 'metric') {
+    return condition.threshold;
+  }
   if ('above' in condition) {
     return condition.above;
   }
@@ -336,6 +391,9 @@ export function readThreshold(condition: Schemas['Condition']) {
 }
 
 export function readSubjectName(condition: Schemas['Condition']) {
+  if (condition.kind === 'metric') {
+    return undefined;
+  }
   return 'name' in condition ? (condition.name ?? undefined) : undefined;
 }
 
@@ -369,6 +427,65 @@ export function getTraceScopeLabel(condition?: TraceCondition) {
   return condition?.service ?? 'All services';
 }
 
+type GetRuleScopeLabelOptions = {
+  rule: Pick<Schemas['AlertRule'], 'condition' | 'scope'>;
+  servers: Named[];
+  checks: Named[];
+  crons: Named[];
+};
+
+export function getRuleScopeLabel(options: GetRuleScopeLabelOptions) {
+  const { rule, servers, checks, crons } = options;
+
+  const { kind } = rule.condition;
+  const metric = readMetricCondition(rule.condition);
+
+  if (metric) {
+    return metric.service ?? 'All services';
+  }
+  if (isTraceKind(kind)) {
+    return getTraceScopeLabel(readTraceCondition(rule.condition));
+  }
+  return describeScope(rule.scope, servers, checks, isCheckKind(kind), crons, isCronKind(kind));
+}
+
+type GetCoveredCountOptions = {
+  kind: ConditionKind;
+  metricServices: number;
+  traceServices: number;
+  targets: number;
+};
+
+export function getCoveredCount(options: GetCoveredCountOptions) {
+  const { kind, metricServices, traceServices, targets } = options;
+
+  if (kind === 'metric') {
+    return metricServices;
+  }
+  if (isTraceKind(kind)) {
+    return traceServices;
+  }
+  return targets;
+}
+
+export function getMetricRuleText(
+  rule: Pick<Schemas['AlertRule'], 'condition' | 'for_secs'>,
+  metric: Pick<MetricSummary, 'unit' | 'kind' | 'is_monotonic'>
+) {
+  const condition = readMetricCondition(rule.condition);
+  if (!condition) {
+    return '';
+  }
+
+  const aggregation = condition.aggregation ?? getDefaultAggregation(metric);
+  const side = `${condition.below ? 'below' : 'above'} ${formatMetricValue(condition.threshold, metric.unit, aggregation)}`;
+
+  if (rule.for_secs <= 0) {
+    return side;
+  }
+  return `${side} for ${formatForSecs(rule.for_secs)}`;
+}
+
 export function getAlertNoun(alert: Pick<Schemas['Alert'], 'server_id' | 'check_id' | 'cron_id'>) {
   if (alert.check_id) {
     return 'check';
@@ -376,7 +493,7 @@ export function getAlertNoun(alert: Pick<Schemas['Alert'], 'server_id' | 'check_
   if (alert.cron_id) {
     return 'cron';
   }
-  return alert.server_id === TRACES_TARGET_ID ? 'service' : 'server';
+  return alert.server_id === TRACES_TARGET_ID || alert.server_id === METRICS_TARGET_ID ? 'service' : 'server';
 }
 
 export function formatForSecs(secs: number) {
@@ -393,7 +510,10 @@ export function formatAlertDuration(startedAt: string, endedAt?: string | null, 
   return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
 }
 
-export function getAlertTargetPath(alert: Pick<Schemas['Alert'], 'server_id' | 'check_id' | 'cron_id' | 'subject'>) {
+export function getAlertTargetPath(
+  alert: Pick<Schemas['Alert'], 'server_id' | 'check_id' | 'cron_id' | 'subject'>,
+  rule?: Pick<Schemas['AlertRule'], 'condition'>
+) {
   if (alert.cron_id) {
     return `/crons/${alert.cron_id}`;
   }
@@ -402,6 +522,10 @@ export function getAlertTargetPath(alert: Pick<Schemas['Alert'], 'server_id' | '
   }
   if (alert.server_id === TRACES_TARGET_ID) {
     return `/traces?${new URLSearchParams({ service: getTraceService(alert.subject) })}`;
+  }
+  if (alert.server_id === METRICS_TARGET_ID) {
+    const metric = readMetricCondition(rule?.condition);
+    return metric ? getMetricLink(metric.name) : '/metrics';
   }
   return alert.check_id ? `/uptime/${alert.check_id}` : `/servers/${alert.server_id}`;
 }
@@ -434,6 +558,8 @@ export function describeResolve(condition?: Schemas['Condition']) {
       return 'Ends when the certificate is renewed';
     case 'logs':
       return `Ends when there are fewer than ${limit} matching lines`;
+    case 'metric':
+      return `Ends when ${condition.name} is back ${condition.below ? 'above' : 'below'} ${limit}`;
     default: {
       const names: Partial<Record<ConditionKind, string>> = {
         cpu: 'CPU',
@@ -474,6 +600,8 @@ export function getValueHint(condition?: Schemas['Condition']) {
       return `Matching log lines in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
     case 'trace_errors':
       return `Share of requests that failed in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
+    case 'metric':
+      return `${condition.name} in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
     case 'trace_latency': {
       const percentile = condition.percentile ?? 'p95';
       return `${percentile} latency in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired. ${percentile} means ${percentile.slice(1)}% of requests finished faster than this.`;
