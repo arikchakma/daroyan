@@ -39,6 +39,16 @@ struct LogSource {
     kind: SourceKind,
 }
 
+impl LogSource {
+    fn is_access(&self) -> bool {
+        matches!(self.kind, SourceKind::Journal { journal: Journal::Access })
+    }
+
+    fn is_vital(&self, line: &RawLine) -> bool {
+        self.is_access() && access::is_vital(&line.text)
+    }
+}
+
 enum SourceKind {
     Docker { target: DockerTarget },
     Journal { journal: Journal },
@@ -470,7 +480,11 @@ pub fn collect_logs(
         }
 
         let mut over = budget.roll(now);
-        let ready = budget.admit(ready);
+        let (vital, ready): (Vec<_>, Vec<_>) = ready
+            .into_iter()
+            .partition(|(index, line)| sources[*index].is_vital(line));
+        let mut ready = budget.admit(ready);
+        ready.extend(vital);
         if is_stopping {
             over.extend(budget.take_dropped());
         }
@@ -485,7 +499,11 @@ pub fn collect_logs(
         let lines: Vec<LogLine> = ready
             .into_iter()
             .map(|(index, raw)| {
-                to_log_line(&sources[index].name, sources[index].format, raw)
+                let source = &sources[index];
+                LogLine {
+                    access: source.is_access(),
+                    ..to_log_line(&source.name, source.format, raw)
+                }
             })
             .collect();
         if (!lines.is_empty() || !over_budget.is_empty())

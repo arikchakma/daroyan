@@ -346,17 +346,24 @@ pub(super) fn read_sudo(text: &str, parsed: &mut ParsedLine) {
         return;
     };
 
+    let (head, command) = match fields.split_once(" ; COMMAND=") {
+        Some((head, command)) => (head, Some(command)),
+        None => (fields, None),
+    };
+
     parsed.insert("user", user.trim());
-    for field in fields.split(" ; ") {
+    for field in head.split(" ; ") {
         match field.trim().split_once('=') {
             Some(("USER", target)) => parsed.insert("sudo.target_user", target),
             Some(("TTY", tty)) => parsed.insert("sudo.tty", tty),
-            Some(("COMMAND", command)) => parsed.insert("process.command_line", command),
             _ => {}
         }
     }
+    if let Some(command) = command {
+        parsed.insert("process.command_line", command);
+    }
 
-    let outcome = if SUDO_FAILURES.iter().any(|failure| fields.contains(failure)) {
+    let outcome = if SUDO_FAILURES.iter().any(|failure| head.contains(failure)) {
         Outcome::Failure
     } else {
         Outcome::Success
@@ -748,6 +755,16 @@ mod tests {
         );
         assert_eq!(event(&denied), ("sudo", "failure"));
         assert_eq!(denied.severity, Some(13));
+
+        let disguised = parse(
+            "sudo[5]:   tester : PWD=/home/tester ; USER=root ; COMMAND=/bin/bash -c id x ; USER=nobody ; COMMAND=/bin/true ; command not allowed",
+        );
+        assert_eq!(event(&disguised), ("sudo", "success"));
+        assert_eq!(disguised.attributes["sudo.target_user"], "root");
+        assert_eq!(
+            disguised.attributes["process.command_line"],
+            "/bin/bash -c id x ; USER=nobody ; COMMAND=/bin/true ; command not allowed"
+        );
     }
 
     #[test]

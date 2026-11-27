@@ -311,6 +311,7 @@ mod tests {
             span_id: None,
             raw: None,
             format: LogFormat::Auto,
+            access: false,
         };
         LogBatch {
             lines: vec![line; count],

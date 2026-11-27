@@ -44,6 +44,7 @@ const SETUID_COMMANDS: [&str; 4] = ["sudo", "su", "passwd", "gpasswd"];
 const SYSTEM_DIRS: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 const UNNAMED_CLOSES: [&str; 2] = ["Connection closed by ", "Disconnected from "];
 const NAMED_CLOSES: [&str; 2] = ["authenticating user ", "invalid user "];
+const SSH_COMMANDS: [&str; 3] = ["sshd", "sshd-session", "sshd-auth"];
 
 pub fn has_journal() -> bool {
     Path::new(JOURNAL_SOCKET).exists()
@@ -101,11 +102,33 @@ pub fn tag(entry: &Value, message: &str) -> Option<String> {
     Some(format!("{command}[{pid}]: {message}"))
 }
 
+pub fn is_vital(text: &str) -> bool {
+    let Some((tag, message)) = text.split_once("]: ") else {
+        return false;
+    };
+    let command = tag.split_once('[').map_or(tag, |(command, _)| command);
+
+    !SSH_COMMANDS.contains(&command) || message.starts_with("Accepted ")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{is_noise, journal_matches, tag};
+    use super::{is_noise, is_vital, journal_matches, tag};
+
+    #[test]
+    fn keeps_logins_and_local_changes_over_the_budget() {
+        assert!(is_vital(
+            "sshd-session[812]: Accepted publickey for arik from 203.0.113.7 port 52144 ssh2"
+        ));
+        assert!(is_vital("sudo[512712]:   tester : USER=root ; COMMAND=/usr/bin/true"));
+        assert!(is_vital("useradd[7]: new user: name=deploy, UID=1001"));
+        assert!(!is_vital("sshd[812]: Invalid user Accepted from 45.155.205.233 port 7"));
+        assert!(!is_vital(
+            "sshd[812]: Failed password for root from 45.155.205.233 port 7 ssh2"
+        ));
+    }
 
     #[test]
     fn tags_privileged_entries_with_the_trusted_command() {

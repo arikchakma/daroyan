@@ -366,13 +366,15 @@ impl Analytics {
 
         let others = self
             .write(move |conn| {
+                let transaction = conn.unchecked_transaction()?;
                 access::remember_logins(conn, &mut pending.logs)?;
                 append_states(conn, &pending.states)?;
                 append_disks(conn, &pending.disks)?;
                 append_events(conn, &pending.events)?;
                 append_logs(conn, &pending.logs, Utc::now().timestamp_millis())?;
                 append_volume(conn, &pending.logs)?;
-                append_spans(conn, &pending.spans, &pending.exceptions)
+                append_spans(conn, &pending.spans, &pending.exceptions)?;
+                transaction.commit()
             })
             .await;
 

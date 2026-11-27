@@ -166,6 +166,16 @@ pub async fn backtest_rule(
     Ok(Some(hits))
 }
 
+fn keep_opening_hits(hits: Vec<LoginHit>) -> Vec<LoginHit> {
+    let mut latest: HashMap<(String, String), i64> = HashMap::new();
+    hits.into_iter()
+        .filter(|hit| {
+            let previous = latest.insert((hit.server_id.clone(), hit.ip.clone()), hit.at);
+            previous.is_none_or(|at| hit.at - at >= LOGIN_WINDOW_MS)
+        })
+        .collect()
+}
+
 fn to_login_hits(
     hits: Vec<LoginHit>,
     scope: &Scope,
@@ -181,26 +191,19 @@ fn to_login_hits(
         .map(|server| (server.id.as_str(), server.name.as_str()))
         .collect();
 
-    let mut fired: HashMap<(String, String), i64> = HashMap::new();
-    let mut found: Vec<BacktestHit> = Vec::new();
-    for hit in hits {
-        let Some(name) = names.get(hit.server_id.as_str()) else {
-            continue;
-        };
-        let key = (hit.server_id.clone(), hit.ip.clone());
-        if fired.get(&key).is_some_and(|at| hit.at - at < LOGIN_WINDOW_MS) {
-            continue;
-        }
-
-        fired.insert(key, hit.at);
-        found.push(BacktestHit {
-            server_id: hit.server_id,
-            server_name: name.to_string(),
-            subject: hit.ip,
-            value: hit.label,
-            at: hit.at,
-        });
-    }
+    let mut found: Vec<BacktestHit> = keep_opening_hits(hits)
+        .into_iter()
+        .filter_map(|hit| {
+            let name = names.get(hit.server_id.as_str())?;
+            Some(BacktestHit {
+                server_id: hit.server_id,
+                server_name: name.to_string(),
+                subject: hit.ip,
+                value: hit.label,
+                at: hit.at,
+            })
+        })
+        .collect();
 
     found.sort_by_key(|hit| std::cmp::Reverse(hit.at));
     found.truncate(MAX_HITS);
@@ -480,6 +483,21 @@ fn find_gaps(times: &[i64], for_ms: i64) -> Vec<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_one_hit_while_logins_keep_the_alert_open() {
+        let hit = |minute: i64| LoginHit {
+            server_id: "srv_1".to_string(),
+            ip: "203.0.113.7".to_string(),
+            at: minute * 60_000,
+            label: String::new(),
+        };
+        let hits = vec![hit(0), hit(10), hit(20), hit(30), hit(50)];
+
+        let opened: Vec<i64> =
+            keep_opening_hits(hits).iter().map(|hit| hit.at / 60_000).collect();
+        assert_eq!(opened, [0, 50]);
+    }
 
     fn make_samples(values: &[(i64, f64)]) -> Vec<Sample> {
         values

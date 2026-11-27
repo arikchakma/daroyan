@@ -105,6 +105,7 @@ pub fn to_log_line(service: &str, format: LogFormat, raw: RawLine) -> LogLine {
             attributes: map,
             raw: Some(text),
             format,
+            access: false,
         };
     }
     LogLine {
@@ -121,6 +122,7 @@ pub fn to_log_line(service: &str, format: LogFormat, raw: RawLine) -> LogLine {
         span_id: None,
         raw: None,
         format,
+        access: false,
     }
 }
 

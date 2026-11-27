@@ -7,19 +7,19 @@ use crate::analytics::access::{
 };
 use crate::error::Result;
 
-pub const LOGIN_WINDOW_MS: i64 = 15 * 60_000;
-pub const LEARNING_MS: i64 = 86_400_000;
+pub(crate) const LOGIN_WINDOW_MS: i64 = 15 * 60_000;
+const LEARNING_MS: i64 = 86_400_000;
 const DAY_MS: i64 = 86_400_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoginRule {
+pub(crate) enum LoginRule {
     NewIp { days: u32 },
     Root,
     AfterFailures { failures: u32, within_secs: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct LoginHit {
+pub(crate) struct LoginHit {
     pub server_id: String,
     pub ip: String,
     pub at: i64,
@@ -27,7 +27,7 @@ pub struct LoginHit {
 }
 
 impl Condition {
-    pub fn login_rule(&self) -> Option<LoginRule> {
+    pub(crate) fn login_rule(&self) -> Option<LoginRule> {
         match self {
             Self::LoginNewIp { days } => Some(LoginRule::NewIp { days: *days }),
             Self::LoginRoot => Some(LoginRule::Root),
@@ -49,12 +49,28 @@ impl Login {
 }
 
 #[derive(Debug, Default)]
-pub struct History {
-    pub failures: Vec<Failure>,
-    pub first_logins: HashMap<String, i64>,
+struct History {
+    failures: HashMap<(String, String), Vec<Failure>>,
+    first_logins: HashMap<String, i64>,
 }
 
 impl History {
+    fn with_failures(failures: Vec<Failure>) -> Self {
+        let mut grouped: HashMap<(String, String), Vec<Failure>> = HashMap::new();
+        for failure in failures {
+            let key = (failure.server_id.clone(), failure.ip.clone());
+            grouped.entry(key).or_default().push(failure);
+        }
+
+        Self { failures: grouped, ..Self::default() }
+    }
+
+    fn failures_for(&self, login: &Login) -> &[Failure] {
+        self.failures
+            .get(&(login.server_id.clone(), login.ip.clone()))
+            .map_or(&[], Vec::as_slice)
+    }
+
     fn has_learned(&self, login: &Login) -> bool {
         self.first_logins
             .get(&login.server_id)
@@ -85,11 +101,10 @@ impl Connection {
 fn count_attempts(login: &Login, failures: &[Failure], window_ms: i64) -> u32 {
     let mut connections: HashMap<(Option<i64>, Option<i64>, usize), Connection> =
         HashMap::new();
-    let matching = failures.iter().enumerate().filter(|(_, failure)| {
-        failure.server_id == login.server_id
-            && failure.ip == login.ip
-            && (login.at - window_ms..=login.at).contains(&failure.at)
-    });
+    let matching = failures
+        .iter()
+        .enumerate()
+        .filter(|(_, failure)| (login.at - window_ms..=login.at).contains(&failure.at));
     for (index, failure) in matching {
         let alone = if failure.port.is_some() { 0 } else { index };
         connections
@@ -123,7 +138,8 @@ impl LoginRule {
             }),
             Self::AfterFailures { failures: least, within_secs } => {
                 let window_ms = i64::from(within_secs) * 1000;
-                let attempts = count_attempts(login, &history.failures, window_ms);
+                let attempts =
+                    count_attempts(login, history.failures_for(login), window_ms);
                 (attempts >= least).then(|| {
                     format!(
                         "{who} logged in from {ip} after {attempts} failed attempts in {}",
@@ -134,7 +150,7 @@ impl LoginRule {
         }
     }
 
-    pub fn find_hits(self, logins: &[Login], history: &History) -> Vec<LoginHit> {
+    fn find_hits(self, logins: &[Login], history: &History) -> Vec<LoginHit> {
         logins
             .iter()
             .filter_map(|login| {
@@ -149,7 +165,7 @@ impl LoginRule {
     }
 }
 
-pub async fn find_login_hits(
+pub(crate) async fn find_login_hits(
     analytics: &Analytics,
     rule: LoginRule,
     since: Since,
@@ -159,20 +175,21 @@ pub async fn find_login_hits(
         return Ok(Vec::new());
     };
 
-    let mut history = History::default();
-    match rule {
-        LoginRule::NewIp { .. } => {
-            history.first_logins = list_first_logins(analytics).await?;
-        }
+    let history = match rule {
+        LoginRule::NewIp { .. } => History {
+            first_logins: list_first_logins(analytics).await?,
+            ..History::default()
+        },
         LoginRule::AfterFailures { within_secs, .. } => {
             let ips: BTreeSet<String> =
                 logins.iter().map(|login| login.ip.clone()).collect();
             let from = first.at - i64::from(within_secs) * 1000;
-            history.failures =
-                list_failures(analytics, from, ips.into_iter().collect()).await?;
+            History::with_failures(
+                list_failures(analytics, from, ips.into_iter().collect()).await?,
+            )
         }
-        LoginRule::Root => {}
-    }
+        LoginRule::Root => History::default(),
+    };
 
     Ok(rule.find_hits(&logins, &history))
 }
@@ -277,7 +294,7 @@ mod tests {
         assert_eq!(count_attempts(&success, &failures, 600_000), 5);
 
         let rule = LoginRule::AfterFailures { failures: 5, within_secs: 600 };
-        let history = History { failures: failures.to_vec(), ..History::default() };
+        let history = History::with_failures(failures.to_vec());
         let hits = rule.find_hits(std::slice::from_ref(&success), &history);
         assert_eq!(
             hits[0].label,

@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
-use daroyan_protocol::log::ACCESS_SERVICE;
+use daroyan_protocol::log::{ACCESS_SERVICE, ACCESS_STREAM};
 use duckdb::types::Value as SqlValue;
-use duckdb::{Connection, OptionalExt, params, params_from_iter};
+use duckdb::{Connection, params, params_from_iter};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use utoipa::ToSchema;
@@ -12,12 +12,14 @@ use crate::analytics::log_lines::LogRow;
 use crate::analytics::log_parse::SSH_PROCESSES;
 use crate::error::Result;
 
-const JOURNAL: &str = "journal";
 const DAY_MS: i64 = 86_400_000;
-pub const LAST_SEEN: &str = "ssh.ip_last_seen";
+const LAST_SEEN: &str = "ssh.ip_last_seen";
+const UPSERT_CHUNK: usize = 500;
+
+type SourceKey = (String, String);
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Login {
+pub(crate) struct Login {
     pub server_id: String,
     pub at: i64,
     pub user: String,
@@ -27,7 +29,7 @@ pub struct Login {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Failure {
+pub(crate) struct Failure {
     pub server_id: String,
     pub at: i64,
     pub pid: Option<i64>,
@@ -37,7 +39,7 @@ pub struct Failure {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FailureKind {
+pub(crate) enum FailureKind {
     Attempt,
     Probe,
     Other,
@@ -54,7 +56,7 @@ impl From<Option<String>> for FailureKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Since {
+pub(crate) enum Since {
     Ingested(i64),
     Logged(i64),
 }
@@ -68,79 +70,138 @@ impl Since {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Seen {
+    first: i64,
+    last: i64,
+}
+
+impl Seen {
+    fn add(&mut self, at: i64) {
+        self.first = self.first.min(at);
+        self.last = self.last.max(at);
+    }
+}
+
 fn text<'a>(attributes: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     attributes.get(key).and_then(Value::as_str)
 }
 
-fn read_success(row: &LogRow) -> Option<Map<String, Value>> {
-    if row.service != ACCESS_SERVICE || row.stream != JOURNAL {
+fn read_success(row: &LogRow) -> Option<(String, Map<String, Value>)> {
+    if row.service != ACCESS_SERVICE || row.stream != ACCESS_STREAM {
         return None;
     }
-    let attributes: Map<String, Value> =
-        serde_json::from_str(row.attributes.as_deref()?).ok()?;
+    let raw = row.attributes.as_deref()?;
+    if !raw.contains("\"ssh_login\"") {
+        return None;
+    }
+
+    let attributes: Map<String, Value> = serde_json::from_str(raw).ok()?;
     let is_sshd = text(&attributes, "process.name")
         .is_some_and(|name| SSH_PROCESSES.contains(&name));
     let is_success = text(&attributes, "event.action") == Some("ssh_login")
         && text(&attributes, "event.outcome") == Some("success");
+    let ip = text(&attributes, "client.ip")?.to_string();
 
-    (is_sshd && is_success && text(&attributes, "client.ip").is_some())
-        .then_some(attributes)
+    (is_sshd && is_success).then_some((ip, attributes))
 }
 
 fn read_last_seen(
     conn: &Connection,
-    server_id: &str,
-    ip: &str,
-) -> duckdb::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT last_seen FROM access_sources WHERE server_id = ? AND ip = ?",
-        params![server_id, ip],
-        |row| row.get(0),
-    )
-    .optional()
+    keys: &BTreeSet<SourceKey>,
+) -> duckdb::Result<HashMap<SourceKey, i64>> {
+    let mut seen = HashMap::new();
+    for chunk in Vec::from_iter(keys).chunks(UPSERT_CHUNK) {
+        let marks = vec!["(?, ?)"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT server_id, ip, last_seen FROM access_sources \
+             JOIN (VALUES {marks}) AS wanted(server_id, ip) USING (server_id, ip)"
+        );
+        let values = chunk.iter().flat_map(|(server_id, ip)| [server_id, ip]);
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(values), |row| {
+            Ok(((row.get(0)?, row.get(1)?), row.get(2)?))
+        })?;
+        for row in rows {
+            let (key, last_seen) = row?;
+            seen.insert(key, last_seen);
+        }
+    }
+
+    Ok(seen)
+}
+
+fn upsert_sources(
+    conn: &Connection,
+    sources: &HashMap<SourceKey, Seen>,
+) -> duckdb::Result<()> {
+    let sources: Vec<_> = sources.iter().collect();
+    for chunk in sources.chunks(UPSERT_CHUNK) {
+        let marks = vec!["(?, ?, ?, ?)"; chunk.len()].join(", ");
+        let sql = format!(
+            "INSERT INTO access_sources VALUES {marks} \
+             ON CONFLICT (server_id, ip) DO UPDATE SET \
+             first_seen = least(access_sources.first_seen, excluded.first_seen), \
+             last_seen = greatest(access_sources.last_seen, excluded.last_seen)"
+        );
+        let values = chunk.iter().flat_map(|((server_id, ip), seen)| {
+            [
+                SqlValue::Text(server_id.clone()),
+                SqlValue::Text(ip.clone()),
+                SqlValue::BigInt(seen.first),
+                SqlValue::BigInt(seen.last),
+            ]
+        });
+        conn.execute(&sql, params_from_iter(values))?;
+    }
+
+    Ok(())
 }
 
 pub(crate) fn remember_logins(
     conn: &Connection,
     rows: &mut [LogRow],
 ) -> duckdb::Result<()> {
-    let mut logins: Vec<(usize, Map<String, Value>)> = rows
+    let mut logins: Vec<(usize, String, Map<String, Value>)> = rows
         .iter()
         .enumerate()
-        .filter_map(|(index, row)| Some((index, read_success(row)?)))
+        .filter_map(|(index, row)| {
+            let (ip, attributes) = read_success(row)?;
+            Some((index, ip, attributes))
+        })
         .collect();
     if logins.is_empty() {
         return Ok(());
     }
 
-    logins.sort_by_key(|(index, _)| rows[*index].at);
-    let mut seen: HashMap<(String, String), i64> = HashMap::new();
-    for (index, mut attributes) in logins {
-        let row = &mut rows[index];
-        let ip = text(&attributes, "client.ip").unwrap_or_default().to_string();
-        let user = text(&attributes, "user").unwrap_or_default().to_string();
-        let key = (row.server_id.clone(), ip);
-        let last_seen = match seen.get(&key) {
-            Some(at) => Some(*at),
-            None => read_last_seen(conn, &key.0, &key.1)?,
-        };
+    logins.sort_by_key(|(index, _, _)| rows[*index].at);
+    let keys: BTreeSet<SourceKey> = logins
+        .iter()
+        .map(|(index, ip, _)| (rows[*index].server_id.clone(), ip.clone()))
+        .collect();
+    let mut last_seen = read_last_seen(conn, &keys)?;
+    let mut sources: HashMap<SourceKey, Seen> = HashMap::new();
 
-        if let Some(last_seen) = last_seen {
-            attributes.insert(LAST_SEEN.into(), Value::from(last_seen));
+    for (index, ip, mut attributes) in logins {
+        let row = &mut rows[index];
+        let key = (row.server_id.clone(), ip);
+        if let Some(seen) = last_seen.get(&key) {
+            attributes.insert(LAST_SEEN.into(), Value::from(*seen));
             row.attributes = Some(Value::Object(attributes).to_string());
         }
-        conn.execute(
-            "INSERT INTO access_sources VALUES (?, ?, ?, ?, ?) \
-             ON CONFLICT (server_id, ip) DO UPDATE SET \
-             first_seen = least(access_sources.first_seen, excluded.first_seen), \
-             last_seen = greatest(access_sources.last_seen, excluded.last_seen), \
-             last_user = excluded.last_user",
-            params![key.0, key.1, row.at, row.at, user],
-        )?;
-        seen.insert(key, last_seen.unwrap_or(row.at).max(row.at));
+
+        let at = row.at;
+        last_seen
+            .entry(key.clone())
+            .and_modify(|seen| *seen = (*seen).max(at))
+            .or_insert(at);
+        sources
+            .entry(key)
+            .and_modify(|seen| seen.add(at))
+            .or_insert(Seen { first: at, last: at });
     }
 
-    Ok(())
+    upsert_sources(conn, &sources)
 }
 
 fn access_filter(action: &str, outcome: &str) -> (String, Vec<SqlValue>) {
@@ -151,7 +212,7 @@ fn access_filter(action: &str, outcome: &str) -> (String, Vec<SqlValue>) {
          AND json_extract_string(attributes, '$.\"event.action\"') = ? \
          AND json_extract_string(attributes, '$.\"event.outcome\"') = ?"
     );
-    let values = [ACCESS_SERVICE, JOURNAL]
+    let values = [ACCESS_SERVICE, ACCESS_STREAM]
         .into_iter()
         .chain(SSH_PROCESSES)
         .chain([action, outcome])
@@ -161,7 +222,10 @@ fn access_filter(action: &str, outcome: &str) -> (String, Vec<SqlValue>) {
     (sql, values)
 }
 
-pub async fn list_logins(analytics: &Analytics, since: Since) -> Result<Vec<Login>> {
+pub(crate) async fn list_logins(
+    analytics: &Analytics,
+    since: Since,
+) -> Result<Vec<Login>> {
     analytics
         .read(move |conn| {
             let (column, at) = since.column();
@@ -169,12 +233,11 @@ pub async fn list_logins(analytics: &Analytics, since: Since) -> Result<Vec<Logi
             let sql = format!(
                 "SELECT server_id, logged_at, \
                  coalesce(json_extract_string(attributes, '$.\"user\"'), ''), \
-                 json_extract_string(attributes, '$.\"client.ip\"'), \
+                 client_ip, \
                  json_extract_string(attributes, '$.\"ssh.method\"'), \
                  TRY_CAST(json_extract_string(attributes, '$.\"{LAST_SEEN}\"') AS BIGINT) \
                  FROM log_lines WHERE {column} >= ? AND {filter} \
-                 AND json_extract_string(attributes, '$.\"client.ip\"') IS NOT NULL \
-                 ORDER BY logged_at"
+                 AND client_ip IS NOT NULL ORDER BY logged_at"
             );
             values.insert(0, SqlValue::BigInt(at));
 
@@ -195,7 +258,7 @@ pub async fn list_logins(analytics: &Analytics, since: Since) -> Result<Vec<Logi
         .await
 }
 
-pub async fn list_failures(
+pub(crate) async fn list_failures(
     analytics: &Analytics,
     since: i64,
     ips: Vec<String>,
@@ -211,11 +274,11 @@ pub async fn list_failures(
             let sql = format!(
                 "SELECT server_id, logged_at, \
                  TRY_CAST(json_extract_string(attributes, '$.\"process.pid\"') AS BIGINT), \
-                 json_extract_string(attributes, '$.\"client.ip\"'), \
+                 client_ip, \
                  TRY_CAST(json_extract_string(attributes, '$.\"client.port\"') AS BIGINT), \
                  json_extract_string(attributes, '$.\"ssh.method\"') \
                  FROM log_lines WHERE logged_at >= ? AND {filter} \
-                 AND json_extract_string(attributes, '$.\"client.ip\"') IN ({marks})"
+                 AND client_ip IN ({marks})"
             );
             values.insert(0, SqlValue::BigInt(since));
             values.extend(ips.into_iter().map(SqlValue::Text));
@@ -237,7 +300,9 @@ pub async fn list_failures(
         .await
 }
 
-pub async fn list_first_logins(analytics: &Analytics) -> Result<HashMap<String, i64>> {
+pub(crate) async fn list_first_logins(
+    analytics: &Analytics,
+) -> Result<HashMap<String, i64>> {
     analytics
         .read(|conn| {
             conn.prepare(
@@ -282,17 +347,14 @@ pub async fn read_access(
             let field = |key: &str| format!("json_extract_string(attributes, '$.\"{key}\"')");
             let action = field("event.action");
             let outcome = field("event.outcome");
-            let base = format!(
-                "FROM log_lines WHERE server_id = ? AND service = ? AND stream = ? \
-                 AND {action} IS NOT NULL"
-            );
+            let base = "FROM log_lines WHERE server_id = ? AND service = ? AND stream = ?";
             let sql = format!(
-                "SELECT logged_at, {action}, coalesce({outcome}, 'success'), {}, {}, {}, {}, \
+                "SELECT logged_at, {action}, coalesce({outcome}, 'success'), {}, client_ip, {}, {}, \
                  coalesce({}, {}, {}), {}, {}, coalesce({}, {}), TRY_CAST({} AS BIGINT) \
-                 {base} AND NOT ({action} = 'ssh_login' AND {outcome} = 'failure') \
-                 ORDER BY logged_at DESC LIMIT ?",
+                 FROM (SELECT logged_at, client_ip, attributes {base} AND {action} IS NOT NULL \
+                 AND NOT ({action} = 'ssh_login' AND {outcome} = 'failure') \
+                 ORDER BY logged_at DESC LIMIT ?) ORDER BY logged_at DESC",
                 field("user"),
-                field("client.ip"),
                 field("ssh.method"),
                 field("ssh.key.fingerprint"),
                 field("sudo.target_user"),
@@ -307,7 +369,7 @@ pub async fn read_access(
             let events = conn
                 .prepare(&sql)?
                 .query_map(
-                    params![server_id, ACCESS_SERVICE, JOURNAL, limit],
+                    params![server_id, ACCESS_SERVICE, ACCESS_STREAM, limit],
                     |row| {
                         Ok(AccessEvent {
                             at: row.get(0)?,
@@ -327,17 +389,25 @@ pub async fn read_access(
                 )?
                 .collect::<duckdb::Result<Vec<_>>>()?;
 
-            let failed_logins: u64 = conn.query_row(
+            let failed_logins: i64 = conn.query_row(
                 &format!(
-                    "SELECT count(*) {base} AND {action} = 'ssh_login' \
-                     AND {outcome} = 'failure' AND {method} NOT IN ('none') AND logged_at >= ?",
-                    method = field("ssh.method")
+                    "SELECT CAST(coalesce(sum(CASE WHEN attempts > 0 THEN attempts \
+                     ELSE least(others, 1) END), 0) AS BIGINT) FROM ( \
+                     SELECT count(*) FILTER (WHERE method <> 'none') AS attempts, \
+                     count(*) FILTER (WHERE method IS NULL) AS others FROM ( \
+                     SELECT rowid, client_ip, {method} AS method, {pid} AS pid, {port} AS port \
+                     {base} AND logged_at >= ? AND {action} = 'ssh_login' \
+                     AND {outcome} = 'failure') \
+                     GROUP BY pid, client_ip, port, CASE WHEN port IS NULL THEN rowid END)",
+                    method = field("ssh.method"),
+                    pid = field("process.pid"),
+                    port = field("client.port"),
                 ),
-                params![server_id, ACCESS_SERVICE, JOURNAL, now - DAY_MS],
+                params![server_id, ACCESS_SERVICE, ACCESS_STREAM, now - DAY_MS],
                 |row| row.get(0),
             )?;
 
-            Ok(AccessView { events, failed_logins })
+            Ok(AccessView { events, failed_logins: u64::try_from(failed_logins).unwrap_or_default() })
         })
         .await
 }
@@ -354,14 +424,15 @@ mod tests {
     use crate::analytics::Analytics;
     use crate::analytics::archive::create_log_tables;
 
-    fn batch(lines: &[(u64, &str, &str, &str)]) -> LogBatch {
+    fn batch(lines: &[(u64, &str, bool, &str)]) -> LogBatch {
         let lines = lines
             .iter()
-            .map(|(at, service, stream, message)| {
+            .map(|(at, service, access, message)| {
                 serde_json::from_value(json!({
                     "at": at,
                     "service": service,
-                    "stream": stream,
+                    "stream": "journal",
+                    "access": access,
                     "severity": 9,
                     "message": message,
                     "format": "system",
@@ -402,17 +473,17 @@ mod tests {
         analytics.buffer_logs(
             "srv_1",
             batch(&[
-                (1_000, "access", "journal", accepted),
-                (2_000, "access", "journal", accepted),
-                (2_500, "access", "journal", "sshd[9]: Failed password for root from 45.155.205.233 port 7 ssh2"),
-                (2_600, "access", "journal", "sshd[9]: Connection closed by authenticating user root 45.155.205.233 port 7 [preauth]"),
-                (3_000, "app", "journal", "sshd[9]: Accepted password for root from 6.6.6.6 port 1 ssh2"),
-                (3_000, "access", "stdout", "sshd[9]: Accepted password for root from 6.6.6.7 port 1 ssh2"),
+                (1_000, "access", true, accepted),
+                (2_000, "access", true, accepted),
+                (2_500, "access", true, "sshd[9]: Failed password for root from 45.155.205.233 port 7 ssh2"),
+                (2_600, "access", true, "sshd[9]: Connection closed by authenticating user root 45.155.205.233 port 7 [preauth]"),
+                (3_000, "app", false, "sshd[9]: Accepted password for root from 6.6.6.6 port 1 ssh2"),
+                (3_000, "access", false, "sshd[9]: Accepted password for root from 6.6.6.7 port 1 ssh2"),
             ]),
         );
         analytics.flush().await.unwrap();
-        analytics.buffer_logs("srv_1", batch(&[(9_000, "access", "journal", accepted)]));
-        analytics.buffer_logs("srv_2", batch(&[(9_500, "access", "journal", accepted)]));
+        analytics.buffer_logs("srv_1", batch(&[(9_000, "access", true, accepted)]));
+        analytics.buffer_logs("srv_2", batch(&[(9_500, "access", true, accepted)]));
         analytics.flush().await.unwrap();
 
         let logins = list_logins(&analytics, Since::Logged(0)).await.unwrap();
