@@ -589,7 +589,7 @@ export function describeResolve(condition?: Schemas['Condition']) {
     case 'login_new_ip':
     case 'login_root':
     case 'login_after_failures':
-      return 'Ends when no matching login is seen for 15 minutes';
+      return 'Ends 15 minutes after the last matching login from the address';
     default: {
       const names: Partial<Record<ConditionKind, string>> = {
         cpu: 'CPU',
@@ -650,7 +650,7 @@ export function describeAlertNow(alert: Schemas['Alert'], rule?: Schemas['AlertR
   if (rest) {
     return `${alert.subject} is at ${alert.value},${rest}.`;
   }
-  if (rule && isLoginKind(rule.condition.kind)) {
+  if (alert.value.includes(alert.subject) || (rule && isLoginKind(rule.condition.kind))) {
     return `${alert.value}.`;
   }
   return `${alert.subject}: ${alert.value}.`;
