@@ -586,6 +586,10 @@ export function describeResolve(condition?: Schemas['Condition']) {
       return `Ends when there are fewer than ${limit} matching lines`;
     case 'metric':
       return `Ends when ${condition.name} is back ${condition.below ? 'above' : 'below'} ${limit}`;
+    case 'login_new_ip':
+    case 'login_root':
+    case 'login_after_failures':
+      return 'Ends when no matching login is seen for 15 minutes';
     default: {
       const names: Partial<Record<ConditionKind, string>> = {
         cpu: 'CPU',
@@ -641,12 +645,15 @@ export function getValueHint(condition?: Schemas['Condition']) {
   }
 }
 
-export function describeAlertNow(alert: Schemas['Alert'], summary?: string) {
-  const rest = summary?.match(/ (above|below|over) .*/)?.[0];
+export function describeAlertNow(alert: Schemas['Alert'], rule?: Schemas['AlertRule']) {
+  const rest = rule?.summary.match(/ (above|below|over) .*/)?.[0];
   if (rest) {
     return `${alert.subject} is at ${alert.value},${rest}.`;
   }
-  return alert.value.includes(alert.subject) ? `${alert.value}.` : `${alert.subject}: ${alert.value}.`;
+  if (rule && isLoginKind(rule.condition.kind)) {
+    return `${alert.value}.`;
+  }
+  return `${alert.subject}: ${alert.value}.`;
 }
 
 export function formatMinutesLong(from: string | number, to: string | number = Date.now()) {

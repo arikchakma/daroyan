@@ -1,10 +1,12 @@
 import type { Schemas } from '@daroyan/client';
 
+import type { BadgeProps } from '~/components/ui/badge';
+
 import { pluralize } from '~/utils/format';
 
 export type AccessEvent = Schemas['AccessEvent'];
 
-export type AccessTone = 'neutral' | 'critical' | 'attention';
+export type AccessTone = NonNullable<BadgeProps['tone']>;
 
 export function getAccessLabel(event: AccessEvent) {
   const isFailure = event.outcome === 'failure';

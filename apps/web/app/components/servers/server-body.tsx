@@ -82,7 +82,7 @@ export function ServerBody(props: ServerBodyProps) {
         {report && <ProcessesSection serverId={server.id} processes={report.processes} />}
         {report && <FilesystemsSection disks={report.state.disks} />}
         {report && <PortsSection ports={report.ports} />}
-        <AccessSection serverId={server.id} />
+        {report && <AccessSection serverId={server.id} />}
       </div>
     </div>
   );

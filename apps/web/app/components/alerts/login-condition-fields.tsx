@@ -2,6 +2,7 @@ import { FieldGrid } from '~/components/alerts/field-grid';
 import { SelectField } from '~/components/alerts/select-field';
 import { UnitField } from '~/components/alerts/unit-field';
 import { getUnit, LOG_WINDOW_OPTIONS } from '~/utils/alerts';
+import { pluralize } from '~/utils/format';
 import { formatSpan, isLimitValid } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState } from '~/utils/rule-form';
 
@@ -9,7 +10,7 @@ const ROOT_HINT = 'Fires when someone logs in over SSH as root, with one alert p
 
 function getLimitHint(form: RuleFormState) {
   if (form.kind === 'login_new_ip') {
-    return `Fires when someone logs in over SSH from an address that did not log in to the server in the last ${form.critical} days, with one alert per address. It learns for 24 hours after the first login on a server.`;
+    return `Fires when someone logs in over SSH from an address that did not log in to the server in the last ${pluralize(Number(form.critical), 'day')}, with one alert per address. It learns for 24 hours after the first login on a server.`;
   }
 
   return `Fires when someone logs in over SSH after ${form.critical} or more failed attempts from the same address within ${formatSpan(form.loginWithin)}.`;

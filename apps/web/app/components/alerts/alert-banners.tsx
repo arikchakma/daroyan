@@ -100,7 +100,7 @@ export function AlertBanners(props: AlertBannersProps) {
     <>
       {alerts.map((alert) => {
         const mute = getMute(alert);
-        const detail = describeAlertNow(alert, getRule(alert)?.summary);
+        const detail = describeAlertNow(alert, getRule(alert));
         if (mute) {
           const resume = mute.ends_at
             ? ` If it is still firing at ${formatClock(new Date(mute.ends_at).getTime())}, the team gets a message.`

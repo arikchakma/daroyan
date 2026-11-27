@@ -503,5 +503,8 @@ function describeLimit(condition: Schemas['Condition']) {
   if (condition.kind === 'uptime_down') {
     return 'Check down';
   }
+  if (condition.kind === 'login_root') {
+    return 'Any root login';
+  }
   return readSubjectName(condition) ?? `Any ${isProcessKind(condition.kind) ? 'process' : 'port'}`;
 }
