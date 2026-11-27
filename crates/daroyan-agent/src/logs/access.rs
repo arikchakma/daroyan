@@ -45,6 +45,9 @@ const SYSTEM_DIRS: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 const UNNAMED_CLOSES: [&str; 2] = ["Connection closed by ", "Disconnected from "];
 const NAMED_CLOSES: [&str; 2] = ["authenticating user ", "invalid user "];
 const SSH_COMMANDS: [&str; 3] = ["sshd", "sshd-session", "sshd-auth"];
+const ACCOUNT_COMMANDS: [&str; 7] =
+    ["useradd", "userdel", "usermod", "groupadd", "groupdel", "groupmod", "chpasswd"];
+const CONSOLE_LOGIN: &str = "pam_unix(login:session): session opened";
 
 pub fn has_journal() -> bool {
     Path::new(JOURNAL_SOCKET).exists()
@@ -108,7 +111,11 @@ pub fn is_vital(text: &str) -> bool {
     };
     let command = tag.split_once('[').map_or(tag, |(command, _)| command);
 
-    !SSH_COMMANDS.contains(&command) || message.starts_with("Accepted ")
+    match command {
+        "login" => message.starts_with(CONSOLE_LOGIN),
+        command if SSH_COMMANDS.contains(&command) => message.starts_with("Accepted "),
+        command => ACCOUNT_COMMANDS.contains(&command),
+    }
 }
 
 #[cfg(test)]
@@ -122,8 +129,17 @@ mod tests {
         assert!(is_vital(
             "sshd-session[812]: Accepted publickey for arik from 203.0.113.7 port 52144 ssh2"
         ));
-        assert!(is_vital("sudo[512712]:   tester : USER=root ; COMMAND=/usr/bin/true"));
         assert!(is_vital("useradd[7]: new user: name=deploy, UID=1001"));
+        assert!(is_vital(
+            "login[9]: pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)"
+        ));
+        assert!(!is_vital("login[9]: FAILED LOGIN (1) on '/dev/tty1' FOR 'root'"));
+        assert!(!is_vital(
+            "sudo[512712]:   tester : a password is required ; TTY=pts/0 ; USER=root ; COMMAND=/usr/bin/true"
+        ));
+        assert!(!is_vital(
+            "passwd[4]: pam_unix(passwd:chauthtok): password changed for tester"
+        ));
         assert!(!is_vital("sshd[812]: Invalid user Accepted from 45.155.205.233 port 7"));
         assert!(!is_vital(
             "sshd[812]: Failed password for root from 45.155.205.233 port 7 ssh2"

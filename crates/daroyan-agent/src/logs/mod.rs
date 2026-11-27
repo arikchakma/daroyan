@@ -87,6 +87,7 @@ impl Positions {
 
 struct Budget {
     limit: u64,
+    vital_used: u64,
     used: Vec<u64>,
     dropped: Vec<u64>,
     window_start: Instant,
@@ -96,6 +97,7 @@ impl Budget {
     fn new(limit: u64, sources: usize) -> Self {
         Self {
             limit,
+            vital_used: 0,
             used: vec![0; sources.max(1)],
             dropped: vec![0; sources.max(1)],
             window_start: Instant::now(),
@@ -123,10 +125,33 @@ impl Budget {
         true
     }
 
-    fn admit(&mut self, lines: Vec<(usize, RawLine)>) -> Vec<(usize, RawLine)> {
+    fn allow_vital(&mut self, source: usize, line: &RawLine) -> bool {
+        let size = line.text.len() as u64 + LINE_OVERHEAD;
+        if self.vital_used + size > self.limit {
+            if let Some(dropped) = self.dropped.get_mut(source) {
+                *dropped += 1;
+            }
+            return false;
+        }
+
+        self.vital_used += size;
+        true
+    }
+
+    fn admit(
+        &mut self,
+        lines: Vec<(usize, RawLine)>,
+        is_vital: impl Fn(usize, &RawLine) -> bool,
+    ) -> Vec<(usize, RawLine)> {
         lines
             .into_iter()
-            .filter(|(source, line)| self.allow(*source, line))
+            .filter(|(source, line)| {
+                if is_vital(*source, line) {
+                    self.allow_vital(*source, line)
+                } else {
+                    self.allow(*source, line)
+                }
+            })
             .collect()
     }
 
@@ -136,6 +161,7 @@ impl Budget {
         }
 
         self.window_start = now;
+        self.vital_used = 0;
         self.used.fill(0);
         self.take_dropped()
     }
@@ -480,11 +506,7 @@ pub fn collect_logs(
         }
 
         let mut over = budget.roll(now);
-        let (vital, ready): (Vec<_>, Vec<_>) = ready
-            .into_iter()
-            .partition(|(index, line)| sources[*index].is_vital(line));
-        let mut ready = budget.admit(ready);
-        ready.extend(vital);
+        let ready = budget.admit(ready, |index, line| sources[index].is_vital(line));
         if is_stopping {
             over.extend(budget.take_dropped());
         }
@@ -896,9 +918,20 @@ mod tests {
             })
             .collect();
 
-        let kept = budget.admit(lines);
+        let kept = budget.admit(lines, |_, _| false);
         assert_eq!(kept.len(), 2);
         assert_eq!(budget.take_dropped(), [(0, 3)]);
+    }
+
+    #[test]
+    fn keeps_vital_lines_past_the_share_up_to_the_whole_budget() {
+        let mut budget = Budget::new(400, 2);
+        let line = || raw(LogStream::Stdout, &"x".repeat(36));
+        let lines = (0..6).map(|_| (0, line())).collect();
+
+        assert_eq!(budget.admit(lines, |_, _| true).len(), 4);
+        assert_eq!(budget.take_dropped(), [(0, 2)]);
+        assert!(budget.allow(0, &line()));
     }
 
     #[test]
@@ -908,7 +941,7 @@ mod tests {
         let flood = (0..5).map(|_| (1, line())).collect();
         let started = budget.window_start;
 
-        assert_eq!(budget.admit(flood).len(), 2);
+        assert_eq!(budget.admit(flood, |_, _| false).len(), 2);
         assert!(budget.roll(started + Duration::from_secs(30)).is_empty());
         assert_eq!(budget.roll(started + BUDGET_WINDOW), [(1, 3)]);
         assert!(budget.allow(1, &line()));
@@ -921,11 +954,11 @@ mod tests {
         let line = |text: &str| raw(LogStream::Stdout, &text.repeat(36));
 
         let flood = (0..20).map(|_| (0, line("x"))).collect();
-        assert_eq!(budget.admit(flood).len(), 5);
+        assert_eq!(budget.admit(flood, |_, _| false).len(), 5);
         assert_eq!(budget.take_dropped(), [(0, 15)]);
 
         let quiet = (0..5).map(|_| (1, line("y"))).collect();
-        assert_eq!(budget.admit(quiet).len(), 5);
+        assert_eq!(budget.admit(quiet, |_, _| false).len(), 5);
         assert!(budget.take_dropped().is_empty());
         assert!(!budget.allow(1, &line("y")));
     }

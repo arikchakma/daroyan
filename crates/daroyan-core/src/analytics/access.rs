@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use daroyan_protocol::log::{ACCESS_SERVICE, ACCESS_STREAM};
 use duckdb::types::Value as SqlValue;
@@ -14,7 +14,7 @@ use crate::error::Result;
 
 const DAY_MS: i64 = 86_400_000;
 const LAST_SEEN: &str = "ssh.ip_last_seen";
-const UPSERT_CHUNK: usize = 500;
+const SOURCE_CHUNK: usize = 500;
 
 type SourceKey = (String, String);
 
@@ -106,12 +106,13 @@ fn read_success(row: &LogRow) -> Option<(String, Map<String, Value>)> {
     (is_sshd && is_success).then_some((ip, attributes))
 }
 
-fn read_last_seen(
+fn read_last_seen<'a>(
     conn: &Connection,
-    keys: &BTreeSet<SourceKey>,
+    keys: impl Iterator<Item = &'a SourceKey>,
 ) -> duckdb::Result<HashMap<SourceKey, i64>> {
+    let keys: Vec<&SourceKey> = keys.collect();
     let mut seen = HashMap::new();
-    for chunk in Vec::from_iter(keys).chunks(UPSERT_CHUNK) {
+    for chunk in keys.chunks(SOURCE_CHUNK) {
         let marks = vec!["(?, ?)"; chunk.len()].join(", ");
         let sql = format!(
             "SELECT server_id, ip, last_seen FROM access_sources \
@@ -136,10 +137,10 @@ fn upsert_sources(
     sources: &HashMap<SourceKey, Seen>,
 ) -> duckdb::Result<()> {
     let sources: Vec<_> = sources.iter().collect();
-    for chunk in sources.chunks(UPSERT_CHUNK) {
+    for chunk in sources.chunks(SOURCE_CHUNK) {
         let marks = vec!["(?, ?, ?, ?)"; chunk.len()].join(", ");
         let sql = format!(
-            "INSERT INTO access_sources VALUES {marks} \
+            "INSERT INTO access_sources (server_id, ip, first_seen, last_seen) VALUES {marks} \
              ON CONFLICT (server_id, ip) DO UPDATE SET \
              first_seen = least(access_sources.first_seen, excluded.first_seen), \
              last_seen = greatest(access_sources.last_seen, excluded.last_seen)"
@@ -162,12 +163,12 @@ pub(crate) fn remember_logins(
     conn: &Connection,
     rows: &mut [LogRow],
 ) -> duckdb::Result<()> {
-    let mut logins: Vec<(usize, String, Map<String, Value>)> = rows
+    let mut logins: Vec<(usize, SourceKey, Map<String, Value>)> = rows
         .iter()
         .enumerate()
         .filter_map(|(index, row)| {
             let (ip, attributes) = read_success(row)?;
-            Some((index, ip, attributes))
+            Some((index, (row.server_id.clone(), ip), attributes))
         })
         .collect();
     if logins.is_empty() {
@@ -175,26 +176,23 @@ pub(crate) fn remember_logins(
     }
 
     logins.sort_by_key(|(index, _, _)| rows[*index].at);
-    let keys: BTreeSet<SourceKey> = logins
-        .iter()
-        .map(|(index, ip, _)| (rows[*index].server_id.clone(), ip.clone()))
-        .collect();
-    let mut last_seen = read_last_seen(conn, &keys)?;
+    let stored = read_last_seen(conn, logins.iter().map(|(_, key, _)| key))?;
     let mut sources: HashMap<SourceKey, Seen> = HashMap::new();
 
-    for (index, ip, mut attributes) in logins {
+    for (index, key, mut attributes) in logins {
         let row = &mut rows[index];
-        let key = (row.server_id.clone(), ip);
-        if let Some(seen) = last_seen.get(&key) {
-            attributes.insert(LAST_SEEN.into(), Value::from(*seen));
+        let previous = stored
+            .get(&key)
+            .copied()
+            .into_iter()
+            .chain(sources.get(&key).map(|seen| seen.last))
+            .max();
+        if let Some(previous) = previous {
+            attributes.insert(LAST_SEEN.into(), Value::from(previous));
             row.attributes = Some(Value::Object(attributes).to_string());
         }
 
         let at = row.at;
-        last_seen
-            .entry(key.clone())
-            .and_modify(|seen| *seen = (*seen).max(at))
-            .or_insert(at);
         sources
             .entry(key)
             .and_modify(|seen| seen.add(at))
@@ -407,7 +405,8 @@ pub async fn read_access(
                 |row| row.get(0),
             )?;
 
-            Ok(AccessView { events, failed_logins: u64::try_from(failed_logins).unwrap_or_default() })
+let failed_logins = u64::try_from(failed_logins).unwrap_or_default();
+            Ok(AccessView { events, failed_logins })
         })
         .await
 }

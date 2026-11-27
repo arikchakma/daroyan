@@ -346,24 +346,30 @@ pub(super) fn read_sudo(text: &str, parsed: &mut ParsedLine) {
         return;
     };
 
-    let (head, command) = match fields.split_once(" ; COMMAND=") {
-        Some((head, command)) => (head, Some(command)),
-        None => (fields, None),
-    };
+    let reason = fields.split(" ; ").next().filter(|first| !first.contains('='));
+    let is_ambiguous = fields.matches(" ; USER=").count() > 1
+        || fields.matches(" ; COMMAND=").count() > 1;
 
     parsed.insert("user", user.trim());
-    for field in head.split(" ; ") {
-        match field.trim().split_once('=') {
-            Some(("USER", target)) => parsed.insert("sudo.target_user", target),
-            Some(("TTY", tty)) => parsed.insert("sudo.tty", tty),
-            _ => {}
+    if is_ambiguous {
+        parsed.insert("sudo.ambiguous", true);
+        parsed.insert("process.command_line", fields);
+    } else {
+        for field in fields.split(" ; ") {
+            match field.trim().split_once('=') {
+                Some(("USER", target)) => parsed.insert("sudo.target_user", target),
+                Some(("TTY", tty)) => parsed.insert("sudo.tty", tty),
+                _ => {}
+            }
+        }
+        if let Some((_, command)) = fields.split_once(" ; COMMAND=") {
+            parsed.insert("process.command_line", command);
         }
     }
-    if let Some(command) = command {
-        parsed.insert("process.command_line", command);
-    }
 
-    let outcome = if SUDO_FAILURES.iter().any(|failure| head.contains(failure)) {
+    let outcome = if reason.is_some_and(|reason| {
+        SUDO_FAILURES.iter().any(|failure| reason.contains(failure))
+    }) {
         Outcome::Failure
     } else {
         Outcome::Success
@@ -756,14 +762,23 @@ mod tests {
         assert_eq!(event(&denied), ("sudo", "failure"));
         assert_eq!(denied.severity, Some(13));
 
-        let disguised = parse(
+        let in_arguments = parse(
             "sudo[5]:   tester : PWD=/home/tester ; USER=root ; COMMAND=/bin/bash -c id x ; USER=nobody ; COMMAND=/bin/true ; command not allowed",
         );
-        assert_eq!(event(&disguised), ("sudo", "success"));
-        assert_eq!(disguised.attributes["sudo.target_user"], "root");
-        assert_eq!(
-            disguised.attributes["process.command_line"],
-            "/bin/bash -c id x ; USER=nobody ; COMMAND=/bin/true ; command not allowed"
+        assert_eq!(event(&in_arguments), ("sudo", "success"));
+        assert_eq!(in_arguments.attributes["sudo.ambiguous"], true);
+        assert!(!in_arguments.attributes.contains_key("sudo.target_user"));
+
+        let in_directory = parse(
+            "sudo[6]:   tester : TTY=pts/0 ; PWD=/tmp/x ; command not allowed ; USER=nobody ; COMMAND=true ; USER=root ; COMMAND=/bin/bash",
+        );
+        assert_eq!(event(&in_directory), ("sudo", "success"));
+        assert_eq!(in_directory.attributes["sudo.ambiguous"], true);
+        assert!(
+            in_directory.attributes["process.command_line"]
+                .as_str()
+                .unwrap()
+                .ends_with("COMMAND=/bin/bash")
         );
     }
 

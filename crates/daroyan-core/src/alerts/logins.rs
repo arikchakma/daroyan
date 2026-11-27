@@ -50,16 +50,20 @@ impl Login {
 
 #[derive(Debug, Default)]
 struct History {
-    failures: HashMap<(String, String), Vec<Failure>>,
+    failures: HashMap<String, HashMap<String, Vec<Failure>>>,
     first_logins: HashMap<String, i64>,
 }
 
 impl History {
     fn with_failures(failures: Vec<Failure>) -> Self {
-        let mut grouped: HashMap<(String, String), Vec<Failure>> = HashMap::new();
+        let mut grouped: HashMap<String, HashMap<String, Vec<Failure>>> = HashMap::new();
         for failure in failures {
-            let key = (failure.server_id.clone(), failure.ip.clone());
-            grouped.entry(key).or_default().push(failure);
+            grouped
+                .entry(failure.server_id.clone())
+                .or_default()
+                .entry(failure.ip.clone())
+                .or_default()
+                .push(failure);
         }
 
         Self { failures: grouped, ..Self::default() }
@@ -67,7 +71,8 @@ impl History {
 
     fn failures_for(&self, login: &Login) -> &[Failure] {
         self.failures
-            .get(&(login.server_id.clone(), login.ip.clone()))
+            .get(&login.server_id)
+            .and_then(|by_ip| by_ip.get(&login.ip))
             .map_or(&[], Vec::as_slice)
     }
 

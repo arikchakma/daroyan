@@ -167,12 +167,18 @@ pub async fn backtest_rule(
 }
 
 fn keep_opening_hits(hits: Vec<LoginHit>) -> Vec<LoginHit> {
-    let mut latest: HashMap<(String, String), i64> = HashMap::new();
-    hits.into_iter()
-        .filter(|hit| {
-            let previous = latest.insert((hit.server_id.clone(), hit.ip.clone()), hit.at);
+    let mut latest: HashMap<(&str, &str), i64> = HashMap::new();
+    let opens: Vec<bool> = hits
+        .iter()
+        .map(|hit| {
+            let previous = latest.insert((&hit.server_id, &hit.ip), hit.at);
             previous.is_none_or(|at| hit.at - at >= LOGIN_WINDOW_MS)
         })
+        .collect();
+
+    hits.into_iter()
+        .zip(opens)
+        .filter_map(|(hit, opens)| opens.then_some(hit))
         .collect()
 }
 
@@ -191,7 +197,11 @@ fn to_login_hits(
         .map(|server| (server.id.as_str(), server.name.as_str()))
         .collect();
 
-    let mut found: Vec<BacktestHit> = keep_opening_hits(hits)
+    let in_scope = hits
+        .into_iter()
+        .filter(|hit| names.contains_key(hit.server_id.as_str()))
+        .collect();
+    let mut found: Vec<BacktestHit> = keep_opening_hits(in_scope)
         .into_iter()
         .filter_map(|hit| {
             let name = names.get(hit.server_id.as_str())?;
