@@ -11,8 +11,8 @@ type MonitorPickerProps = {
   label: string;
   monitors: Monitor[];
   selected: string[];
-  describeCount: (count: number) => string;
-  describeMonitor?: (key: string) => string | undefined;
+  getCountText: (count: number) => string;
+  getMonitorCaption?: (key: string) => string | undefined;
   groups?: { kind: string; label: string }[];
   searchLabel?: string;
   onApply: (keys: string[]) => void;
@@ -23,8 +23,8 @@ export function MonitorPicker(props: MonitorPickerProps) {
     label,
     monitors,
     selected,
-    describeCount,
-    describeMonitor,
+    getCountText,
+    getMonitorCaption,
     groups = MONITOR_GROUPS,
     searchLabel = 'Search checks and crons',
     onApply,
@@ -98,7 +98,7 @@ export function MonitorPicker(props: MonitorPickerProps) {
                             {monitor.name}
                           </span>
                           <span className="shrink-0 text-small text-text-secondary">
-                            {describeMonitor?.(key) ?? monitor.caption}
+                            {getMonitorCaption?.(key) ?? monitor.caption}
                           </span>
                         </label>
                       );
@@ -114,7 +114,7 @@ export function MonitorPicker(props: MonitorPickerProps) {
             </div>
             <div className="flex items-center gap-2 border-t border-border-ring py-2 pr-2 pl-3.5">
               <p className="min-w-0 flex-1 truncate text-small text-text-secondary">
-                {describeCount(picked.length)}
+                {getCountText(picked.length)}
               </p>
               <Popover.Close render={<Button className="w-fit" />}>Done</Popover.Close>
             </div>

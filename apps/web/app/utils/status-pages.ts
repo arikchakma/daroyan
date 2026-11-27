@@ -89,7 +89,7 @@ export function getDayClassName(day: PublicDay) {
   return 'bg-tone-success-solid';
 }
 
-export function describeDayIssues(day: PublicDay, kind: string) {
+export function getDayIssues(day: PublicDay, kind: string) {
   if (day.total === 0 || (day.down === 0 && day.slow === 0)) {
     return null;
   }

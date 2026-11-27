@@ -14,7 +14,7 @@ import { useSortParams } from '~/hooks/use-sort-params';
 import { useIsAdmin } from '~/hooks/use-is-admin';
 import { useViewParams } from '~/hooks/use-list-params';
 import { cronQueries } from '~/queries/crons';
-import { describeMuteEnd, getAlertsForTarget, getSharedMute } from '~/utils/alerts';
+import { getAlertsForTarget, getMuteEndText, getSharedMute } from '~/utils/alerts';
 
 type StatusView = 'all' | 'ok' | 'late' | 'failed' | 'paused';
 
@@ -46,7 +46,7 @@ export default function CronsPage() {
   const term = search.trim().toLowerCase();
   const rows: CronRow[] = (crons ?? []).map((cron) => {
     const mute = getSharedMute(getAlertsForTarget(firing, { cronId: cron.id }), mutes);
-    return mute ? { ...cron, mutedUntil: describeMuteEnd(mute) } : cron;
+    return mute ? { ...cron, mutedUntil: getMuteEndText(mute) } : cron;
   });
   const visible = rows.filter(
     (cron) =>

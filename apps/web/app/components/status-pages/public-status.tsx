@@ -13,9 +13,9 @@ import { DAY_MS, formatClock, formatDate, formatRelative } from '~/utils/format'
 import { formatIncidentDuration, formatWindow, getStatusMeta } from '~/utils/incidents';
 import { toDocument } from '~/utils/rich-text';
 import {
-  describeDayIssues,
   getComponentStatus,
   getDayClassName,
+  getDayIssues,
   summarizeComponents,
 } from '~/utils/status-pages';
 import { formatUptime } from '~/utils/uptime';
@@ -178,7 +178,7 @@ function ComponentRow(props: ComponentRowProps) {
       <Tooltip.Provider delay={0} closeDelay={0}>
         <div className="flex h-7 items-stretch gap-0.5">
           {component.days.map((day, index) => {
-            const issues = describeDayIssues(day, component.kind);
+            const issues = getDayIssues(day, component.kind);
             const label = day.day === today ? 'Today' : formatDate(day.day);
             const uptime = day.total > 0 ? `${formatUptime((day.total - day.down) / day.total)} uptime` : 'No data';
             return (

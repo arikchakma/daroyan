@@ -69,7 +69,7 @@ export function getTraceStatus(
   return { label: status ? String(status) : 'OK', tone: 'success', isSlow: false };
 }
 
-export function describeSpans(trace: Pick<TraceSummary, 'span_count' | 'services' | 'service'>) {
+export function getSpansSummary(trace: Pick<TraceSummary, 'span_count' | 'services' | 'service'>) {
   const count = pluralize(trace.span_count, 'span');
   const services = [trace.service, ...trace.services.filter((service) => service !== trace.service)];
   if (services.length === 0) {

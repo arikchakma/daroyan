@@ -327,7 +327,7 @@ export function AffectedComponentsCard(props: AffectedComponentsProps) {
           label="Add Check or Cron"
           monitors={directory.monitors}
           selected={components.map(getMonitorKey)}
-          describeCount={(count) => (count === 1 ? '1 affected' : `${count} affected`)}
+          getCountText={(count) => (count === 1 ? '1 affected' : `${count} affected`)}
           onApply={(keys) => {
             const kept = components.filter((component) => keys.includes(getMonitorKey(component)));
             const added = keys
@@ -382,7 +382,7 @@ export function RelatedField(props: RelatedPickerProps) {
         groups={RELATED_GROUPS}
         searchLabel="Search alerts, servers, checks and crons"
         selected={related.map(getMonitorKey)}
-        describeCount={(count) => (count === 1 ? '1 related' : `${count} related`)}
+        getCountText={(count) => (count === 1 ? '1 related' : `${count} related`)}
         onApply={(keys) =>
           onChange(
             keys.map((key) => {

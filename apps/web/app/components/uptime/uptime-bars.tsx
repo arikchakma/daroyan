@@ -10,7 +10,7 @@ type UptimeBarsProps = {
   className?: string;
 };
 
-function describeDay(day: Schemas['UptimeDay']) {
+function getDayLabel(day: Schemas['UptimeDay']) {
   if (day.total === 0) {
     return 'No checks';
   }
@@ -34,7 +34,7 @@ export function UptimeBars(props: UptimeBarsProps) {
           <Tooltip.Root key={day.day}>
             <Tooltip.Trigger
               render={<span />}
-              aria-label={`${formatDate(day.day)}: ${describeDay(day)}`}
+              aria-label={`${formatDate(day.day)}: ${getDayLabel(day)}`}
               className={cn(
                 'min-w-0.5 flex-1 rounded-[1px] hover:opacity-70',
                 day.total === 0
@@ -50,7 +50,7 @@ export function UptimeBars(props: UptimeBarsProps) {
               <Tooltip.Positioner side="top">
                 <Tooltip.Popup className="flex-col items-start gap-0.5">
                   <span>{formatDate(day.day)}</span>
-                  <span className="font-normal opacity-80">{describeDay(day)}</span>
+                  <span className="font-normal opacity-80">{getDayLabel(day)}</span>
                   {day.total > 0 && (
                     <span className="font-normal opacity-80">
                       {pluralize(day.total, 'check')}

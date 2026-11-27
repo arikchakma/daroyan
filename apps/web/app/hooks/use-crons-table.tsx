@@ -12,7 +12,7 @@ import { useDataTable } from '~/hooks/use-data-table';
 import { resolveUpdater } from '~/lib/table';
 import type { DataTableFeatures } from '~/lib/table';
 import { cn } from '~/utils/classname';
-import { describeSchedule, formatRunTime, formatUntil } from '~/utils/crons';
+import { formatRunTime, formatUntil, getScheduleText } from '~/utils/crons';
 import { formatDate, formatRelative } from '~/utils/format';
 
 export type CronRow = Schemas['Cron'] & { mutedUntil?: string };
@@ -27,8 +27,8 @@ type UseCronsTableOptions = {
   onSortingChange: (sorting: SortingState) => void;
 };
 
-function describeJob(cron: CronRow) {
-  return [describeSchedule(cron), cron.server_name, cron.mutedUntil && `muted ${cron.mutedUntil}`]
+function getCronSummary(cron: CronRow) {
+  return [getScheduleText(cron), cron.server_name, cron.mutedUntil && `muted ${cron.mutedUntil}`]
     .filter(Boolean)
     .join(' · ');
 }
@@ -53,7 +53,7 @@ export function useCronsTable(options: UseCronsTableOptions) {
               >
                 {row.original.name}
               </Link>
-              <span className="truncate text-small text-text-tertiary">{describeJob(row.original)}</span>
+              <span className="truncate text-small text-text-tertiary">{getCronSummary(row.original)}</span>
             </span>
           ),
         }),

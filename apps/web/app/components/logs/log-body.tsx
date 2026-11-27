@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { LogContextList } from '~/components/logs/log-context-list';
 import { LogDetails } from '~/components/logs/log-details';
 import { useFullLogLine } from '~/hooks/use-full-log-line';
-import { describeRequest, LevelBadge } from '~/hooks/use-logs-table';
+import { getRequestSummary, LevelBadge } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
 import type { QueryTerm } from '~/utils/log-search';
 import { getLogOrigin } from '~/utils/logs';
@@ -17,7 +17,7 @@ export function LogBody(props: LogBodyProps) {
   const { line: row, onFilter } = props;
 
   const { context, isLoading, full: line } = useFullLogLine(row);
-  const request = describeRequest(line);
+  const request = getRequestSummary(line);
 
   return (
     <div className="flex pb-16 max-lg:flex-col">

@@ -30,10 +30,10 @@ import {
 } from '~/queries/alerts';
 import { serverQueries } from '~/queries/servers';
 import {
-  describeMuteEnd,
-  describeScope,
   getAlertMute,
+  getMuteEndText,
   getRuleState,
+  getScopeText,
   isCheckKind,
   isCronKind,
   isWholeRuleMute,
@@ -78,8 +78,8 @@ export default function AlertsPage() {
     const ruleMutes = (mutes ?? []).filter((mute) => mute.rule_id === rule.id);
     const mutedNames = ruleMutes.map((mute) =>
       isWholeRuleMute(mute)
-        ? `muted ${describeMuteEnd(mute)}`
-        : `${mute.subject ?? firing?.find((alert) => getAlertMute([mute], alert))?.target_name ?? 'a target'} muted ${describeMuteEnd(mute)}`
+        ? `muted ${getMuteEndText(mute)}`
+        : `${mute.subject ?? firing?.find((alert) => getAlertMute([mute], alert))?.target_name ?? 'a target'} muted ${getMuteEndText(mute)}`
     );
     const notes = [
       ...mutedNames,
@@ -91,7 +91,7 @@ export default function AlertsPage() {
       ...rule,
       summary: [rule.summary, ...notes].join(' · '),
       state,
-      scopeLabel: describeScope(
+      scopeLabel: getScopeText(
         rule.scope,
         servers ?? [],
         [],

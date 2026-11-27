@@ -20,7 +20,7 @@ import { createStatusPageOptions, publicStatusQueries, statusPageQueries, update
 import type { StatusPageInput } from '~/queries/status-pages';
 import { uptimeCheckQueries } from '~/queries/uptime';
 import { cn } from '~/utils/classname';
-import { describeSchedule } from '~/utils/crons';
+import { getScheduleText } from '~/utils/crons';
 import { getMonitorKey } from '~/utils/status-pages';
 import type { Monitor } from '~/utils/status-pages';
 import { formatInterval } from '~/utils/uptime';
@@ -86,7 +86,7 @@ export function useMonitors() {
       kind: 'cron',
       id: cron.id,
       name: cron.name,
-      caption: `Cron · ${describeSchedule(cron)}`,
+      caption: `Cron · ${getScheduleText(cron)}`,
       icon: 'clock' as const,
     })),
   ];
@@ -513,8 +513,8 @@ function StatusPageFormBody(props: StatusPageFormBodyProps) {
                       label="Add Component"
                       monitors={[...monitors.values()]}
                       selected={section.components.map(getMonitorKey)}
-                      describeCount={(count) => `${count} in ${section.name || 'this section'}`}
-                      describeMonitor={(key) => {
+                      getCountText={(count) => `${count} in ${section.name || 'this section'}`}
+                      getMonitorCaption={(key) => {
                         const index = sections.findIndex((other) =>
                           other.components.some((component) => getMonitorKey(component) === key)
                         );

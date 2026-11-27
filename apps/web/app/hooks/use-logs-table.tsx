@@ -45,7 +45,7 @@ export function hasHttp(line: Schemas['LogLine']) {
   return readAttribute(line, 'http.status') !== undefined;
 }
 
-export function describeRequest(line: Schemas['LogLine']) {
+export function getRequestSummary(line: Schemas['LogLine']) {
   const method = readAttribute(line, 'http.method');
   const path = readAttribute(line, 'url.path');
   const status = readAttribute(line, 'http.status');

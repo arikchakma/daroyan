@@ -9,11 +9,11 @@ import { Chip } from '~/components/ui/chip';
 import { useDataTable } from '~/hooks/use-data-table';
 import type { DataTableFeatures } from '~/lib/table';
 import {
-  describeShownPages,
   formatCountdown,
   formatIncidentDuration,
   formatMoment,
   formatWindow,
+  getShownPages,
   isClosed,
   isMaintenance,
 } from '~/utils/incidents';
@@ -21,8 +21,8 @@ import type { Incident } from '~/utils/incidents';
 
 const helper = createColumnHelper<DataTableFeatures, Incident>();
 
-function describeIncident(incident: Incident) {
-  const pages = describeShownPages(incident);
+function getIncidentSummary(incident: Incident) {
+  const pages = getShownPages(incident);
   if (isMaintenance(incident)) {
     return pages === 'internal only' ? 'Maintenance' : `Maintenance · ${pages}`;
   }
@@ -54,7 +54,7 @@ export function useIncidentsTable(incidents: Incident[]) {
                 >
                   {row.original.title}
                 </Link>
-                <span className="truncate text-small text-text-tertiary">{describeIncident(row.original)}</span>
+                <span className="truncate text-small text-text-tertiary">{getIncidentSummary(row.original)}</span>
               </span>
               {needsPostmortem(row.original) && (
                 <Badge tone="attention" className="max-lg:hidden">

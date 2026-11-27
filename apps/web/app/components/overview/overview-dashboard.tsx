@@ -16,7 +16,7 @@ import { useIsAdmin } from '~/hooks/use-is-admin';
 import { incidentQueries } from '~/queries/incidents';
 import { overviewQueries } from '~/queries/overview';
 import { traceQueries } from '~/queries/traces';
-import { describeFiring } from '~/utils/alerts';
+import { getFiringText } from '~/utils/alerts';
 import { formatUntil } from '~/utils/crons';
 import { DAY_MS, formatClock, formatRelative, joinNames, pluralize } from '~/utils/format';
 import { getStatusMeta, isClosed, isMaintenance } from '~/utils/incidents';
@@ -72,7 +72,7 @@ export function OverviewDashboard(props: OverviewDashboardProps) {
       icon: alert.severity === 'critical' ? ('circle-x' as const) : ('triangle-alert' as const),
       tone: alert.severity === 'critical' ? ('critical' as const) : ('warning' as const),
       title: `${alert.rule_name} on ${alert.target_name}`,
-      detail: `${describeFiring(alert)}.`,
+      detail: `${getFiringText(alert)}.`,
       href: getAlertHref(alert),
     })),
     ...downServers

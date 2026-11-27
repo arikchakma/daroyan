@@ -19,12 +19,12 @@ import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import { alertMuteQueries, deleteAlertMuteOptions } from '~/queries/alerts';
 import {
-  describeAlertNow,
-  describeMuteEnd,
-  describeResolve,
   formatMinutesLong,
+  getAlertDetail,
   getAlertNoun,
   getMutedService,
+  getMuteEndText,
+  getResolveHint,
   isWholeRuleMute,
 } from '~/utils/alerts';
 import { formatClock } from '~/utils/format';
@@ -100,7 +100,7 @@ export function AlertBanners(props: AlertBannersProps) {
     <>
       {alerts.map((alert) => {
         const mute = getMute(alert);
-        const detail = describeAlertNow(alert, getRule(alert));
+        const detail = getAlertDetail(alert, getRule(alert));
         if (mute) {
           const resume = mute.ends_at
             ? ` If it is still firing at ${formatClock(new Date(mute.ends_at).getTime())}, the team gets a message.`
@@ -110,7 +110,7 @@ export function AlertBanners(props: AlertBannersProps) {
               <Icon name="bell-off" className="mt-0.5 text-icon-secondary" />
               <div className="flex min-w-0 flex-col gap-0.5">
                 <p className="text-body font-medium text-text-primary">
-                  {alert.rule_name} is muted {describeMuteEnd(mute)}
+                  {alert.rule_name} is muted {getMuteEndText(mute)}
                 </p>
                 <p className="text-body text-text-primary">
                   {detail} {mute.creator?.name.split(' ')[0] ?? 'Someone'} muted {isWholeRuleMute(mute) ? 'the whole rule' : `it on ${getMutedService(alert, getRule(alert)) ?? alert.target_name}`}
@@ -213,7 +213,7 @@ export function AlertBanners(props: AlertBannersProps) {
           ruleId={muting.alert.rule_id}
           ruleName={muting.alert.rule_name}
           ruleNoun={getAlertNoun(muting.alert)}
-          resolveHint={describeResolve(getRule(muting.alert)?.condition)}
+          resolveHint={getResolveHint(getRule(muting.alert)?.condition)}
           target={muting.isWholeRule ? undefined : getTarget(muting.alert)}
           isFiring
         />

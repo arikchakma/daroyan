@@ -1,7 +1,7 @@
 import { LogAttributeList } from '~/components/logs/log-attribute-list';
 import { LogDetailRow } from '~/components/logs/log-detail-row';
 import { LogFilterActions } from '~/components/logs/log-filter-actions';
-import { describeRequest, formatDuration, HTTP_KEYS } from '~/hooks/use-logs-table';
+import { formatDuration, getRequestSummary, HTTP_KEYS } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
 import { formatLogStamp } from '~/utils/format';
 import type { QueryTerm } from '~/utils/log-search';
@@ -15,7 +15,7 @@ export function LogDetails(props: LogDetailsProps) {
   const { line, onFilter } = props;
 
   const values = (line.attributes ?? {}) as Record<string, unknown>;
-  const request = describeRequest(line);
+  const request = getRequestSummary(line);
   const duration = formatDuration(values['duration_ms']);
   const attributes = Object.entries(values).filter(([key]) => !HTTP_KEYS.includes(key) && key !== 'stack.lines');
   const resource = Object.entries((line.resource ?? {}) as Record<string, unknown>);

@@ -143,7 +143,7 @@ export function getInitial(name: string) {
   return name.trim().charAt(0).toUpperCase() || '?';
 }
 
-export function describeShownPages(incident: Pick<Incident, 'status_pages'>) {
+export function getShownPages(incident: Pick<Incident, 'status_pages'>) {
   const shown = incident.status_pages.filter((page) => page.is_shown).map((page) => page.name);
   return shown.length > 0 ? `on ${joinNames(shown)}` : 'internal only';
 }

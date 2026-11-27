@@ -1,7 +1,7 @@
 import type { Schemas } from '@daroyan/client';
 
 import { Skeleton } from '~/components/ui/skeleton';
-import { describeRequest, formatAttributes } from '~/hooks/use-logs-table';
+import { formatAttributes, getRequestSummary } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
 import { cn } from '~/utils/classname';
 import { formatLogClock } from '~/utils/format';
@@ -45,7 +45,7 @@ export function LogContextList(props: LogContextListProps) {
             />
             <span className="w-24 shrink-0 text-text-tertiary tabular-nums">{formatLogClock(item.at)}</span>
             <span className="min-w-0 wrap-anywhere whitespace-pre-wrap">
-              {[describeRequest(item), item.message || formatAttributes(item.attributes)].filter(Boolean).join(' · ')}
+              {[getRequestSummary(item), item.message || formatAttributes(item.attributes)].filter(Boolean).join(' · ')}
             </span>
           </li>
         );

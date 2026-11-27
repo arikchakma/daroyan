@@ -28,8 +28,6 @@ import { toast } from '~/lib/toast';
 import { deleteIncidentOptions, incidentQueries, postIncidentUpdateOptions } from '~/queries/incidents';
 import { formatClock, joinNames } from '~/utils/format';
 import {
-  RELATED_LABELS,
-  describeShownPages,
   formatCountdown,
   formatIncidentDuration,
   formatMoment,
@@ -38,8 +36,10 @@ import {
   getComponentStatusMeta,
   getRelatedPath,
   getSeverityMeta,
+  getShownPages,
   isClosed,
   isMaintenance,
+  RELATED_LABELS,
 } from '~/utils/incidents';
 import type { Incident, IncidentUpdate } from '~/utils/incidents';
 import { INTEGRATION_KINDS, isIntegrationKind } from '~/utils/alerts';
@@ -48,8 +48,8 @@ function paragraph(text: string) {
   return { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] };
 }
 
-function describeSubtitle(incident: Incident) {
-  const shown = describeShownPages(incident);
+function getSubtitle(incident: Incident) {
+  const shown = getShownPages(incident);
   const pages = shown === 'internal only' ? 'Internal only' : `On ${shown.slice(3)}`;
   if (isMaintenance(incident)) {
     const window = incident.starts_at && incident.ends_at ? formatWindow(incident.starts_at, incident.ends_at) : '';
@@ -91,7 +91,7 @@ export function IncidentDetail(props: IncidentDetailProps) {
   const maintenance = isMaintenance(incident);
   const closed = isClosed(incident.status);
   const scheduled = incident.status === 'scheduled';
-  const shownOn = describeShownPages(incident);
+  const shownOn = getShownPages(incident);
   const shownPages = incident.status_pages.filter((page) => page.is_shown);
   const channels = directory.channels.filter((channel) => incident.channel_ids.includes(channel.id));
   const channelNames = joinNames([
@@ -249,7 +249,7 @@ export function IncidentDetail(props: IncidentDetailProps) {
               <h1 className="min-w-0 text-title-page font-semibold text-balance">{incident.title}</h1>
               <IncidentStatusBadge status={incident.status} />
             </div>
-            <p className="text-body text-text-secondary">{describeSubtitle(incident)}</p>
+            <p className="text-body text-text-secondary">{getSubtitle(incident)}</p>
           </div>
 
           {maintenance && scheduled && incident.starts_at && incident.ends_at && (

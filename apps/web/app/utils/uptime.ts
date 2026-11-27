@@ -59,11 +59,11 @@ export function formatMs(ms: number | null | undefined) {
   return ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`;
 }
 
-export function describeTarget(check: Pick<Schemas['UptimeCheck'], 'kind' | 'method' | 'target'>) {
+export function getCheckTarget(check: Pick<Schemas['UptimeCheck'], 'kind' | 'method' | 'target'>) {
   return check.kind === 'tcp' ? `TCP ${check.target}` : `${check.method} ${check.target}`;
 }
 
-export function describeExpect(check: Schemas['UptimeCheck']) {
+export function getExpectedResult(check: Schemas['UptimeCheck']) {
   if (check.kind === 'tcp') {
     return 'Port open';
   }

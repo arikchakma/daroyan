@@ -256,7 +256,7 @@ export function getRuleState(
   return own.length > 0 ? 'firing' : 'ok';
 }
 
-export function describeMuteEnd(mute: Schemas['AlertMute']) {
+export function getMuteEndText(mute: Schemas['AlertMute']) {
   if (!mute.ends_at) {
     return 'until it resolves';
   }
@@ -425,7 +425,7 @@ export function readSubjectName(condition: Schemas['Condition']) {
 
 type Named = { id: string; name: string };
 
-export function describeScope(
+export function getScopeText(
   scope: Scope,
   servers: Named[],
   checks: Named[] = [],
@@ -472,7 +472,7 @@ export function getRuleScopeLabel(options: GetRuleScopeLabelOptions) {
   if (isTraceKind(kind)) {
     return getTraceScopeLabel(readTraceCondition(rule.condition));
   }
-  return describeScope(rule.scope, servers, checks, isCheckKind(kind), crons, isCronKind(kind));
+  return getScopeText(rule.scope, servers, checks, isCheckKind(kind), crons, isCronKind(kind));
 }
 
 type GetCoveredCountOptions = {
@@ -564,7 +564,7 @@ export function formatLimit(kind: ConditionKind, value: number) {
   return unit ? `${value} ${unit}` : value.toString();
 }
 
-export function describeResolve(condition?: Schemas['Condition']) {
+export function getResolveHint(condition?: Schemas['Condition']) {
   if (!condition) {
     return 'Ends when the alert resolves';
   }
@@ -645,7 +645,7 @@ export function getValueHint(condition?: Schemas['Condition']) {
   }
 }
 
-export function describeAlertNow(alert: Schemas['Alert'], rule?: Schemas['AlertRule']) {
+export function getAlertDetail(alert: Schemas['Alert'], rule?: Schemas['AlertRule']) {
   const rest = rule?.summary.match(/ (above|below|over) .*/)?.[0];
   if (rest) {
     return `${alert.subject} is at ${alert.value},${rest}.`;
@@ -668,7 +668,7 @@ export function formatMinutesLong(from: string | number, to: string | number = D
   return formatUnit(Math.round(hours / 24), 'day');
 }
 
-export function describeFiring(alert: Schemas['Alert']) {
+export function getFiringText(alert: Schemas['Alert']) {
   const minutes = Math.max(Math.round((Date.now() - new Date(alert.started_at).getTime()) / 60_000), 1);
   const duration =
     minutes < 60 ? formatUnit(minutes, 'minute') : formatAlertDuration(alert.started_at);
