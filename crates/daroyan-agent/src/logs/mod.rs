@@ -655,15 +655,16 @@ mod tests {
     }
 
     #[test]
-    fn turns_access_logs_off_when_the_name_is_taken() {
+    fn sends_access_logs_only_when_turned_on() {
+        let default = parse_config("").unwrap();
+        assert!(!default.agent.access_logs);
+        assert!(access_source(&default).is_none());
+
         let taken = parse_config(
-            "files:\n  - name: access\n    path: /var/log/nginx/access.log\n",
+            "agent:\n  access_logs: true\nfiles:\n  - name: access\n    path: /var/log/nginx/access.log\n",
         )
         .unwrap();
         assert!(access_source(&taken).is_none());
-
-        let off = parse_config("agent:\n  access_logs: false\n").unwrap();
-        assert!(access_source(&off).is_none());
     }
 
     #[test]

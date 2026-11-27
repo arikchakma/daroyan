@@ -6,14 +6,15 @@ import { pluralize } from '~/utils/format';
 import { formatSpan, isLimitValid } from '~/utils/rule-form';
 import type { RuleFormChange, RuleFormState } from '~/utils/rule-form';
 
-const ROOT_HINT = 'Fires when someone logs in over SSH as root, with one alert per address.';
+const ACCESS_HINT = 'It reads only servers that set agent.access_logs: true.';
+const ROOT_HINT = `Fires when someone logs in over SSH as root, with one alert per address. ${ACCESS_HINT}`;
 
 function getLimitHint(form: RuleFormState) {
   if (form.kind === 'login_new_ip') {
-    return `Fires when someone logs in over SSH from an address that did not log in to the server in the last ${pluralize(Number(form.critical), 'day')}, with one alert per address. It learns for 24 hours after the first login on a server.`;
+    return `Fires when someone logs in over SSH from an address that did not log in to the server in the last ${pluralize(Number(form.critical), 'day')}, with one alert per address. It learns for 24 hours after the first login on a server. ${ACCESS_HINT}`;
   }
 
-  return `Fires when someone logs in over SSH after ${form.critical} or more failed attempts from the same address within ${formatSpan(form.loginWithin)}.`;
+  return `Fires when someone logs in over SSH after ${form.critical} or more failed attempts from the same address within ${formatSpan(form.loginWithin)}. ${ACCESS_HINT}`;
 }
 
 type LoginConditionFieldsProps = {

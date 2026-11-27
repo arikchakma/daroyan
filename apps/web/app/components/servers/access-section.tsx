@@ -27,8 +27,8 @@ export function AccessSection(props: AccessSectionProps) {
           <DataTable table={table} label="Access" variant="card" size="lg" isLoading={!data} />
         ) : (
           <DetailEmpty>
-            No logins, sudo or account changes yet. The agent reads them from the journal unless{' '}
-            <code className="font-mono text-code">agent.access_logs</code> is false.
+            No logins, sudo or account changes yet. Set{' '}
+            <code className="font-mono text-code">agent.access_logs: true</code> in the agent configuration to send them.
           </DetailEmpty>
         )}
       </DetailCard>

@@ -266,7 +266,7 @@ pub struct Agent {
     pub state_path: PathBuf,
     #[serde(default = "default_log_budget", deserialize_with = "deserialize_size")]
     pub log_budget: u64,
-    #[serde(default = "default_access_logs")]
+    #[serde(default)]
     pub access_logs: bool,
 }
 
@@ -352,7 +352,7 @@ impl Default for Agent {
             log_path: default_log_path(),
             state_path: default_state_path(),
             log_budget: default_log_budget(),
-            access_logs: default_access_logs(),
+            access_logs: false,
         }
     }
 }
@@ -367,10 +367,6 @@ fn default_port_host() -> String {
 
 fn default_restart_window() -> Duration {
     Duration::from_secs(600)
-}
-
-fn default_access_logs() -> bool {
-    true
 }
 
 fn default_log_budget() -> u64 {

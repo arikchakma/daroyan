@@ -104,7 +104,7 @@ Each process entry has exactly one source. The source decides how the agent find
 | `agent.commands` | `false` | `true` lets admins start, stop and restart `systemd` and `docker` entries from the dashboard. Auto-restart (`restart`) works either way. Both need `DAROYAN_COMMANDS=1` at install |
 | `agent.log_level`, `agent.log_path` | `info`, `/var/log/daroyan` | Rotated daily or at 20 MB, 7 files kept, `daroyan.log` points to the current file |
 | `agent.log_budget` | `1MB` | The most log data sent per minute, as `512KB` or `2MB`. Each log source gets an equal share. Lines over a share are dropped and counted |
-| `agent.access_logs` | `true` | Send logins, `sudo`, `su` and account changes from the journal as the `access` source. See Access logs |
+| `agent.access_logs` | `false` | Send logins, `sudo`, `su` and account changes from the journal as the `access` source. See Access logs |
 | `agent.state_path` | `/var/lib/daroyan` | Holds `server.json`, the server id and token, mode 600 |
 
 ### Docker containers
@@ -202,7 +202,9 @@ sudo setfacl -d -m u:daroyan:r /var/www/app/storage/logs
 
 ## Access logs
 
-The agent sends the logins and the use of root on the server as the `access` source. It does this by default. Set `agent.access_logs: false` to stop it.
+The agent can send the logins and the use of root on the server as the `access` source. It does not do this by default. Set `agent.access_logs: true` to turn it on.
+
+Do not turn it on before you read what it sends. The lines include the full command line of each `sudo` command, which can contain a password or a token, for example `sudo mysql -p…`. They also include the user name of each failed SSH login, and people sometimes type a password at the user name prompt. Every person who can sign in to Daroyan can read these lines. The login alert rules need access logs, and they send nothing for a server that does not send them.
 
 The agent runs one `journalctl` process with a match for each of these programs: `sshd`, `sshd-session`, `sshd-auth`, `sudo`, `su`, `login`, `useradd`, `userdel`, `usermod`, `groupadd`, `groupdel`, `groupmod`, `gpasswd`, `passwd` and `chpasswd`. It follows the journal like a `systemd` entry, from a saved cursor. The source starts at the time the agent first runs with it, and it does not read older lines.
 
