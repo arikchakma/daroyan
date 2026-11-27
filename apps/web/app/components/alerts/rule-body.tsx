@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router';
 
 import { FiringRow } from '~/components/alerts/firing-row';
 import { getIntegrationLabel } from '~/components/alerts/integration-logo';
-import { describeQuietWindows } from '~/components/alerts/quiet-hours-field';
+import { getQuietWindowsText } from '~/components/alerts/quiet-hours-field';
 import { MuteDialog } from '~/components/alerts/mute-dialog';
 import type { MuteTarget } from '~/components/alerts/mute-dialog';
 import { RuleStatusBadge } from '~/components/alerts/rule-status-badge';
@@ -40,21 +40,21 @@ import { traceQueries } from '~/queries/traces';
 import { uptimeCheckQueries } from '~/queries/uptime';
 import {
   CONDITION_OPTIONS,
-  describeMuteEnd,
-  describeResolve,
   formatForSecs,
   formatLimit,
   getAlertMute,
   getCoveredCount,
   getMutedService,
+  getMuteEndText,
+  getResolveHint,
   getRuleScopeLabel,
   getRuleState,
   INTEGRATION_KINDS,
   isCheckKind,
   isCronKind,
   isIntegrationKind,
-  isTraceKind,
   isProcessKind,
+  isTraceKind,
   isWholeRuleMute,
   readMetricCondition,
   readSubjectName,
@@ -99,7 +99,7 @@ export function RuleBody(props: RuleBodyProps) {
   const firstMute = wholeMute ?? mutes.find((mute) => firing.some((alert) => getAlertMute([mute], alert)));
   const stateLabel =
     state === 'muted' && firstMute
-      ? `Muted ${describeMuteEnd(firstMute)}`
+      ? `Muted ${getMuteEndText(firstMute)}`
       : state === 'limited' && rule.quiet_until
         ? `Quiet until ${formatClock(new Date(rule.quiet_until).getTime())}`
         : undefined;
@@ -374,7 +374,7 @@ export function RuleBody(props: RuleBodyProps) {
         <aside aria-label="Rule" className="flex w-65 shrink-0 flex-col gap-4 pt-2 max-lg:hidden">
           <RailSection title="Details">
             <RailRow label="Condition">{getConditionLabel(rule.condition.kind)}</RailRow>
-            <RailRow label="Critical">{describeLimit(rule.condition)}</RailRow>
+            <RailRow label="Critical">{getLimitText(rule.condition)}</RailRow>
             {rule.options.warning != null && (
               <RailRow label="Warning">{formatLimit(rule.condition.kind, rule.options.warning)}</RailRow>
             )}
@@ -425,7 +425,7 @@ export function RuleBody(props: RuleBodyProps) {
             </div>
             {mutes.map((mute) => (
               <p key={mute.id} className="text-body text-text-secondary">
-                {getTargetName(mute)} muted {describeMuteEnd(mute)}
+                {getTargetName(mute)} muted {getMuteEndText(mute)}
               </p>
             ))}
             {rule.options.message_limit != null && (
@@ -433,7 +433,7 @@ export function RuleBody(props: RuleBodyProps) {
             )}
             {rule.options.quiet_hours.length > 0 && (
               <p className="text-body text-text-secondary">
-                Quiet {describeQuietWindows(rule.options.quiet_hours, rule.options.time_zone ?? 'UTC')}
+                Quiet {getQuietWindowsText(rule.options.quiet_hours, rule.options.time_zone ?? 'UTC')}
               </p>
             )}
           </RailSection>
@@ -458,7 +458,7 @@ export function RuleBody(props: RuleBodyProps) {
           ruleId={rule.id}
           ruleName={rule.name}
           ruleNoun={noun}
-          resolveHint={describeResolve(rule.condition)}
+          resolveHint={getResolveHint(rule.condition)}
           target={muting.target}
           isFiring={firing.length > 0}
         />
@@ -492,7 +492,7 @@ function getConditionLabel(kind: Schemas['Condition']['kind']) {
   return label.replace(' a limit', '');
 }
 
-function describeLimit(condition: Schemas['Condition']) {
+function getLimitText(condition: Schemas['Condition']) {
   const limit = readThreshold(condition);
   if (limit !== undefined) {
     return formatLimit(condition.kind, limit);
@@ -502,6 +502,9 @@ function describeLimit(condition: Schemas['Condition']) {
   }
   if (condition.kind === 'uptime_down') {
     return 'Check down';
+  }
+  if (condition.kind === 'login_root') {
+    return 'Any root login';
   }
   return readSubjectName(condition) ?? `Any ${isProcessKind(condition.kind) ? 'process' : 'port'}`;
 }

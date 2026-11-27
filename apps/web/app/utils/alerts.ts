@@ -54,6 +54,14 @@ export const METRIC_GROUPS: { label: string; items: { kind: ConditionKind; label
       { kind: 'cron_failed', label: 'Failed' },
     ],
   },
+  {
+    label: 'Access',
+    items: [
+      { kind: 'login_new_ip', label: 'Login from a new address' },
+      { kind: 'login_root', label: 'Root login' },
+      { kind: 'login_after_failures', label: 'Login after failed attempts' },
+    ],
+  },
   { label: 'Logs', items: [{ kind: 'logs', label: 'Matching lines' }] },
   {
     label: 'Traces',
@@ -70,6 +78,7 @@ export const CONDITION_OPTIONS = METRIC_GROUPS.flatMap((group) => group.items);
 const CHECK_KINDS: ConditionKind[] = ['uptime_down', 'response_time', 'first_byte', 'cert_days'];
 const CRON_KINDS: ConditionKind[] = ['cron_missed', 'cron_failed'];
 const TRACE_KINDS: ConditionKind[] = ['trace_errors', 'trace_latency'];
+const LOGIN_KINDS: ConditionKind[] = ['login_new_ip', 'login_root', 'login_after_failures'];
 const AGGREGATED_KINDS: ConditionKind[] = ['cpu', 'memory', 'disk', 'load', 'response_time', 'first_byte'];
 
 export function isCheckKind(kind: ConditionKind) {
@@ -82,6 +91,14 @@ export function isCronKind(kind: ConditionKind) {
 
 export function isTraceKind(kind: ConditionKind) {
   return TRACE_KINDS.includes(kind);
+}
+
+export function isLoginKind(kind: ConditionKind) {
+  return LOGIN_KINDS.includes(kind);
+}
+
+export function hasLoginLimit(kind: ConditionKind) {
+  return kind === 'login_new_ip' || kind === 'login_after_failures';
 }
 
 export function isServiceKind(kind: ConditionKind) {
@@ -104,9 +121,12 @@ export function getUnit(kind: ConditionKind) {
     case 'trace_latency':
       return 'ms';
     case 'cert_days':
+    case 'login_new_ip':
       return 'days';
     case 'logs':
       return 'lines';
+    case 'login_after_failures':
+      return 'attempts';
     default:
       return '';
   }
@@ -236,7 +256,7 @@ export function getRuleState(
   return own.length > 0 ? 'firing' : 'ok';
 }
 
-export function describeMuteEnd(mute: Schemas['AlertMute']) {
+export function getMuteEndText(mute: Schemas['AlertMute']) {
   if (!mute.ends_at) {
     return 'until it resolves';
   }
@@ -387,6 +407,12 @@ export function readThreshold(condition: Schemas['Condition']) {
   if ('below' in condition) {
     return condition.below;
   }
+  if (condition.kind === 'login_new_ip') {
+    return condition.days;
+  }
+  if (condition.kind === 'login_after_failures') {
+    return condition.failures;
+  }
   return condition.kind === 'logs' ? condition.count : undefined;
 }
 
@@ -399,7 +425,7 @@ export function readSubjectName(condition: Schemas['Condition']) {
 
 type Named = { id: string; name: string };
 
-export function describeScope(
+export function getScopeText(
   scope: Scope,
   servers: Named[],
   checks: Named[] = [],
@@ -446,7 +472,7 @@ export function getRuleScopeLabel(options: GetRuleScopeLabelOptions) {
   if (isTraceKind(kind)) {
     return getTraceScopeLabel(readTraceCondition(rule.condition));
   }
-  return describeScope(rule.scope, servers, checks, isCheckKind(kind), crons, isCronKind(kind));
+  return getScopeText(rule.scope, servers, checks, isCheckKind(kind), crons, isCronKind(kind));
 }
 
 type GetCoveredCountOptions = {
@@ -538,7 +564,7 @@ export function formatLimit(kind: ConditionKind, value: number) {
   return unit ? `${value} ${unit}` : value.toString();
 }
 
-export function describeResolve(condition?: Schemas['Condition']) {
+export function getResolveHint(condition?: Schemas['Condition']) {
   if (!condition) {
     return 'Ends when the alert resolves';
   }
@@ -560,6 +586,10 @@ export function describeResolve(condition?: Schemas['Condition']) {
       return `Ends when there are fewer than ${limit} matching lines`;
     case 'metric':
       return `Ends when ${condition.name} is back ${condition.below ? 'above' : 'below'} ${limit}`;
+    case 'login_new_ip':
+    case 'login_root':
+    case 'login_after_failures':
+      return 'Ends 15 minutes after the last matching login from the address';
     default: {
       const names: Partial<Record<ConditionKind, string>> = {
         cpu: 'CPU',
@@ -598,6 +628,10 @@ export function getValueHint(condition?: Schemas['Condition']) {
       return 'Days left on the certificate when the alert fired.';
     case 'logs':
       return `Matching log lines in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
+    case 'login_new_ip':
+    case 'login_root':
+    case 'login_after_failures':
+      return 'Who logged in, and from which address.';
     case 'trace_errors':
       return `Share of requests that failed in the ${formatUnit(condition.within_secs / 60, 'minute')} before the alert fired.`;
     case 'metric':
@@ -611,9 +645,15 @@ export function getValueHint(condition?: Schemas['Condition']) {
   }
 }
 
-export function describeAlertNow(alert: Schemas['Alert'], summary?: string) {
-  const rest = summary?.match(/ (above|below|over) .*/)?.[0];
-  return rest ? `${alert.subject} is at ${alert.value},${rest}.` : `${alert.subject}: ${alert.value}.`;
+export function getAlertDetail(alert: Schemas['Alert'], rule?: Schemas['AlertRule']) {
+  const rest = rule?.summary.match(/ (above|below|over) .*/)?.[0];
+  if (rest) {
+    return `${alert.subject} is at ${alert.value},${rest}.`;
+  }
+  if (alert.value.includes(alert.subject) || (rule && isLoginKind(rule.condition.kind))) {
+    return `${alert.value}.`;
+  }
+  return `${alert.subject}: ${alert.value}.`;
 }
 
 export function formatMinutesLong(from: string | number, to: string | number = Date.now()) {
@@ -628,7 +668,7 @@ export function formatMinutesLong(from: string | number, to: string | number = D
   return formatUnit(Math.round(hours / 24), 'day');
 }
 
-export function describeFiring(alert: Schemas['Alert']) {
+export function getFiringText(alert: Schemas['Alert']) {
   const minutes = Math.max(Math.round((Date.now() - new Date(alert.started_at).getTime()) / 60_000), 1);
   const duration =
     minutes < 60 ? formatUnit(minutes, 'minute') : formatAlertDuration(alert.started_at);

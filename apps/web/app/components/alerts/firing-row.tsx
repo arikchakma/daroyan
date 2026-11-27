@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { Icon } from '~/components/icons/icon';
 import type { IconName } from '~/components/icons/icon-paths';
 import { Button } from '~/components/ui/button';
-import { describeFiring, describeMuteEnd, getAlertTargetPath } from '~/utils/alerts';
+import { getAlertTargetPath, getFiringText, getMuteEndText } from '~/utils/alerts';
 import { cn } from '~/utils/classname';
 import { formatClock, joinNames } from '~/utils/format';
 import { OTLP_SERVER_ID } from '~/utils/logs';
@@ -46,7 +46,7 @@ export function FiringRow(props: FiringRowProps) {
   const names = [...new Set(deliveries.map((delivery) => delivery.integration_name))];
   const sentAt = deliveries.at(-1)?.sent_at;
   const sent = mute
-    ? ` Muted by ${mute.creator?.name.split(' ')[0] ?? 'Someone'} ${describeMuteEnd(mute)}${mute.reason ? `: "${mute.reason}"` : ''}.`
+    ? ` Muted by ${mute.creator?.name.split(' ')[0] ?? 'Someone'} ${getMuteEndText(mute)}${mute.reason ? `: "${mute.reason}"` : ''}.`
     : names.length > 0 && sentAt
       ? ` Sent to ${joinNames(names)} at ${formatClock(new Date(sentAt).getTime())}.`
       : '';
@@ -66,7 +66,7 @@ export function FiringRow(props: FiringRowProps) {
           {alert.severity === 'warning' && <span className="font-normal text-text-tertiary"> · Warning</span>}
         </span>
         <span className="text-text-secondary">
-          {describeFiring(alert)}.{sent}
+          {getFiringText(alert)}.{sent}
         </span>
       </div>
       {mute ? (

@@ -26,7 +26,7 @@ import { alertRuleQueries } from '~/queries/alerts';
 import { deleteUptimeCheckOptions, runUptimeCheckOptions, toCheckInput, updateUptimeCheckOptions, uptimeCheckQueries } from '~/queries/uptime';
 import { cn } from '~/utils/classname';
 import { DAY_MS, formatDate, formatLasted, pluralize } from '~/utils/format';
-import { describeExpect, describeTarget, formatInterval, formatMs, formatStreak, formatUptime, getUptime } from '~/utils/uptime';
+import { formatInterval, formatMs, formatStreak, formatUptime, getCheckTarget, getExpectedResult, getUptime } from '~/utils/uptime';
 
 type CheckBodyProps = {
   check: Schemas['UptimeCheck'];
@@ -138,7 +138,7 @@ export function CheckBody(props: CheckBodyProps) {
               <UptimeStatusBadge status={check.status} />
             </div>
             <p className="truncate text-body text-text-secondary">
-              {describeTarget(check)} · every {formatInterval(check.interval_secs)}
+              {getCheckTarget(check)} · every {formatInterval(check.interval_secs)}
             </p>
           </div>
 
@@ -150,7 +150,7 @@ export function CheckBody(props: CheckBodyProps) {
             <Stat
               label="Last Outage"
               value={lastOutage ? formatDate(lastOutage.started_at) : 'None'}
-              detail={lastOutage ? describeLasted(lastOutage) : undefined}
+              detail={lastOutage ? getOutageLength(lastOutage) : undefined}
             />
             <Stat
               label="Certificate"
@@ -205,7 +205,7 @@ export function CheckBody(props: CheckBodyProps) {
         <aside aria-label="Check" className="flex w-65 shrink-0 flex-col gap-4 pt-2 max-lg:hidden">
           <RailSection title="Check">
             {check.kind === 'http' && <RailRow label="Method">{check.method}</RailRow>}
-            <RailRow label="Expect">{describeExpect(check)}</RailRow>
+            <RailRow label="Expect">{getExpectedResult(check)}</RailRow>
             {check.body_contains && <RailRow label="Body">contains "{check.body_contains}"</RailRow>}
             <RailRow label="Timeout">{check.timeout_secs} s</RailRow>
             <RailRow label="Interval">{formatInterval(check.interval_secs)}</RailRow>
@@ -269,7 +269,7 @@ export function CheckBody(props: CheckBodyProps) {
   );
 }
 
-function describeLasted(outage: Schemas['UptimeOutage']) {
+function getOutageLength(outage: Schemas['UptimeOutage']) {
   if (!outage.resolved_at) {
     return 'ongoing';
   }

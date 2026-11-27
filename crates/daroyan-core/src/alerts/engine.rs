@@ -15,6 +15,7 @@ use crate::alerts::evaluate::{
 };
 use crate::alerts::facts::{AlertFacts, CheckCount, FactSources};
 use crate::alerts::integrations::IntegrationConfig;
+use crate::alerts::logins::{LOGIN_WINDOW_MS, LoginHit, find_login_hits};
 use crate::alerts::message::{AlertMessage, Moment};
 use crate::alerts::notify::{
     ChatMessage, Details, Notice, Thread, Tone, add_resolved_reaction, send_notice,
@@ -26,6 +27,7 @@ use crate::alerts::rules::{
     read_time_zone,
 };
 use crate::analytics::Analytics;
+use crate::analytics::access::Since;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source,
 };
@@ -423,6 +425,12 @@ impl AlertEngine {
         if let Some(query) = parsed.condition.metric_query(now.timestamp_millis()) {
             let is_below = parsed.condition.is_below();
             return Ok(vec![self.read_metric_target(query, is_below).await?]);
+        }
+
+        if let Some(rule) = parsed.condition.login_rule() {
+            let since = Since::Ingested(now.timestamp_millis() - LOGIN_WINDOW_MS);
+            let hits = find_login_hits(&self.analytics, rule, since).await?;
+            return Ok(read_login_targets(parsed, facts, hits));
         }
 
         if parsed.condition.target() == Target::Cron {
@@ -1690,6 +1698,41 @@ async fn find_thread(
     };
 
     Some((delivery.id, message))
+}
+
+fn read_login_targets(
+    parsed: &ParsedRule,
+    facts: &[ServerFacts<'_>],
+    hits: Vec<LoginHit>,
+) -> Vec<TargetReadings> {
+    let mut latest: HashMap<(String, String), LoginHit> = HashMap::new();
+    for hit in hits {
+        let key = (hit.server_id.clone(), hit.ip.clone());
+        if latest.get(&key).is_none_or(|seen| seen.at <= hit.at) {
+            latest.insert(key, hit);
+        }
+    }
+
+    facts
+        .iter()
+        .filter(|server| parsed.scope.includes(&server.server.id, &server.labels))
+        .map(|server| {
+            let mut readings: Vec<Reading> = latest
+                .values()
+                .filter(|hit| hit.server_id == server.server.id)
+                .map(|hit| make_reading(&hit.ip, 1.0, hit.label.clone()))
+                .collect();
+            readings.sort_by(|left, right| left.subject.cmp(&right.subject));
+
+            TargetReadings {
+                id: server.server.id.clone(),
+                name: server.server.name.clone(),
+                target: Target::Server,
+                readings: Some(readings),
+                cut: Vec::new(),
+            }
+        })
+        .collect()
 }
 
 fn read_server_facts(server: &Server) -> ServerFacts<'_> {

@@ -5,9 +5,11 @@ import {
   AGGREGATION_OPTIONS,
   getUnit,
   hasAggregation,
+  hasLoginLimit,
   hasThreshold,
   isCheckKind,
   isCronKind,
+  isLoginKind,
   isServiceKind,
   readLogCondition,
   readMetricCondition,
@@ -52,6 +54,7 @@ export type RuleFormState = {
   logService: string;
   logText: string;
   logGroupBy: Schemas['LogGroup'];
+  loginWithin: number;
   traceWithin: number;
   traceMinRequests: string;
   traceService: string;
@@ -104,6 +107,8 @@ export const TEMPLATES: RuleTemplate[] = [
   { label: 'Process stopped', name: 'Process Stopped', kind: 'process_stopped', forSecs: 60 },
   { label: 'Process degraded', name: 'Process Degraded', kind: 'process_degraded', forSecs: 120 },
   { label: 'Errors in logs', name: 'Errors in Logs', kind: 'logs', critical: '10', forSecs: 0 },
+  { label: 'Login from a new address', name: 'Login From a New Address', kind: 'login_new_ip', critical: '30', forSecs: 0 },
+  { label: 'Root login', name: 'Root Login', kind: 'login_root', forSecs: 0 },
   { label: 'Uptime check down', name: 'Uptime Check Down', kind: 'uptime_down', forSecs: 0 },
   {
     label: 'Slow responses',
@@ -129,6 +134,8 @@ const DEFAULT_THRESHOLDS: Partial<Record<ConditionKind, string>> = {
   first_byte: '800',
   cert_days: '7',
   logs: '10',
+  login_new_ip: '30',
+  login_after_failures: '10',
   trace_errors: '5',
   trace_latency: '1000',
 };
@@ -149,6 +156,9 @@ export const CONDITION_LABELS: Record<ConditionKind, string> = {
   cron_missed: 'Cron missed a run',
   cron_failed: 'Cron failed',
   logs: 'Log lines match',
+  login_new_ip: 'Login from a new address',
+  login_root: 'Root login',
+  login_after_failures: 'Login after failed attempts',
   trace_errors: 'Error rate above a limit',
   trace_latency: 'Latency above a limit',
   metric: 'Metric past a limit',
@@ -219,6 +229,10 @@ export function readRecovery(form: RuleFormState) {
 }
 
 export function isLimitValid(form: RuleFormState) {
+  if (hasLoginLimit(form.kind)) {
+    const limit = readLimit(form);
+    return limit !== null && Number.isInteger(limit);
+  }
   return !hasThreshold(form.kind) || readLimit(form) !== null;
 }
 
@@ -335,6 +349,7 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
   const savedLog = readLogCondition(initial);
   const savedTrace = readTraceCondition(initial);
   const savedMetric = readMetricCondition(initial);
+  const savedLoginWithin = initial?.kind === 'login_after_failures' ? initial.within_secs : undefined;
   const scope = rule?.scope ?? draft?.scope;
 
   return {
@@ -359,6 +374,7 @@ export function readInitialRuleForm(options: ReadInitialRuleFormOptions): RuleFo
     logService: savedLog?.service ?? '',
     logText: savedLog?.text ?? '',
     logGroupBy: savedLog?.group_by ?? 'server',
+    loginWithin: savedLoginWithin ?? 900,
     traceWithin: savedTrace?.within_secs ?? 300,
     traceMinRequests: (savedTrace?.min_requests ?? DEFAULT_MIN_REQUESTS).toString(),
     traceService: savedTrace?.service ?? '',
@@ -407,6 +423,7 @@ export function changeKind(form: RuleFormState, next: ConditionKind): Partial<Ru
     isWarningOpen: false,
     recovery: '',
     aggregation: next === 'response_time' || next === 'first_byte' ? 'p95' : 'avg',
+    ...(isLoginKind(next) ? { forSecs: 0 } : {}),
   };
 }
 
@@ -438,7 +455,12 @@ export function readCondition(form: RuleFormState): Schemas['Condition'] | undef
     case 'uptime_down':
     case 'cron_missed':
     case 'cron_failed':
+    case 'login_root':
       return { kind };
+    case 'login_new_ip':
+      return { kind, days: limit };
+    case 'login_after_failures':
+      return { kind, failures: limit, within_secs: form.loginWithin };
     case 'process_stopped':
     case 'process_degraded':
     case 'port_closed':

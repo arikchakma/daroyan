@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::fmt;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +11,9 @@ use daroyan_protocol::log::{
 use log::{info, warn};
 use serde_json::Value;
 
+use daroyan_protocol::log::ACCESS_SERVICE;
+
+use crate::logs::access::{self, ACCESS_KEY};
 use crate::logs::follow::{Feed, Follower, Launch, LogFollowers, Position, Sink};
 use crate::logs::parse::RawLine;
 
@@ -45,16 +49,47 @@ pub fn start_position(now_secs: u64) -> String {
     format!("{SINCE_PREFIX}{now_secs}")
 }
 
-struct UnitFeed {
-    unit: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Journal {
+    Unit(String),
+    Access,
+}
+
+impl Journal {
+    pub fn key(&self) -> &str {
+        match self {
+            Self::Unit(unit) => unit,
+            Self::Access => ACCESS_KEY,
+        }
+    }
+
+    fn matches(&self) -> Vec<OsString> {
+        match self {
+            Self::Unit(unit) => vec!["--unit".into(), unit.into()],
+            Self::Access => access::journal_matches().map(OsString::from).collect(),
+        }
+    }
+}
+
+impl fmt::Display for Journal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unit(unit) => formatter.write_str(unit),
+            Self::Access => formatter.write_str(ACCESS_SERVICE),
+        }
+    }
+}
+
+struct JournalFeed {
+    journal: Journal,
     is_catching_up: AtomicBool,
     has_caught_up: AtomicBool,
 }
 
-impl UnitFeed {
+impl JournalFeed {
     fn args(&self, from: Option<&Position>) -> Vec<OsString> {
         let mut args: Vec<OsString> =
-            ["--unit", &self.unit, "--all", "--output", "json", "--no-pager", "--quiet"]
+            ["--all", "--output", "json", "--no-pager", "--quiet"]
                 .map(OsString::from)
                 .into();
         let is_catching_up =
@@ -83,21 +118,22 @@ impl UnitFeed {
             None => args.extend(["--lines".into(), "0".into()]),
         }
 
+        args.extend(self.journal.matches());
         args
     }
 
-    fn new(unit: String) -> Self {
+    fn new(journal: Journal) -> Self {
         Self {
-            unit,
+            journal,
             is_catching_up: AtomicBool::new(true),
             has_caught_up: AtomicBool::new(false),
         }
     }
 }
 
-impl Feed for UnitFeed {
+impl Feed for JournalFeed {
     fn name(&self) -> String {
-        format!("journalctl {}", self.unit)
+        format!("journalctl {}", self.journal)
     }
 
     fn launch(&self, from: Option<&Position>, _sudo: bool) -> Launch {
@@ -114,11 +150,16 @@ impl Feed for UnitFeed {
             .and_then(Value::as_str)
             .and_then(|text| text.parse::<u64>().ok())
             .unwrap_or_default();
+        let message = read_message(entry.get("MESSAGE"));
+        let text = match self.journal {
+            Journal::Unit(_) => message,
+            Journal::Access => access::tag(&entry, &message)?,
+        };
 
         Some(RawLine {
             at: micros / 1_000,
             stream: LogStream::Journal,
-            text: read_message(entry.get("MESSAGE")),
+            text,
             severity: read_priority(entry.get("PRIORITY")),
             position: Some(Position::Cursor(Arc::from(cursor))),
         })
@@ -160,7 +201,7 @@ fn now_secs() -> u64 {
 
 pub struct JournalSource {
     pub source: usize,
-    pub unit: String,
+    pub journal: Journal,
     pub from: String,
 }
 
@@ -171,9 +212,10 @@ pub fn follow_units(
 ) -> Vec<Follower> {
     sources
         .into_iter()
-        .filter_map(|JournalSource { source, unit, from }| {
-            let key = Arc::from(unit.as_str());
-            let feed = UnitFeed::new(unit.clone());
+        .filter_map(|JournalSource { source, journal, from }| {
+            let key = Arc::from(journal.key());
+            let name = journal.to_string();
+            let feed = JournalFeed::new(journal);
             let from = Some(Position::Cursor(Arc::from(from)));
 
             Follower::start(
@@ -185,8 +227,8 @@ pub fn follow_units(
                 group.clone(),
                 Arc::default(),
             )
-            .inspect(|_| info!("following the journal of {unit}"))
-            .inspect_err(|error| warn!("could not follow the journal of {unit}: {error}"))
+            .inspect(|_| info!("following the journal of {name}"))
+            .inspect_err(|error| warn!("could not follow the journal of {name}: {error}"))
             .ok()
         })
         .collect()
@@ -197,7 +239,7 @@ mod tests {
     use daroyan_protocol::log::LogStream;
     use serde_json::json;
 
-    use super::{UnitFeed, read_message, read_priority, start_position};
+    use super::{Journal, JournalFeed, read_message, read_priority, start_position};
     use crate::logs::follow::{Feed, Position};
 
     #[test]
@@ -210,7 +252,7 @@ mod tests {
 
     #[test]
     fn reads_entries_with_their_cursor() {
-        let feed = UnitFeed::new("nginx.service".to_string());
+        let feed = JournalFeed::new(Journal::Unit("nginx.service".to_string()));
         let entry = br#"{"__CURSOR":"s=abc;i=2","__REALTIME_TIMESTAMP":"1793959201500000","MESSAGE":[104,105],"PRIORITY":"4"}"#;
 
         let line = feed.read(entry, LogStream::Stdout).unwrap();
@@ -224,14 +266,39 @@ mod tests {
     }
 
     #[test]
+    fn reads_only_trusted_access_entries() {
+        let feed = JournalFeed::new(Journal::Access);
+        let sshd = br#"{"__CURSOR":"s=a;i=1","__REALTIME_TIMESTAMP":"1795722029617602","MESSAGE":"Accepted publickey for arik from 203.0.113.7 port 52144 ssh2","PRIORITY":"6","_COMM":"sshd","_PID":"812","_UID":"0"}"#;
+        let forged = br#"{"__CURSOR":"s=a;i=2","__REALTIME_TIMESTAMP":"1795722029617602","MESSAGE":"Accepted password for root from 6.6.6.6 port 1 ssh2","SYSLOG_IDENTIFIER":"sshd","_COMM":"logger","_PID":"9","_UID":"1000","_CAP_EFFECTIVE":"0"}"#;
+
+        let line = feed.read(sshd, LogStream::Stdout).unwrap();
+        assert_eq!(
+            line.text,
+            "sshd[812]: Accepted publickey for arik from 203.0.113.7 port 52144 ssh2"
+        );
+        assert!(feed.read(forged, LogStream::Stdout).is_none());
+
+        let args: Vec<String> = feed
+            .args(None)
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+        assert!(args.contains(&"_COMM=sshd".to_string()));
+        assert!(!args.contains(&"--unit".to_string()));
+    }
+
+    #[test]
     fn catches_up_before_following_and_recovers_from_a_bad_cursor() {
-        let feed = UnitFeed::new("nginx.service".to_string());
+        let feed = JournalFeed::new(Journal::Unit("nginx.service".to_string()));
         let args = |from: Option<Position>| -> Vec<String> {
-            feed.args(from.as_ref())
+            let args: Vec<String> = feed
+                .args(from.as_ref())
                 .into_iter()
-                .skip(7)
                 .map(|arg| arg.into_string().unwrap())
-                .collect()
+                .collect();
+            assert_eq!(args[args.len() - 2..], ["--unit", "nginx.service"]);
+
+            args[5..args.len() - 2].to_vec()
         };
         let cursor = Some(Position::Cursor("s=abc;i=2".into()));
 

@@ -3,7 +3,9 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use daroyan_protocol::log::{LogBatch, SEVERITY_ERROR, SEVERITY_INFO, SEVERITY_WARN};
+use daroyan_protocol::log::{
+    ACCESS_SERVICE, ACCESS_STREAM, LogBatch, SEVERITY_ERROR, SEVERITY_INFO, SEVERITY_WARN,
+};
 use duckdb::types::Value as SqlValue;
 use duckdb::{Connection, params, params_from_iter};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
@@ -74,13 +76,13 @@ impl From<&Map<String, Value>> for HttpFields {
 }
 
 pub struct LogRow {
-    server_id: String,
-    at: i64,
-    service: String,
-    stream: &'static str,
+    pub(crate) server_id: String,
+    pub(crate) at: i64,
+    pub(crate) service: String,
+    pub(crate) stream: &'static str,
     severity: u8,
     message: String,
-    attributes: Option<String>,
+    pub(crate) attributes: Option<String>,
     trace_id: Option<String>,
     span_id: Option<String>,
     raw: Option<String>,
@@ -152,8 +154,12 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
             LogRow {
                 server_id: server_id.to_string(),
                 at: clamp_future_ms(at, now_ms),
-                service: cut(&line.service, MAX_NAME_BYTES),
-                stream: line.stream.as_str(),
+                service: if line.access {
+                    ACCESS_SERVICE.to_string()
+                } else {
+                    cut(&line.service, MAX_NAME_BYTES)
+                },
+                stream: if line.access { ACCESS_STREAM } else { line.stream.as_str() },
                 severity: line.severity,
                 message: cut(&line.message, MAX_MESSAGE_BYTES),
                 attributes: (!line.attributes.is_empty())
@@ -1198,6 +1204,7 @@ mod tests {
             span_id: None,
             raw: None,
             format: LogFormat::Auto,
+            access: false,
         }
     }
 

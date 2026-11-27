@@ -104,6 +104,7 @@ Each process entry has exactly one source. The source decides how the agent find
 | `agent.commands` | `false` | `true` lets admins start, stop and restart `systemd` and `docker` entries from the dashboard. Auto-restart (`restart`) works either way. Both need `DAROYAN_COMMANDS=1` at install |
 | `agent.log_level`, `agent.log_path` | `info`, `/var/log/daroyan` | Rotated daily or at 20 MB, 7 files kept, `daroyan.log` points to the current file |
 | `agent.log_budget` | `1MB` | The most log data sent per minute, as `512KB` or `2MB`. Each log source gets an equal share. Lines over a share are dropped and counted |
+| `agent.access_logs` | `false` | Send logins, `sudo`, `su` and account changes from the journal as the `access` source. See Access logs |
 | `agent.state_path` | `/var/lib/daroyan` | Holds `server.json`, the server id and token, mode 600 |
 
 ### Docker containers
@@ -187,7 +188,7 @@ Mark a `docker` or `systemd` process with `logs: true`, or list a file under `fi
 - The API reads the rest: nginx, Apache, Caddy, HAProxy, Envoy and Traefik requests; Laravel, PHP, PHP-FPM, Rails, Django, Flask, uvicorn, Spring Boot, Logback and log4j app logs; MySQL, PostgreSQL, MongoDB, Redis, Kafka, RabbitMQ and Elasticsearch; sshd, sudo, cron, UFW, fail2ban and kernel OOM kills; and OpenTelemetry, Elastic ECS, structlog and Docker JSON.
 - Format: by default (`auto`) every reader is tried on each line. Set `format` to read a source with only one family: `plain`, `json`, `logfmt`, `nginx`, `apache`, `caddy`, `haproxy`, `envoy`, `traefik`, `laravel`, `php`, `php-fpm`, `rails`, `python`, `java`, `mysql`, `postgresql`, `mongodb`, `redis`, `kafka`, `rabbitmq`, `elasticsearch` or `system`. `plain` keeps lines as they are. Lines get a `log.format` attribute, and a line the format cannot read is kept with `log.parse_failed: true`. An unknown name logs a warning and falls back to `auto`.
 - A new source starts at its newest line. Read positions live in `log_positions.json` in `agent.state_path`. The agent saves them every 5 seconds and when it stops, so a restart does not lose or repeat lines. If the agent is killed, it can send the lines of the last 5 seconds again.
-- Budget: each source (one `processes` or `files` entry) gets an equal share of `agent.log_budget` every minute. A noisy container cannot use up the share of another service, for example the journal of `sshd`. The agent counts the lines over a share and sends that count.
+- Budget: each source (one `processes` or `files` entry, and the `access` source) gets an equal share of `agent.log_budget` every minute. A noisy container cannot use up the share of another service, for example the journal of `sshd`. The agent counts the lines over a share and sends that count. Successful SSH and console logins, and the lines of the account programs such as `useradd`, do not use the share of the `access` source. They have their own limit, which is the whole `agent.log_budget`. Only root can make these lines, or a person who logged in. So an attacker cannot fill the share with failed SSH logins, or with `sudo` and `su` lines, to hide a later successful login.
 - Memory: the agent holds at most 8 MB of lines that it read but did not process. If the connection is slow, the followers wait and do not read more. Docker and the journal keep the lines until the agent reads them.
 - While the API cannot be reached, the agent keeps up to 10 MB of lines and drops the oldest past that.
 
@@ -198,6 +199,58 @@ sudo setfacl -m u:daroyan:rx /var/www/app/storage/logs
 sudo setfacl -m u:daroyan:r /var/www/app/storage/logs/laravel.log
 sudo setfacl -d -m u:daroyan:r /var/www/app/storage/logs
 ```
+
+## Access logs
+
+The agent can send the logins and the use of root on the server as the `access` source. It does not do this by default. Set `agent.access_logs: true` to turn it on.
+
+Do not turn it on before you read what it sends. The lines include the full command line of each `sudo` command, which can contain a password or a token, for example `sudo mysql -p…`. They also include the user name of each failed SSH login, and people sometimes type a password at the user name prompt. Every person who can sign in to Daroyan can read these lines. The login alert rules need access logs, and they send nothing for a server that does not send them.
+
+The agent runs one `journalctl` process with a match for each of these programs: `sshd`, `sshd-session`, `sshd-auth`, `sudo`, `su`, `login`, `useradd`, `userdel`, `usermod`, `groupadd`, `groupdel`, `groupmod`, `gpasswd`, `passwd` and `chpasswd`. It follows the journal like a `systemd` entry, from a saved cursor. The source starts at the time the agent first runs with it, and it does not read older lines.
+
+Any user can write a journal line that says it comes from `sshd`, for example with `logger -t sshd`. So the agent does not trust the identifier that the program gives. It uses the fields that journald itself adds:
+
+- `_COMM` must be one of the programs above.
+- The program must run as root: `_UID` is `0`. journald reads the user ID from the kernel, as the host sees it, so a program in a user namespace cannot fake it.
+- `sudo`, `su`, `passwd` and `gpasswd` are setuid programs. They run with the user ID of the person who called them, so for these four the agent also accepts a line when `_CAP_EFFECTIVE` is not zero and `_EXE` is that program in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin`. A program in a user namespace has capabilities, but its `_EXE` is the real file, such as `/usr/bin/python3`, so a renamed program fails this check.
+
+One gap stays open for these four programs. A user who can make user and mount namespaces can mount another file over `/usr/bin/sudo` in the namespace, and journald then shows `_EXE` as `/usr/bin/sudo`. That user can write a fake `sudo`, `su`, `passwd` or `gpasswd` line. They cannot write a fake `sshd` or `login` line, because those need `_UID` `0`, and the alert rules read only `sshd` lines. To close the gap, turn off namespaces for normal users with `kernel.apparmor_restrict_unprivileged_userns=1` on Ubuntu or `user.max_user_namespaces=0`.
+
+The agent drops a line that fails either check. It also drops lines that repeat other lines or say nothing about a person, for example `Connection closed by <ip>` before a user name, `Received disconnect` and the PAM session lines of `sudo` and `su`.
+
+The agent reads console logins from `login`. A success is the line `pam_unix(login:session): session opened for user …`, because both the shadow and the util-linux versions of `login` write it. A failure is `FAILED LOGIN (1) on '/dev/tty1' FOR 'root', …` from shadow, or `FAILED LOGIN 1 FROM tty1 FOR root, …` from util-linux. The agent does not read `/var/log/wtmp` or `/var/log/btmp`, because Debian 13 does not write them.
+
+The API adds these attributes to each line it can read:
+
+| Attribute | Value |
+| --- | --- |
+| `event.action` | `ssh_login`, `ssh_logout`, `console_login`, `console_logout`, `sudo`, `su`, `user_add`, `user_delete`, `user_change`, `group_add`, `group_delete` or `password_change` |
+| `event.outcome` | `success` or `failure`. A failure is a warning |
+| `user` | The person who logged in or ran the command |
+| `client.ip`, `client.port` | The address of an SSH client |
+| `ssh.method` | `publickey`, `password` or `keyboard-interactive/pam` |
+| `ssh.key.type`, `ssh.key.fingerprint` | The key of a `publickey` login, for example `ED25519` and `SHA256:…` |
+| `ssh.invalid_user` | `true` when the user name does not exist on the server |
+| `login.tty`, `login.host` | The terminal of a console login, and the remote host when `login` gives one |
+| `sudo.target_user`, `su.target_user` | The user that `sudo` or `su` switched to |
+| `sudo.ambiguous` | `true` when a `sudo` line has more than one `USER=` or `COMMAND=`. The working folder and the command are text that the user chooses, so the API cannot tell which value is real. It then keeps the whole line in `process.command_line` and sets no target user |
+| `user.target.name`, `group.name` | The account or group that was added, changed or deleted |
+
+An SSH user name, and the key ID of an SSH certificate, can contain the words `from` and `port`. The API reads only an IP address that comes before `port <number>` and then the end of the line or `ssh2`. For a successful login, it takes the first one, because the user name is a real account and certificate text comes after `ssh2`. For a failure, it takes the address only when the line has exactly one, and keeps the failure without an address otherwise.
+
+The API keeps the last login from each address on each server in the `access_sources` table. It does not delete these rows with old logs, so it knows an address for longer than `LOG_RETENTION_DAYS`. Each successful SSH login gets `ssh.ip_last_seen`: the time of the login before it from the same address. A first login from an address has no `ssh.ip_last_seen`.
+
+The server page shows the latest access events in the Access section. Failed SSH logins are not listed there, because a public server gets many of them. The section shows how many failed logins came in the last 24 hours.
+
+Three alert rules use these lines:
+
+- Login from a new address: an SSH login from an address that did not log in to the server in the last N days. The rule learns for 24 hours after the first login that Daroyan sees on a server, and sends nothing in that time.
+- Root login: an SSH login as `root`.
+- Login after failed attempts: an SSH login after N or more failed attempts from the same address in a time window. One wrong password writes more than one line, so the API groups the lines by `sshd` process and client port, and counts each password or key that `sshd` rejected once. A `Failed none` line is a probe that asks which methods the server allows, so it does not count.
+
+Each rule makes one alert for each address. The alert closes when no new matching login comes from that address for 15 minutes. The rules read only `sshd` lines that the agent marked as access lines. The API stores these lines with the stream `access`. A line from a source that a user named `access`, for example on an older agent, keeps its own stream, so the API does not trust it.
+
+Access logs need journald. On a server without it, the agent logs this at the start and sends no access logs. The agent does not read `/var/log/auth.log` for access logs, because any user can write a forged line there through syslog.
 
 ## Enrollment
 

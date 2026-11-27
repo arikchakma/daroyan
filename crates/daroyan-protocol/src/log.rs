@@ -8,6 +8,8 @@ pub const SEVERITY_DEBUG: u8 = 5;
 pub const SEVERITY_INFO: u8 = 9;
 pub const SEVERITY_WARN: u8 = 13;
 pub const SEVERITY_ERROR: u8 = 17;
+pub const ACCESS_SERVICE: &str = "access";
+pub const ACCESS_STREAM: &str = "access";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct LogBatch {
@@ -42,6 +44,8 @@ pub struct LogLine {
     pub raw: Option<String>,
     #[serde(default, skip_serializing_if = "LogFormat::is_auto")]
     pub format: LogFormat,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub access: bool,
 }
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]

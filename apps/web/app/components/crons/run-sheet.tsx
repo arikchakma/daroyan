@@ -28,7 +28,7 @@ function formatSecond(value: number | null | undefined) {
   return value === null || value === undefined ? '—' : SECOND_FORMAT.format(new Date(value));
 }
 
-function describeRun(cron: Schemas['Cron'], run: Schemas['CronRun']) {
+function getRunSummary(cron: Schemas['Cron'], run: Schemas['CronRun']) {
   const where = cron.server_name ? ` on ${cron.server_name}` : '';
   const took = run.duration_ms === null || run.duration_ms === undefined ? '' : ` after ${formatRunTime(run.duration_ms)}`;
   switch (run.status) {
@@ -139,7 +139,7 @@ function RunBody(props: RunBodyProps) {
       <div className="flex min-w-0 flex-1 flex-col gap-6 px-10 pt-6 max-lg:px-4">
         <div className="flex flex-wrap items-center gap-3">
           <CronStatusBadge status={run.status} />
-          <p className="text-body text-text-secondary">{describeRun(cron, run)}</p>
+          <p className="text-body text-text-secondary">{getRunSummary(cron, run)}</p>
         </div>
 
         <section className="flex flex-col gap-2.5">

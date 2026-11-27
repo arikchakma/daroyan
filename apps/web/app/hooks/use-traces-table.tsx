@@ -11,7 +11,7 @@ import type { DataTableFeatures } from '~/lib/table';
 import { serverQueries } from '~/queries/servers';
 import { cn } from '~/utils/classname';
 import { formatRowTime } from '~/utils/format';
-import { describeSpans, formatMicros, getServiceColor, getTraceLink, getTraceStatus } from '~/utils/traces';
+import { formatMicros, getServiceColor, getSpansSummary, getTraceLink, getTraceStatus } from '~/utils/traces';
 import type { TraceSummary } from '~/utils/traces';
 
 type TraceRow = TraceSummary & { id: string };
@@ -76,7 +76,7 @@ const columns = helper.columns([
     id: 'spans',
     header: 'Spans',
     meta: { hideBelow: 'md' },
-    cell: ({ row }) => <span className="block truncate text-caption font-medium">{describeSpans(row.original)}</span>,
+    cell: ({ row }) => <span className="block truncate text-caption font-medium">{getSpansSummary(row.original)}</span>,
   }),
   helper.display({
     id: 'status',

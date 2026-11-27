@@ -1,4 +1,4 @@
-import { describeRequest } from '~/hooks/use-logs-table';
+import { getRequestSummary } from '~/hooks/use-logs-table';
 import type { LogRow } from '~/hooks/use-logs-table';
 import { DAY_MS, formatBytes, formatClock, formatDate, HOUR_MS, pluralize } from '~/utils/format';
 import { getTimeRanges } from '~/utils/time-range';
@@ -42,7 +42,7 @@ export function getLogRecord(line: LogRow) {
 export function getLogAlertLink(line: LogRow) {
   const params = new URLSearchParams({ logService: line.service, logLevel: line.level === 'warn' ? 'warn' : 'error' });
   const text = line.message.split('\n')[0]?.trim() ?? '';
-  if (!describeRequest(line) && text) {
+  if (!getRequestSummary(line) && text) {
     params.set('logText', text.slice(0, 120));
   }
 

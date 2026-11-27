@@ -27,7 +27,7 @@ import { queryClient } from '~/lib/query-client';
 import { toast } from '~/lib/toast';
 import { alertRuleQueries } from '~/queries/alerts';
 import { cronQueries, deleteCronOptions, toCronInput, updateCronOptions } from '~/queries/crons';
-import { describeSchedule, formatRunTime, formatSecs, getPingUrl } from '~/utils/crons';
+import { formatRunTime, formatSecs, getPingUrl, getScheduleText } from '~/utils/crons';
 import { DAY_MS, formatClock, formatRelative } from '~/utils/format';
 import { formatUptime } from '~/utils/uptime';
 
@@ -82,7 +82,7 @@ export function CronBody(props: CronBodyProps) {
   const isOverdue =
     !cron.paused && cron.status !== 'running' && !!cron.next_expected_at && cron.next_expected_at <= Date.now();
   const subtitle = [
-    describeSchedule(cron),
+    getScheduleText(cron),
     cron.schedule_kind === 'cron' && cron.time_zone,
     cron.server_name,
     `${formatSecs(cron.grace_secs).replace(/s$/, '')} grace`,
@@ -198,7 +198,7 @@ export function CronBody(props: CronBodyProps) {
                 <RunCharts points={details?.points ?? []} to={dataUpdatedAt || Date.now()} />
               </DetailSection>
 
-              <DetailSection title="Recent Runs" summary={describeSchedule(cron)}>
+              <DetailSection title="Recent Runs" summary={getScheduleText(cron)}>
                 <DetailCard>
                   {recent.length > 0 ? (
                     <RecentRunsTable runs={recent} serverName={cron.server_name} onOpen={setOpenRun} />

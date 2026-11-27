@@ -1,3 +1,4 @@
+mod access;
 mod app;
 mod database;
 mod http;
@@ -9,6 +10,8 @@ mod system;
 use daroyan_protocol::log::LogFormat;
 use serde_json::{Map, Value};
 
+pub(crate) use access::SSH_PROCESSES;
+use access::{read_account, read_console, read_ssh, read_su, read_sudo};
 use app::{
     read_elasticsearch, read_flask, read_level_and_logger, read_python,
     read_python_dashes, read_python_traceback, read_rails, read_spring,
@@ -22,9 +25,7 @@ pub use json::{normalize_json_line, take_json_time};
 use json::{read_fields, split_logfmt};
 use php::{read_laravel, read_php_error, read_php_fpm};
 use prefix::{strip_prefixes, take_bracket_date};
-use system::{
-    read_cron, read_fail2ban, read_oom_kill, read_ssh_failure, read_sudo, read_ufw,
-};
+use system::{read_cron, read_fail2ban, read_oom_kill, read_ufw};
 
 const SEVERITY_DEBUG: u8 = 5;
 const SEVERITY_INFO: u8 = 9;
@@ -42,6 +43,20 @@ pub struct ParsedLine {
     pub severity: Option<u8>,
     pub message: String,
     pub attributes: Map<String, Value>,
+}
+
+impl ParsedLine {
+    fn insert(&mut self, key: &str, value: impl Into<Value>) {
+        self.attributes.insert(key.into(), value.into());
+    }
+
+    fn process_name(&self) -> Option<&str> {
+        self.attributes.get("process.name").and_then(Value::as_str)
+    }
+
+    fn raise_to_warn(&mut self) {
+        self.severity = Some(self.severity.unwrap_or(SEVERITY_WARN).max(SEVERITY_WARN));
+    }
 }
 
 pub(crate) fn read_level_word(word: &str) -> Option<u8> {
@@ -201,8 +216,11 @@ pub fn parse_text_line(text: &str, format: LogFormat) -> ParsedLine {
     let mut message = matched.map_or(body, |(message, _)| message);
     if matches!(format, LogFormat::Auto | LogFormat::System) {
         message = read_ufw(&message, &mut parsed).unwrap_or(message);
-        read_ssh_failure(&message, &mut parsed);
+        read_ssh(&message, &mut parsed);
         read_sudo(&message, &mut parsed);
+        read_su(&message, &mut parsed);
+        read_console(&message, &mut parsed);
+        read_account(&message, &mut parsed);
         read_cron(&message, &mut parsed);
         read_oom_kill(&message, &mut parsed);
     }
@@ -210,7 +228,9 @@ pub fn parse_text_line(text: &str, format: LogFormat) -> ParsedLine {
         read_postgres_duration(&message, &mut parsed);
     }
     if PREFIX_FORMATS.contains(&format)
-        && (parsed.severity.is_some() || parsed.at.is_some())
+        && (parsed.severity.is_some()
+            || parsed.at.is_some()
+            || parsed.process_name().is_some())
     {
         found = found.or(Some(format));
     }

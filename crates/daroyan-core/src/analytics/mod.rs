@@ -1,3 +1,4 @@
+pub mod access;
 pub mod archive;
 pub mod cron_runs;
 pub mod log_lines;
@@ -368,9 +369,13 @@ impl Analytics {
                 append_states(conn, &pending.states)?;
                 append_disks(conn, &pending.disks)?;
                 append_events(conn, &pending.events)?;
+                append_spans(conn, &pending.spans, &pending.exceptions)?;
+
+                let transaction = conn.unchecked_transaction()?;
+                access::remember_logins(conn, &mut pending.logs)?;
                 append_logs(conn, &pending.logs, Utc::now().timestamp_millis())?;
                 append_volume(conn, &pending.logs)?;
-                append_spans(conn, &pending.spans, &pending.exceptions)
+                transaction.commit()
             })
             .await;
 
@@ -570,6 +575,7 @@ impl Analytics {
                 [OTLP_SERVER_ID, &server_id],
             )?;
             conn.execute("DELETE FROM log_lines WHERE server_id = ?", [&server_id])?;
+            conn.execute("DELETE FROM access_sources WHERE server_id = ?", [&server_id])?;
             conn.execute(
                 "UPDATE spans SET server_id = NULL WHERE server_id = ?",
                 [&server_id],

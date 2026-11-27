@@ -44,7 +44,7 @@ export function getBrowserTimeZone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-function describeDays(days: number[]) {
+function getDaysLabel(days: number[]) {
   const sorted = [...days].sort();
   if (sorted.length === 7) {
     return 'Daily';
@@ -58,8 +58,8 @@ function describeDays(days: number[]) {
   return sorted.map((day) => WEEKDAYS[day]).join(', ');
 }
 
-export function describeQuietWindows(windows: QuietWindow[], timeZone: string) {
-  const parts = windows.map((window) => `${describeDays(window.days)}, ${window.from} to ${window.to}`);
+export function getQuietWindowsText(windows: QuietWindow[], timeZone: string) {
+  const parts = windows.map((window) => `${getDaysLabel(window.days)}, ${window.from} to ${window.to}`);
   return `${parts.join('; ')} ${getCity(timeZone)} time`;
 }
 
@@ -89,7 +89,7 @@ export function QuietHoursField(props: QuietHoursFieldProps) {
         />
       ))}
       <p className="text-body text-text-secondary">
-        {describeQuietWindows(windows, timeZone)}. Alerts still fire and show in Daroyan, but no messages go out.
+        {getQuietWindowsText(windows, timeZone)}. Alerts still fire and show in Daroyan, but no messages go out.
       </p>
     </div>
   );

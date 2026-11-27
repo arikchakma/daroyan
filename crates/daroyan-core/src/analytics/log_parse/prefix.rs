@@ -82,6 +82,59 @@ pub(super) fn take_syslog_header(text: &str, parsed: &mut ParsedLine) -> Option<
     Some(5)
 }
 
+fn is_tag(token: &str, needs_pid: bool) -> bool {
+    let Some(tag) = token.strip_suffix(':') else {
+        return false;
+    };
+    let (name, pid) = match tag.split_once('[') {
+        Some((name, pid)) => (name, pid.strip_suffix(']').filter(|pid| is_digits(pid))),
+        None => (tag, None),
+    };
+    let is_name = !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte));
+
+    is_name && (pid.is_some() || (!needs_pid && !tag.contains('[')))
+}
+
+fn is_host(token: &str) -> bool {
+    token
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
+        && read_level_word(token).is_none()
+}
+
+pub(super) fn take_iso_syslog_header(
+    text: &str,
+    parsed: &mut ParsedLine,
+) -> Option<usize> {
+    let mut tokens = text.split_whitespace();
+    let (Some(time), Some(host), Some(tag)) =
+        (tokens.next(), tokens.next(), tokens.next())
+    else {
+        return None;
+    };
+    if !is_host(host) || !is_tag(tag, false) {
+        return None;
+    }
+    let time = DateTime::parse_from_rfc3339(time).ok()?;
+
+    parsed.at = Some(time.timestamp_millis());
+    read_process(tag.trim_end_matches(':'), parsed);
+    Some(3)
+}
+
+pub(super) fn take_syslog_tag(text: &str, parsed: &mut ParsedLine) -> Option<usize> {
+    if parsed.process_name().is_some() {
+        return None;
+    }
+    let tag = text.split_whitespace().next().filter(|tag| is_tag(tag, true))?;
+
+    read_process(tag.trim_end_matches(':'), parsed);
+    Some(1)
+}
+
 pub(super) fn read_process(token: &str, parsed: &mut ParsedLine) {
     match token.split_once('[') {
         Some((name, pid)) => {
@@ -253,9 +306,11 @@ pub(super) fn strip_prefixes(text: &str, parsed: &mut ParsedLine) -> String {
         rest = rest[end..].trim_start().to_string();
     }
     for _ in 0..8 {
-        if let Some(count) = take_iso_timestamp(&rest, parsed)
+        if let Some(count) = take_iso_syslog_header(&rest, parsed)
+            .or_else(|| take_iso_timestamp(&rest, parsed))
             .or_else(|| take_clock(&rest, after_time))
             .or_else(|| take_syslog_header(&rest, parsed))
+            .or_else(|| take_syslog_tag(&rest, parsed))
             .or_else(|| take_redis_header(&rest, parsed))
             .or_else(|| take_glog_header(&rest, parsed))
         {

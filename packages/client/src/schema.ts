@@ -951,6 +951,22 @@ export interface paths {
         patch: operations["rename_server"];
         trace?: never;
     };
+    "/v1/servers/{server_id}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_server_access"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/servers/{server_id}/commands": {
         parameters: {
             query?: never;
@@ -1275,6 +1291,27 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AccessEvent: {
+            action: string;
+            /** Format: int64 */
+            at: number;
+            command?: string | null;
+            fingerprint?: string | null;
+            group?: string | null;
+            ip?: string | null;
+            /** Format: int64 */
+            ip_last_seen?: number | null;
+            method?: string | null;
+            outcome: string;
+            target?: string | null;
+            tty?: string | null;
+            user?: string | null;
+        };
+        AccessView: {
+            events: components["schemas"]["AccessEvent"][];
+            /** Format: int64 */
+            failed_logins: number;
+        };
         /** @enum {string} */
         ActionName: "start_process" | "stop_process" | "restart_process";
         /** @enum {string} */
@@ -1512,6 +1549,21 @@ export interface components {
             route?: string | null;
             service?: string | null;
             spans?: components["schemas"]["TraceSpans"];
+            /** Format: int32 */
+            within_secs: number;
+        } | {
+            /** Format: int32 */
+            days: number;
+            /** @enum {string} */
+            kind: "login_new_ip";
+        } | {
+            /** @enum {string} */
+            kind: "login_root";
+        } | {
+            /** Format: int32 */
+            failures: number;
+            /** @enum {string} */
+            kind: "login_after_failures";
             /** Format: int32 */
             within_secs: number;
         } | {
@@ -4628,6 +4680,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServerDetail"];
+                };
+            };
+        };
+    };
+    get_server_access: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessView"];
                 };
             };
         };

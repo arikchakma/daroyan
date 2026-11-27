@@ -266,6 +266,8 @@ pub struct Agent {
     pub state_path: PathBuf,
     #[serde(default = "default_log_budget", deserialize_with = "deserialize_size")]
     pub log_budget: u64,
+    #[serde(default)]
+    pub access_logs: bool,
 }
 
 impl TryFrom<RawProcessCheck> for ProcessCheck {
@@ -350,6 +352,7 @@ impl Default for Agent {
             log_path: default_log_path(),
             state_path: default_state_path(),
             log_budget: default_log_budget(),
+            access_logs: false,
         }
     }
 }

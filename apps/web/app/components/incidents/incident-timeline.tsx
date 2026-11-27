@@ -84,7 +84,7 @@ function TimelineEntry(props: TimelineEntryProps) {
       </span>
       <div className={cn('flex min-w-0 flex-1 flex-col gap-1.5', isAutomatic ? 'pb-3.5' : 'pb-5')}>
         {isAutomatic ? (
-          <p className="pt-px text-small text-text-secondary">{describeAutomatic(update)}</p>
+          <p className="pt-px text-small text-text-secondary">{getAutomaticUpdateText(update)}</p>
         ) : (
           <div className={cn('flex flex-col gap-1.5', isNote && 'rounded-xl bg-highlight-note px-3 py-2.5')}>
             <div className="flex min-w-0 items-center gap-1.5">
@@ -124,7 +124,7 @@ function TimelineEntry(props: TimelineEntryProps) {
   );
 }
 
-function describeAutomatic(update: IncidentUpdate) {
+function getAutomaticUpdateText(update: IncidentUpdate) {
   const text = toPlainText(toDocument(update.body)).trim();
   const name = update.creator?.name;
   if (!name || text.includes(name)) {

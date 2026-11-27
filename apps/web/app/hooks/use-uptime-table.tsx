@@ -13,7 +13,7 @@ import { resolveUpdater } from '~/lib/table';
 import type { DataTableFeatures } from '~/lib/table';
 import { cn } from '~/utils/classname';
 import { formatDate, formatRelative } from '~/utils/format';
-import { describeTarget, formatEvery, formatMs, formatUptime } from '~/utils/uptime';
+import { formatEvery, formatMs, formatUptime, getCheckTarget } from '~/utils/uptime';
 
 type UptimeCheck = Schemas['UptimeCheck'];
 
@@ -50,7 +50,7 @@ export function useUptimeTable(options: UseUptimeTableOptions) {
                 {row.original.name}
               </Link>
               <span className="truncate font-mono text-code-small text-text-tertiary">
-                {describeTarget(row.original)}
+                {getCheckTarget(row.original)}
               </span>
             </span>
           ),

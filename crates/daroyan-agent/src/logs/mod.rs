@@ -1,3 +1,4 @@
+mod access;
 mod docker;
 mod file;
 mod follow;
@@ -10,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use daroyan_protocol::log::{LogBatch, LogDrop, LogFormat, LogLine};
-use log::warn;
+use daroyan_protocol::log::{ACCESS_SERVICE, LogBatch, LogDrop, LogFormat, LogLine};
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 
@@ -20,7 +21,7 @@ use crate::config::{Config, DockerTarget, Source};
 use crate::logs::docker::{DockerLogs, DockerSource};
 use crate::logs::file::FilePosition;
 use crate::logs::follow::{FollowedLine, LineQueue, Position};
-use crate::logs::journal::{JournalSource, follow_units, start_position};
+use crate::logs::journal::{Journal, JournalSource, follow_units, start_position};
 use crate::logs::parse::{RawLine, to_log_line};
 
 pub use crate::logs::follow::LogFollowers;
@@ -38,9 +39,19 @@ struct LogSource {
     kind: SourceKind,
 }
 
+impl LogSource {
+    fn is_access(&self) -> bool {
+        matches!(self.kind, SourceKind::Journal { journal: Journal::Access })
+    }
+
+    fn is_vital(&self, line: &RawLine) -> bool {
+        self.is_access() && access::is_vital(&line.text)
+    }
+}
+
 enum SourceKind {
     Docker { target: DockerTarget },
-    Journal { unit: String },
+    Journal { journal: Journal },
     File { path: PathBuf },
 }
 
@@ -76,6 +87,7 @@ impl Positions {
 
 struct Budget {
     limit: u64,
+    vital_used: u64,
     used: Vec<u64>,
     dropped: Vec<u64>,
     window_start: Instant,
@@ -85,6 +97,7 @@ impl Budget {
     fn new(limit: u64, sources: usize) -> Self {
         Self {
             limit,
+            vital_used: 0,
             used: vec![0; sources.max(1)],
             dropped: vec![0; sources.max(1)],
             window_start: Instant::now(),
@@ -112,10 +125,33 @@ impl Budget {
         true
     }
 
-    fn admit(&mut self, lines: Vec<(usize, RawLine)>) -> Vec<(usize, RawLine)> {
+    fn allow_vital(&mut self, source: usize, line: &RawLine) -> bool {
+        let size = line.text.len() as u64 + LINE_OVERHEAD;
+        if self.vital_used + size > self.limit {
+            if let Some(dropped) = self.dropped.get_mut(source) {
+                *dropped += 1;
+            }
+            return false;
+        }
+
+        self.vital_used += size;
+        true
+    }
+
+    fn admit(
+        &mut self,
+        lines: Vec<(usize, RawLine)>,
+        is_vital: impl Fn(usize, &RawLine) -> bool,
+    ) -> Vec<(usize, RawLine)> {
         lines
             .into_iter()
-            .filter(|(source, line)| self.allow(*source, line))
+            .filter(|(source, line)| {
+                if is_vital(*source, line) {
+                    self.allow_vital(*source, line)
+                } else {
+                    self.allow(*source, line)
+                }
+            })
             .collect()
     }
 
@@ -125,6 +161,7 @@ impl Budget {
         }
 
         self.window_start = now;
+        self.vital_used = 0;
         self.used.fill(0);
         self.take_dropped()
     }
@@ -318,7 +355,9 @@ fn list_sources(config: &Config) -> Vec<LogSource> {
         let settings = check.logs.as_ref()?;
         let kind = match &check.source {
             Source::Docker(target) => SourceKind::Docker { target: target.clone() },
-            Source::Systemd(unit) => SourceKind::Journal { unit: unit.clone() },
+            Source::Systemd(unit) => {
+                SourceKind::Journal { journal: Journal::Unit(unit.clone()) }
+            }
             Source::Process(_) => return None,
         };
         Some(LogSource {
@@ -332,7 +371,36 @@ fn list_sources(config: &Config) -> Vec<LogSource> {
         format: resolve_format(&file.name, file.format.as_deref()),
         kind: SourceKind::File { path: file.path.clone() },
     });
-    processes.chain(files).collect()
+
+    processes.chain(files).chain(access_source(config)).collect()
+}
+
+fn access_source(config: &Config) -> Option<LogSource> {
+    if !config.agent.access_logs {
+        return None;
+    }
+    let is_taken = config
+        .processes
+        .iter()
+        .map(|check| &check.name)
+        .chain(config.files.iter().map(|file| &file.name))
+        .any(|name| name == ACCESS_SERVICE);
+    if is_taken {
+        warn!(
+            "another log source is named {ACCESS_SERVICE}, so access logs are off. Rename it to turn them on"
+        );
+        return None;
+    }
+    if !access::has_journal() {
+        info!("access logs need journald, which this server does not run");
+        return None;
+    }
+
+    Some(LogSource {
+        name: ACCESS_SERVICE.to_string(),
+        format: LogFormat::System,
+        kind: SourceKind::Journal { journal: Journal::Access },
+    })
 }
 
 fn read_source(
@@ -388,12 +456,12 @@ pub fn collect_logs(
         .iter()
         .enumerate()
         .filter_map(|(index, source)| match &source.kind {
-            SourceKind::Journal { unit } => Some(JournalSource {
+            SourceKind::Journal { journal } => Some(JournalSource {
                 source: index,
-                unit: unit.clone(),
+                journal: journal.clone(),
                 from: positions
                     .journal
-                    .entry(unit.clone())
+                    .entry(journal.key().to_string())
                     .or_insert_with(|| start_position(unix_now().as_secs()))
                     .clone(),
             }),
@@ -438,7 +506,7 @@ pub fn collect_logs(
         }
 
         let mut over = budget.roll(now);
-        let ready = budget.admit(ready);
+        let ready = budget.admit(ready, |index, line| sources[index].is_vital(line));
         if is_stopping {
             over.extend(budget.take_dropped());
         }
@@ -453,7 +521,11 @@ pub fn collect_logs(
         let lines: Vec<LogLine> = ready
             .into_iter()
             .map(|(index, raw)| {
-                to_log_line(&sources[index].name, sources[index].format, raw)
+                let source = &sources[index];
+                LogLine {
+                    access: source.is_access(),
+                    ..to_log_line(&source.name, source.format, raw)
+                }
             })
             .collect();
         if (!lines.is_empty() || !over_budget.is_empty())
@@ -555,13 +627,15 @@ fn commit_position(
                 .or_default();
             *position = (*position).max(newest);
         }
-        SourceKind::Journal { unit } => {
+        SourceKind::Journal { journal } => {
             let cursor = emitted.iter().rev().find_map(|line| match &line.position {
                 Some(Position::Cursor(cursor)) => Some(cursor),
                 _ => None,
             });
             if let Some(cursor) = cursor {
-                positions.journal.insert(unit.clone(), cursor.to_string());
+                positions
+                    .journal
+                    .insert(journal.key().to_string(), cursor.to_string());
             }
         }
         SourceKind::File { .. } => {}
@@ -586,11 +660,11 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        BUDGET_WINDOW, Budget, FollowedLine, Held, IDLE_FLUSH, LogSource, Position,
-        Positions, RawLine, SourceKind, flush_held, join_continuations, resolve_format,
-        take_ready_lines, take_streamed,
+        BUDGET_WINDOW, Budget, FollowedLine, Held, IDLE_FLUSH, Journal, LogSource,
+        Position, Positions, RawLine, SourceKind, access_source, flush_held,
+        join_continuations, resolve_format, take_ready_lines, take_streamed,
     };
-    use crate::config::DockerTarget;
+    use crate::config::{DockerTarget, parse_config};
 
     fn raw(stream: LogStream, text: &str) -> RawLine {
         RawLine {
@@ -600,6 +674,19 @@ mod tests {
             severity: None,
             position: None,
         }
+    }
+
+    #[test]
+    fn sends_access_logs_only_when_turned_on() {
+        let default = parse_config("").unwrap();
+        assert!(!default.agent.access_logs);
+        assert!(access_source(&default).is_none());
+
+        let taken = parse_config(
+            "agent:\n  access_logs: true\nfiles:\n  - name: access\n    path: /var/log/nginx/access.log\n",
+        )
+        .unwrap();
+        assert!(access_source(&taken).is_none());
     }
 
     #[test]
@@ -831,9 +918,20 @@ mod tests {
             })
             .collect();
 
-        let kept = budget.admit(lines);
+        let kept = budget.admit(lines, |_, _| false);
         assert_eq!(kept.len(), 2);
         assert_eq!(budget.take_dropped(), [(0, 3)]);
+    }
+
+    #[test]
+    fn keeps_vital_lines_past_the_share_up_to_the_whole_budget() {
+        let mut budget = Budget::new(400, 2);
+        let line = || raw(LogStream::Stdout, &"x".repeat(36));
+        let lines = (0..6).map(|_| (0, line())).collect();
+
+        assert_eq!(budget.admit(lines, |_, _| true).len(), 4);
+        assert_eq!(budget.take_dropped(), [(0, 2)]);
+        assert!(budget.allow(0, &line()));
     }
 
     #[test]
@@ -843,7 +941,7 @@ mod tests {
         let flood = (0..5).map(|_| (1, line())).collect();
         let started = budget.window_start;
 
-        assert_eq!(budget.admit(flood).len(), 2);
+        assert_eq!(budget.admit(flood, |_, _| false).len(), 2);
         assert!(budget.roll(started + Duration::from_secs(30)).is_empty());
         assert_eq!(budget.roll(started + BUDGET_WINDOW), [(1, 3)]);
         assert!(budget.allow(1, &line()));
@@ -856,11 +954,11 @@ mod tests {
         let line = |text: &str| raw(LogStream::Stdout, &text.repeat(36));
 
         let flood = (0..20).map(|_| (0, line("x"))).collect();
-        assert_eq!(budget.admit(flood).len(), 5);
+        assert_eq!(budget.admit(flood, |_, _| false).len(), 5);
         assert_eq!(budget.take_dropped(), [(0, 15)]);
 
         let quiet = (0..5).map(|_| (1, line("y"))).collect();
-        assert_eq!(budget.admit(quiet).len(), 5);
+        assert_eq!(budget.admit(quiet, |_, _| false).len(), 5);
         assert!(budget.take_dropped().is_empty());
         assert!(!budget.allow(1, &line("y")));
     }
@@ -878,7 +976,9 @@ mod tests {
             LogSource {
                 name: "nginx".to_string(),
                 format: LogFormat::Auto,
-                kind: SourceKind::Journal { unit: "nginx.service".to_string() },
+                kind: SourceKind::Journal {
+                    journal: Journal::Unit("nginx.service".to_string()),
+                },
             },
         ];
         let lines =

@@ -1,24 +1,6 @@
 use serde_json::Value;
 
-use super::{ParsedLine, SEVERITY_ERROR, SEVERITY_WARN, read_level_word};
-
-pub(super) fn read_ssh_failure(text: &str, parsed: &mut ParsedLine) {
-    let Some(after) = text.split_once("Failed password for ").map(|(_, after)| after)
-    else {
-        return;
-    };
-    let after = after.strip_prefix("invalid user ").unwrap_or(after);
-    if let Some(user) = after.split_whitespace().next() {
-        parsed.attributes.insert("user".into(), Value::from(user));
-    }
-    if let Some(ip) = after
-        .split_once(" from ")
-        .and_then(|(_, rest)| rest.split_whitespace().next())
-    {
-        parsed.attributes.insert("client.ip".into(), Value::from(ip));
-    }
-    parsed.severity = Some(parsed.severity.unwrap_or(SEVERITY_WARN).max(SEVERITY_WARN));
-}
+use super::{ParsedLine, SEVERITY_ERROR, read_level_word};
 
 pub(super) fn read_oom_kill(text: &str, parsed: &mut ParsedLine) {
     let Some((_, after)) = text.split_once("Killed process ") else {
@@ -37,51 +19,8 @@ pub(super) fn read_oom_kill(text: &str, parsed: &mut ParsedLine) {
     parsed.severity = Some(SEVERITY_ERROR);
 }
 
-fn process_name(parsed: &ParsedLine) -> &str {
-    parsed
-        .attributes
-        .get("process.name")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-}
-
-fn raise_to_warn(parsed: &mut ParsedLine) {
-    parsed.severity = Some(parsed.severity.unwrap_or(SEVERITY_WARN).max(SEVERITY_WARN));
-}
-
-pub(super) fn read_sudo(text: &str, parsed: &mut ParsedLine) {
-    if process_name(parsed) != "sudo" {
-        return;
-    }
-    let Some((user, fields)) = text.split_once(" : ") else {
-        return;
-    };
-    parsed.attributes.insert("user".into(), Value::from(user.trim()));
-    for field in fields.split(" ; ") {
-        match field.trim().split_once('=') {
-            Some(("USER", target)) => {
-                parsed
-                    .attributes
-                    .insert("sudo.target_user".into(), Value::from(target));
-            }
-            Some(("TTY", tty)) => {
-                parsed.attributes.insert("sudo.tty".into(), Value::from(tty));
-            }
-            Some(("COMMAND", command)) => {
-                parsed
-                    .attributes
-                    .insert("process.command_line".into(), Value::from(command));
-            }
-            _ => {}
-        }
-    }
-    if fields.contains("incorrect password") || fields.contains("NOT in sudoers") {
-        raise_to_warn(parsed);
-    }
-}
-
 pub(super) fn read_cron(text: &str, parsed: &mut ParsedLine) {
-    if !matches!(process_name(parsed), "CRON" | "cron" | "crond") {
+    if !matches!(parsed.process_name(), Some("CRON" | "cron" | "crond")) {
         return;
     }
     let Some((user, rest)) =
@@ -163,7 +102,7 @@ pub(super) fn read_fail2ban(text: &str, parsed: &mut ParsedLine) -> Option<Strin
         parsed.attributes.insert("fail2ban.action".into(), Value::from(verb));
         parsed.attributes.insert("client.ip".into(), Value::from(ip));
         if verb == "Ban" {
-            raise_to_warn(parsed);
+            parsed.raise_to_warn();
         }
     }
     Some(rest.to_string())

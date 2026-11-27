@@ -9,7 +9,7 @@ import type { DataTableFeatures } from '~/lib/table';
 import { formatEventTime } from '~/utils/format';
 import { formatMs } from '~/utils/uptime';
 
-function describeTimings(result: Schemas['UptimeResult']) {
+function getTimings(result: Schemas['UptimeResult']) {
   return [
     ['DNS', result.dns_ms],
     ['Connect', result.connect_ms],
@@ -53,7 +53,7 @@ export function RecentChecksTable(props: RecentChecksTableProps) {
             row.original.error ? (
               <span className="block truncate text-text-secondary">{row.original.error}</span>
             ) : (
-              <span className="block truncate text-text-tertiary">{describeTimings(row.original)}</span>
+              <span className="block truncate text-text-tertiary">{getTimings(row.original)}</span>
             ),
         }),
         resultHelper.accessor('code', {

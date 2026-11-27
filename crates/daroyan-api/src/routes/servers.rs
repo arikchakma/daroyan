@@ -2,6 +2,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use chrono::Utc;
+use daroyan_core::analytics::access::{AccessView, read_access};
 use daroyan_core::analytics::server_events::{EventItem, list_recent_events};
 use daroyan_core::analytics::server_states::{MetricPoint, list_metric_points};
 use daroyan_core::db::entities::servers::Model as Server;
@@ -19,6 +20,7 @@ use crate::views::server::{ServerDetailView, ServerItemView};
 const CHART_POINTS: i64 = 120;
 const MIN_BUCKET_MS: i64 = 10_000;
 const EVENT_LIMIT: u32 = 50;
+const ACCESS_LIMIT: u32 = 50;
 const MAX_NAME_LENGTH: usize = 100;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -28,6 +30,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(star_server))
         .routes(routes!(get_server_metrics))
         .routes(routes!(list_server_events))
+        .routes(routes!(get_server_access))
 }
 
 pub async fn find_server(state: &AppState, server_id: &ServerId) -> Result<Server> {
@@ -224,4 +227,22 @@ async fn list_server_events(
 ) -> Result<Json<Vec<EventItem>>> {
     find_server(&state, &server_id).await?;
     Ok(Json(list_recent_events(&state.analytics, &server_id, EVENT_LIMIT).await?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/servers/{server_id}/access",
+    params(("server_id" = String, Path)),
+    responses((status = 200, body = AccessView))
+)]
+async fn get_server_access(
+    State(state): State<AppState>,
+    _user: CurrentUser,
+    Path(server_id): Path<ServerId>,
+) -> Result<Json<AccessView>> {
+    find_server(&state, &server_id).await?;
+    let now = Utc::now().timestamp_millis();
+    Ok(Json(
+        read_access(&state.analytics, server_id.to_string(), now, ACCESS_LIMIT).await?,
+    ))
 }

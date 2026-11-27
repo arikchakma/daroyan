@@ -5,10 +5,12 @@ use daroyan_protocol::host::Host;
 use duckdb::params;
 
 use crate::alerts::evaluate::{Level, make_trace_reading, rate};
+use crate::alerts::logins::{LOGIN_WINDOW_MS, LoginHit, find_login_hits};
 use crate::alerts::rules::{
     Condition, MAX_METRIC_GROUPS, Scope, Target, TraceRule, read_log_severity,
 };
 use crate::analytics::Analytics;
+use crate::analytics::access::Since;
 use crate::analytics::log_lines::{
     LogMatch, OTLP_SERVER_ID, OTLP_SERVER_NAME, count_logs_by_source, list_busy_windows,
 };
@@ -72,6 +74,12 @@ pub async fn backtest_rule(
         query.since = since;
         let window_ms = i64::from(*within_secs) * 1000;
         return Ok(Some(backtest_metric(analytics, condition, query, window_ms).await?));
+    }
+
+    if let Some(rule) = condition.login_rule() {
+        let servers = database.list_servers().await?;
+        let hits = find_login_hits(analytics, rule, Since::Logged(since)).await?;
+        return Ok(Some(to_login_hits(hits, scope, &servers)));
     }
 
     if matches!(
@@ -156,6 +164,60 @@ pub async fn backtest_rule(
     hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
     hits.truncate(MAX_HITS);
     Ok(Some(hits))
+}
+
+fn keep_opening_hits(hits: Vec<LoginHit>) -> Vec<LoginHit> {
+    let mut latest: HashMap<(&str, &str), i64> = HashMap::new();
+    let opens: Vec<bool> = hits
+        .iter()
+        .map(|hit| {
+            let previous = latest.insert((&hit.server_id, &hit.ip), hit.at);
+            previous.is_none_or(|at| hit.at - at >= LOGIN_WINDOW_MS)
+        })
+        .collect();
+
+    hits.into_iter()
+        .zip(opens)
+        .filter_map(|(hit, opens)| opens.then_some(hit))
+        .collect()
+}
+
+fn to_login_hits(
+    hits: Vec<LoginHit>,
+    scope: &Scope,
+    servers: &[Server],
+) -> Vec<BacktestHit> {
+    let names: HashMap<&str, &str> = servers
+        .iter()
+        .filter(|server| {
+            let labels: Vec<String> =
+                serde_json::from_value(server.labels.clone()).unwrap_or_default();
+            scope.includes(&server.id, &labels)
+        })
+        .map(|server| (server.id.as_str(), server.name.as_str()))
+        .collect();
+
+    let in_scope = hits
+        .into_iter()
+        .filter(|hit| names.contains_key(hit.server_id.as_str()))
+        .collect();
+    let mut found: Vec<BacktestHit> = keep_opening_hits(in_scope)
+        .into_iter()
+        .filter_map(|hit| {
+            let name = names.get(hit.server_id.as_str())?;
+            Some(BacktestHit {
+                server_id: hit.server_id,
+                server_name: name.to_string(),
+                subject: hit.ip,
+                value: hit.label,
+                at: hit.at,
+            })
+        })
+        .collect();
+
+    found.sort_by_key(|hit| std::cmp::Reverse(hit.at));
+    found.truncate(MAX_HITS);
+    found
 }
 
 async fn backtest_logs(
@@ -431,6 +493,21 @@ fn find_gaps(times: &[i64], for_ms: i64) -> Vec<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_one_hit_while_logins_keep_the_alert_open() {
+        let hit = |minute: i64| LoginHit {
+            server_id: "srv_1".to_string(),
+            ip: "203.0.113.7".to_string(),
+            at: minute * 60_000,
+            label: String::new(),
+        };
+        let hits = vec![hit(0), hit(10), hit(20), hit(30), hit(50)];
+
+        let opened: Vec<i64> =
+            keep_opening_hits(hits).iter().map(|hit| hit.at / 60_000).collect();
+        assert_eq!(opened, [0, 50]);
+    }
 
     fn make_samples(values: &[(i64, f64)]) -> Vec<Sample> {
         values

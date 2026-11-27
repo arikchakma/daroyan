@@ -53,7 +53,7 @@ export function formatSecs(secs: number) {
   return formatUnit(secs / size, unit);
 }
 
-export function describeSchedule(cron: Pick<Schemas['Cron'], 'schedule_kind' | 'expression' | 'interval_secs'>) {
+export function getScheduleText(cron: Pick<Schemas['Cron'], 'schedule_kind' | 'expression' | 'interval_secs'>) {
   return cron.schedule_kind === 'every' ? `every ${formatSecs(cron.interval_secs ?? 0)}` : (cron.expression ?? '');
 }
 
