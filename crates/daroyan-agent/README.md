@@ -204,15 +204,7 @@ sudo setfacl -d -m u:daroyan:r /var/www/app/storage/logs
 
 The agent can send the logins and the use of root on the server as the `access` source. It does not do this by default. Set `agent.access_logs: true` to turn it on.
 
-Do not turn it on before you read what it sends. The lines include the full command line of each `sudo` command. Before a line leaves the server, the agent replaces the secrets that it knows with `[REDACTED]` and keeps the rest of the command. The API does the same again, for lines from older agents. The agent masks:
-
-- The value after a flag or a variable whose name contains `password`, `passwd`, `pass`, `passphrase`, `secret`, `token`, `bearer`, `apikey` or `credential`, or ends with `api_key`, `access_key`, `secret_key` or `private_key`. For example `--password s3cret`, `--api-key=k3y`, `PGPASSWORD=s3cret` and `MYSQL_PWD=s3cret`. A name that ends with `file`, `path` or `dir` is not masked.
-- The value of an `Authorization:` header, after the `Bearer` or `Basic` word.
-- The password in a URL, for example `postgres://app:s3cret@db`.
-- `-p<password>` for `mysql`, `mysqldump`, `mariadb` and the other MySQL tools, `-p` for `docker login`, `podman login` and `sshpass`, `-a` for `redis-cli` and `-u` for `curl`.
-- Tokens with a known form: GitHub (`ghp_`, `github_pat_`), GitLab (`glpat-`), Slack (`xoxb-`), Stripe (`sk_live_`), AWS access key IDs (`AKIA`) and JWTs.
-
-The agent cannot find a secret that has no name, for example a password that is a plain argument of a script. Do not put secrets on the command line. The lines also include the user name of each failed SSH login, and people sometimes type a password at the user name prompt. Every person who can sign in to Daroyan can read these lines. The login alert rules need access logs, and they send nothing for a server that does not send them.
+Do not turn it on before you read what it sends. The lines include the full command line of each `sudo` command. The agent replaces known secrets with `[REDACTED]` before a line leaves the server, for example `--password s3cret`, `PGPASSWORD=s3cret`, `mysql -ps3cret`, `Authorization: Bearer …` and the password in a URL. It cannot find a secret without a name, so do not put secrets on the command line. The lines also include the user name of each failed SSH login, and people sometimes type a password at the user name prompt. Every person who can sign in to Daroyan can read these lines. The login alert rules need access logs, and they send nothing for a server that does not send them.
 
 The agent runs one `journalctl` process with a match for each of these programs: `sshd`, `sshd-session`, `sshd-auth`, `sudo`, `su`, `login`, `useradd`, `userdel`, `usermod`, `groupadd`, `groupdel`, `groupmod`, `gpasswd`, `passwd` and `chpasswd`. It follows the journal like a `systemd` entry, from a saved cursor. The source starts at the time the agent first runs with it, and it does not read older lines.
 
