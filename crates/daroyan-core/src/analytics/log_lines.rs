@@ -124,6 +124,9 @@ pub fn to_log_rows(server_id: &str, batch: LogBatch, now_ms: i64) -> Vec<LogRow>
         .into_iter()
         .take(MAX_LINES)
         .map(|mut line| {
+            if line.access {
+                line.mask_secrets();
+            }
             let mut at = i64::try_from(line.at).unwrap_or(now_ms);
             let is_json = line.raw.is_some() || !line.attributes.is_empty();
             let mut raw = None;
@@ -1206,6 +1209,36 @@ mod tests {
             format: LogFormat::Auto,
             access: false,
         }
+    }
+
+    #[test]
+    fn masks_secrets_in_access_lines_only() {
+        let text = "sudo[42]: arik : TTY=pts/0 ; PWD=/root ; USER=root ; COMMAND=/usr/bin/mysql -uroot -pS3cret";
+        let mut access = line(1, "access", 9, text);
+        access.access = true;
+        access.format = LogFormat::System;
+        let app = line(1, "api", 9, text);
+        let rows = to_log_rows(
+            "srv_1",
+            LogBatch { lines: vec![access, app], ..LogBatch::default() },
+            2_000_000_000_000,
+        );
+
+        let stored = |index: usize| {
+            let row = &rows[index];
+            [Some(&row.message), row.raw.as_ref(), row.attributes.as_ref()]
+                .into_iter()
+                .flatten()
+                .any(|text| text.contains("S3cret"))
+        };
+        assert!(!stored(0));
+        assert!(
+            rows[0]
+                .attributes
+                .as_ref()
+                .is_some_and(|text| text.contains("-p[REDACTED]"))
+        );
+        assert!(stored(1));
     }
 
     #[test]

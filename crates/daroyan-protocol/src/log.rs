@@ -1,8 +1,11 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use crate::secret::mask_secrets;
 
 pub const SEVERITY_DEBUG: u8 = 5;
 pub const SEVERITY_INFO: u8 = 9;
@@ -46,6 +49,21 @@ pub struct LogLine {
     pub format: LogFormat,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub access: bool,
+}
+
+fn mask_in_place(text: &mut String) {
+    if let Cow::Owned(masked) = mask_secrets(text) {
+        *text = masked;
+    }
+}
+
+impl LogLine {
+    pub fn mask_secrets(&mut self) {
+        mask_in_place(&mut self.message);
+        if let Some(raw) = &mut self.raw {
+            mask_in_place(raw);
+        }
+    }
 }
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
