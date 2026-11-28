@@ -47,6 +47,17 @@ impl LogSource {
     fn is_vital(&self, line: &RawLine) -> bool {
         self.is_access() && access::is_vital(&line.text)
     }
+
+    fn to_line(&self, raw: RawLine) -> LogLine {
+        let mut line = LogLine {
+            access: self.is_access(),
+            ..to_log_line(&self.name, self.format, raw)
+        };
+        if line.access {
+            line.mask_secrets();
+        }
+        line
+    }
 }
 
 enum SourceKind {
@@ -520,13 +531,7 @@ pub fn collect_logs(
             .collect();
         let lines: Vec<LogLine> = ready
             .into_iter()
-            .map(|(index, raw)| {
-                let source = &sources[index];
-                LogLine {
-                    access: source.is_access(),
-                    ..to_log_line(&source.name, source.format, raw)
-                }
-            })
+            .map(|(index, raw)| sources[index].to_line(raw))
             .collect();
         if (!lines.is_empty() || !over_budget.is_empty())
             && batches
@@ -654,7 +659,7 @@ fn to_nanos(duration: Duration) -> i64 {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use daroyan_protocol::log::{LogFormat, LogStream};
+    use daroyan_protocol::log::{ACCESS_SERVICE, LogFormat, LogStream};
 
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -674,6 +679,26 @@ mod tests {
             severity: None,
             position: None,
         }
+    }
+
+    #[test]
+    fn masks_secrets_before_access_lines_leave_the_server() {
+        let text = "sudo[42]: arik : TTY=pts/0 ; PWD=/root ; USER=root ; COMMAND=/usr/bin/mysql -pS3cret";
+        let access = LogSource {
+            name: ACCESS_SERVICE.to_string(),
+            format: LogFormat::System,
+            kind: SourceKind::Journal { journal: Journal::Access },
+        };
+        let line = access.to_line(raw(LogStream::Stdout, text));
+        assert!(line.access);
+        assert!(line.message.ends_with("COMMAND=/usr/bin/mysql -p[REDACTED]"));
+
+        let app = LogSource {
+            name: "api".to_string(),
+            format: LogFormat::System,
+            kind: SourceKind::Journal { journal: Journal::Unit("api".to_string()) },
+        };
+        assert_eq!(app.to_line(raw(LogStream::Stdout, text)).message, text);
     }
 
     #[test]
