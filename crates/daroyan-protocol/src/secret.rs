@@ -26,7 +26,7 @@ const SECRET_PAIRS: [(&str, &str); 5] = [
 const NOT_VALUES: [&str; 3] = ["file", "path", "dir"];
 const AUTH_HEADERS: [&str; 2] = ["authorization", "proxy-authorization"];
 const AUTH_SCHEMES: [&str; 4] = ["bearer", "basic", "digest", "token"];
-const TOKEN_PREFIXES: [&str; 23] = [
+const TOKEN_PREFIXES: [&str; 24] = [
     "ghp_",
     "gho_",
     "ghu_",
@@ -50,6 +50,7 @@ const TOKEN_PREFIXES: [&str; 23] = [
     "r8_",
     "pplx-",
     "AIza",
+    "ibx",
 ];
 const MIN_TOKEN_LEN: usize = 16;
 const MYSQL_COMMANDS: [&str; 7] = [
@@ -293,8 +294,8 @@ mod tests {
                 "/usr/bin/app [REDACTED] [REDACTED] [REDACTED]",
             ),
             (
-                "/usr/bin/app xai-0123456789abcdef AIzaSy0123456789abcdef",
-                "/usr/bin/app [REDACTED] [REDACTED]",
+                "/usr/bin/app xai-0123456789abcdef AIzaSy0123456789abcdef ibx_0123456789abcdef",
+                "/usr/bin/app [REDACTED] [REDACTED] [REDACTED]",
             ),
             (
                 "/usr/bin/curl -H 'Authorization: Bearer abc' https://api.test",
