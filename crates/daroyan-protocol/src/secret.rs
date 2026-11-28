@@ -1,32 +1,23 @@
 use std::borrow::Cow;
 
-pub const MASK: &str = "[REDACTED]";
-const QUOTES: [char; 2] = ['\'', '"'];
-const SECRET_WORDS: [&str; 10] = [
-    "password",
-    "passwd",
-    "pass",
-    "passphrase",
-    "secret",
-    "token",
-    "bearer",
-    "apikey",
-    "credential",
-    "credentials",
-];
+const MASK: &str = "[REDACTED]";
+const QUOTES: [char; 3] = ['\'', '"', '\\'];
+const SECRET_WORDS: [&str; 5] =
+    ["pass", "bearer", "credential", "credentials", "authkey"];
 const SECRET_ENDINGS: [&str; 6] =
     ["password", "passwd", "passphrase", "secret", "token", "apikey"];
-const SECRET_PAIRS: [(&str, &str); 5] = [
+const SECRET_PAIRS: [(&str, &str); 6] = [
     ("api", "key"),
     ("access", "key"),
     ("secret", "key"),
     ("private", "key"),
+    ("auth", "key"),
     ("mysql", "pwd"),
 ];
-const NOT_VALUES: [&str; 3] = ["file", "path", "dir"];
-const AUTH_HEADERS: [&str; 2] = ["authorization", "proxy-authorization"];
+const NOT_VALUES: [&str; 4] = ["file", "path", "dir", "stdin"];
+const AUTH_HEADERS: [&str; 3] = ["authorization", "proxy-authorization", "cookie"];
 const AUTH_SCHEMES: [&str; 4] = ["bearer", "basic", "digest", "token"];
-const TOKEN_PREFIXES: [&str; 24] = [
+const TOKEN_PREFIXES: [&str; 26] = [
     "ghp_",
     "gho_",
     "ghu_",
@@ -51,44 +42,101 @@ const TOKEN_PREFIXES: [&str; 24] = [
     "pplx-",
     "AIza",
     "ibx",
+    "tskey-",
+    "hvs.",
 ];
 const MIN_TOKEN_LEN: usize = 16;
-const MYSQL_COMMANDS: [&str; 7] = [
-    "mysql",
-    "mysqldump",
-    "mysqladmin",
-    "mysqlimport",
-    "mysqlcheck",
-    "mariadb",
-    "mariadb-dump",
-];
-const LOGIN_COMMANDS: [&str; 2] = ["docker", "podman"];
-const VALUE_FLAGS: [(&str, &str); 6] = [
-    ("curl", "-u"),
-    ("curl", "--user"),
-    ("redis-cli", "-a"),
-    ("sshpass", "-p"),
-    ("docker login", "-p"),
-    ("podman login", "-p"),
-];
+const AWS_KEY_ID_LEN: usize = 20;
+const ENCODED_TOKEN_LEN: usize = 32;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Program {
+    Mysql,
+    Curl,
+    Redis,
+    Sshpass,
+    Docker,
+    DockerLogin,
+}
+
+impl Program {
+    fn from_word(word: &str) -> Option<Self> {
+        let word = word.strip_prefix("COMMAND=").unwrap_or(word);
+        if word.contains('/') && !word.contains("/bin/") {
+            return None;
+        }
+
+        match word.rsplit('/').next().unwrap_or(word) {
+            "mysql" | "mysqldump" | "mysqladmin" | "mysqlimport" | "mysqlcheck"
+            | "mariadb" | "mariadb-dump" => Some(Self::Mysql),
+            "curl" => Some(Self::Curl),
+            "redis-cli" => Some(Self::Redis),
+            "sshpass" => Some(Self::Sshpass),
+            "docker" | "podman" => Some(Self::Docker),
+            _ => None,
+        }
+    }
+
+    fn attached_flag(self) -> Option<&'static str> {
+        match self {
+            Self::Mysql | Self::Sshpass | Self::DockerLogin => Some("-p"),
+            Self::Curl => Some("-u"),
+            Self::Redis => Some("-a"),
+            Self::Docker => None,
+        }
+    }
+
+    fn value_flags(self) -> &'static [&'static str] {
+        match self {
+            Self::Curl => &["-u", "--user"],
+            Self::Redis => &["-a"],
+            Self::Sshpass | Self::DockerLogin => &["-p"],
+            Self::Mysql | Self::Docker => &[],
+        }
+    }
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    #[default]
+    Nothing,
+    Value,
+    Header,
+}
+
+fn is_one_of(word: &str, list: &[&str]) -> bool {
+    list.iter().any(|item| word.eq_ignore_ascii_case(item))
+}
+
+fn ends_with_ignore_case(word: &str, ending: &str) -> bool {
+    word.len() >= ending.len()
+        && word.as_bytes()[word.len() - ending.len()..]
+            .eq_ignore_ascii_case(ending.as_bytes())
+}
 
 fn is_secret_name(name: &str) -> bool {
-    let name = name.trim_start_matches('-').to_ascii_lowercase();
-    if name.starts_with("no-") {
+    let name = name.trim_start_matches('-');
+    if name.get(..3).is_some_and(|start| start.eq_ignore_ascii_case("no-")) {
         return false;
     }
 
-    let words: Vec<&str> = name.split(['-', '_', '.']).collect();
-    if words.last().is_some_and(|word| NOT_VALUES.contains(word)) {
-        return false;
+    let mut is_secret = false;
+    let mut previous = "";
+    let mut last = "";
+    for word in name.split(['-', '_', '.']) {
+        is_secret = is_secret
+            || is_one_of(word, &SECRET_WORDS)
+            || SECRET_ENDINGS
+                .iter()
+                .any(|ending| ends_with_ignore_case(word, ending))
+            || SECRET_PAIRS.iter().any(|(first, second)| {
+                previous.eq_ignore_ascii_case(first) && word.eq_ignore_ascii_case(second)
+            });
+        previous = word;
+        last = word;
     }
 
-    words.iter().any(|word| {
-        SECRET_WORDS.contains(word)
-            || SECRET_ENDINGS.iter().any(|ending| word.ends_with(ending))
-    }) || words
-        .windows(2)
-        .any(|pair| SECRET_PAIRS.contains(&(pair[0], pair[1])))
+    is_secret && !is_one_of(last, &NOT_VALUES)
 }
 
 fn is_known_token(word: &str) -> bool {
@@ -97,36 +145,70 @@ fn is_known_token(word: &str) -> bool {
     }
 
     TOKEN_PREFIXES.iter().any(|prefix| word.starts_with(prefix))
-        || (word.starts_with("AKIA") && word.len() == 20)
-        || (word.starts_with("eyJ") && word.matches('.').count() == 2)
+        || (word.starts_with("AKIA") && word.len() == AWS_KEY_ID_LEN)
+        || (word.starts_with("eyJ") && word.len() >= ENCODED_TOKEN_LEN)
 }
 
-fn program(word: &str) -> &str {
-    let word = word.strip_prefix("COMMAND=").unwrap_or(word);
-    word.rsplit('/').next().unwrap_or(word)
-}
-
-fn mask_url_password(word: &str) -> Option<String> {
+fn mask_url(word: &str) -> Option<String> {
     let start = word.find("://")? + 3;
-    let rest = &word[start..];
-    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let at = rest[..host_end].rfind('@')?;
-    let user = &rest[..at];
-    let secret_start = match user.find(':') {
-        Some(colon) if colon + 1 < at => colon + 1,
-        Some(_) => return None,
-        None if is_known_token(user) => 0,
-        None => return None,
+    let mut out = String::new();
+    let mut done = 0;
+    let mut hide = |from: usize, to: usize, out: &mut String| {
+        out.push_str(&word[done..from]);
+        out.push_str(MASK);
+        done = to;
     };
 
-    Some(format!("{}{MASK}{}", &word[..start + secret_start], &rest[at..]))
+    let rest = &word[start..];
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    if let Some(at) = rest[..host_end].rfind('@') {
+        let user = &rest[..at];
+        let secret_start = match user.find(':') {
+            Some(colon) if colon + 1 < at => Some(colon + 1),
+            Some(_) => None,
+            None => is_known_token(user).then_some(0),
+        };
+        if let Some(secret_start) = secret_start {
+            hide(start + secret_start, start + at, &mut out);
+        }
+    }
+
+    if let Some(question) = word.find('?') {
+        let mut position = question + 1;
+        for pair in word[question + 1..].split('&') {
+            if let Some((name, value)) = pair.split_once('=')
+                && !value.is_empty()
+                && (is_secret_name(name) || is_known_token(value))
+            {
+                let value_start = position + name.len() + 1;
+                hide(value_start, value_start + value.len(), &mut out);
+            }
+            position += pair.len() + 1;
+        }
+    }
+
+    (done > 0).then(|| {
+        out.push_str(&word[done..]);
+        out
+    })
+}
+
+fn mask_assignment(word: &str) -> Option<String> {
+    let (name, value) = word.split_once('=')?;
+    if value.is_empty() {
+        return None;
+    }
+    if is_secret_name(name) {
+        return Some(format!("{name}={MASK}"));
+    }
+
+    mask_assignment(value).map(|masked| format!("{name}={masked}"))
 }
 
 #[derive(Default)]
 struct Masker {
-    is_pending: bool,
-    is_mysql: bool,
-    program: String,
+    pending: Pending,
+    program: Option<Program>,
 }
 
 impl Masker {
@@ -134,61 +216,86 @@ impl Masker {
         if word.is_empty() {
             return None;
         }
-        if self.is_pending {
-            if AUTH_SCHEMES.contains(&word.to_ascii_lowercase().as_str()) {
-                return None;
+        match self.pending {
+            Pending::Header if is_one_of(word, &AUTH_SCHEMES) => return None,
+            Pending::Header => {
+                self.pending = Pending::Nothing;
+                return Some(MASK.to_string());
             }
-            self.is_pending = false;
-            return Some(MASK.to_string());
+            Pending::Value => {
+                self.pending = Pending::Nothing;
+                if !word.starts_with('-') {
+                    return Some(MASK.to_string());
+                }
+            }
+            Pending::Nothing => {}
         }
 
-        let name = program(word);
-        if MYSQL_COMMANDS.contains(&name) {
-            self.is_mysql = true;
+        if let Some(program) = Program::from_word(word) {
+            self.program = Some(program);
         }
-        if LOGIN_COMMANDS.contains(&name)
-            || VALUE_FLAGS.iter().any(|(program, _)| *program == name)
-        {
-            self.program = name.to_string();
-        }
-        if word == "login" && LOGIN_COMMANDS.contains(&self.program.as_str()) {
-            self.program = format!("{} login", self.program);
+        if word == "login" && self.program == Some(Program::Docker) {
+            self.program = Some(Program::DockerLogin);
         }
 
         if is_known_token(word) {
             return Some(MASK.to_string());
         }
-        if let Some(masked) = mask_url_password(word) {
+        if let Some(masked) = mask_url(word) {
             return Some(masked);
         }
-        if let Some((name, value)) = word.split_once('=') {
-            return (!value.is_empty() && is_secret_name(name))
-                .then(|| format!("{name}={MASK}"));
+        if word.contains('=') {
+            return mask_assignment(word);
         }
         if let Some(name) = word.strip_suffix(':') {
-            self.is_pending = AUTH_HEADERS.contains(&name.to_ascii_lowercase().as_str())
-                || is_secret_name(name);
+            self.pending = if is_one_of(name, &AUTH_HEADERS) {
+                Pending::Header
+            } else if is_secret_name(name) {
+                Pending::Value
+            } else {
+                Pending::Nothing
+            };
             return None;
         }
-        if let Some((name, value)) = word.split_once(':') {
-            return (!value.is_empty() && is_secret_name(name))
-                .then(|| format!("{name}:{MASK}"));
+        if let Some((name, value)) = word.split_once(':')
+            && !value.is_empty()
+        {
+            if is_one_of(name, &AUTH_HEADERS) && is_one_of(value, &AUTH_SCHEMES) {
+                self.pending = Pending::Header;
+                return None;
+            }
+            if is_one_of(name, &AUTH_HEADERS) || is_secret_name(name) {
+                return Some(format!("{name}:{MASK}"));
+            }
         }
-        if self.is_mysql && word.len() > 2 && word.starts_with("-p") {
-            return Some(format!("-p{MASK}"));
+
+        let program = self.program?;
+        if let Some(flag) = program.attached_flag()
+            && word.len() > flag.len()
+            && word.starts_with(flag)
+            && !word.starts_with("--")
+        {
+            return Some(format!("{flag}{MASK}"));
         }
-        if word.starts_with('-') {
-            self.is_pending = is_secret_name(word)
-                || VALUE_FLAGS
-                    .iter()
-                    .any(|(program, flag)| *program == self.program && *flag == word);
+        if word.starts_with('-') && program.value_flags().contains(&word) {
+            self.pending = Pending::Value;
         }
 
         None
     }
+
+    fn watch_flag(&mut self, word: &str) {
+        if self.pending == Pending::Nothing
+            && word.starts_with('-')
+            && !word.contains(['=', ':'])
+            && is_secret_name(word)
+        {
+            self.pending = Pending::Value;
+        }
+    }
 }
 
-pub fn mask_secrets(text: &str) -> Cow<'_, str> {
+pub(crate) fn mask_secrets(text: &str) -> Cow<'_, str> {
     let mut masker = Masker::default();
     let mut masked: Option<String> = None;
     let mut done = 0;
@@ -197,11 +304,14 @@ pub fn mask_secrets(text: &str) -> Cow<'_, str> {
     for word in text.split(' ') {
         let core = word.trim_matches(QUOTES);
         let core_start = start + word.len() - word.trim_start_matches(QUOTES).len();
-        if let Some(replacement) = masker.mask(core) {
-            let out = masked.get_or_insert_with(|| String::with_capacity(text.len()));
-            out.push_str(&text[done..core_start]);
-            out.push_str(&replacement);
-            done = core_start + core.len();
+        match masker.mask(core) {
+            Some(replacement) => {
+                let out = masked.get_or_insert_with(|| String::with_capacity(text.len()));
+                out.push_str(&text[done..core_start]);
+                out.push_str(&replacement);
+                done = core_start + core.len();
+            }
+            None => masker.watch_flag(core),
         }
         start += word.len() + 1;
     }
@@ -248,8 +358,16 @@ mod tests {
                 "/usr/bin/curl -u [REDACTED] https://a.test",
             ),
             (
+                "/usr/bin/curl -uadmin:hunter2 https://a.test",
+                "/usr/bin/curl -u[REDACTED] https://a.test",
+            ),
+            (
                 "/usr/bin/psql postgres://app:pa55@db.test:5432/app",
                 "/usr/bin/psql postgres://app:[REDACTED]@db.test:5432/app",
+            ),
+            (
+                "/usr/bin/curl https://api.test/v1?user=a&api_key=S3cret&page=2",
+                "/usr/bin/curl https://api.test/v1?user=a&api_key=[REDACTED]&page=2",
             ),
             (
                 "/usr/bin/docker login -u bot -p s3cret ghcr.io",
@@ -259,6 +377,7 @@ mod tests {
                 "/usr/bin/docker login -u bot --password s3cret ghcr.io",
                 "/usr/bin/docker login -u bot --password [REDACTED] ghcr.io",
             ),
+            ("/usr/bin/app --password token", "/usr/bin/app --password [REDACTED]"),
             (
                 "/usr/bin/app --api-key=k3y --verbose",
                 "/usr/bin/app --api-key=[REDACTED] --verbose",
@@ -267,10 +386,30 @@ mod tests {
                 "/usr/bin/env PGPASSWORD=pa55 AWS_SECRET_ACCESS_KEY=abc psql",
                 "/usr/bin/env PGPASSWORD=[REDACTED] AWS_SECRET_ACCESS_KEY=[REDACTED] psql",
             ),
+            (
+                "/usr/bin/kubectl create secret generic app --from-literal=password=S3cret",
+                "/usr/bin/kubectl create secret generic app --from-literal=password=[REDACTED]",
+            ),
             ("/usr/bin/redis-cli -a pa55 ping", "/usr/bin/redis-cli -a [REDACTED] ping"),
+            (
+                "/usr/bin/sshpass -pS3cret ssh host",
+                "/usr/bin/sshpass -p[REDACTED] ssh host",
+            ),
             (
                 "/usr/bin/env MYSQL_PWD=pa55 mysql",
                 "/usr/bin/env MYSQL_PWD=[REDACTED] mysql",
+            ),
+            (
+                "/usr/bin/tailscale up --authkey tskey-auth-0123456789abcdef",
+                "/usr/bin/tailscale up --authkey [REDACTED]",
+            ),
+            (
+                "/usr/bin/tailscale up --auth-key=k3y",
+                "/usr/bin/tailscale up --auth-key=[REDACTED]",
+            ),
+            (
+                "/usr/bin/cloudflared service install eyJhIjoiMDEyMzQ1Njc4OWFiY2RlZiJ9",
+                "/usr/bin/cloudflared service install [REDACTED]",
             ),
             (
                 "/usr/bin/git push https://ghp_0123456789abcdefghij@github.com/a/b",
@@ -302,6 +441,18 @@ mod tests {
                 "/usr/bin/curl -H 'Authorization: Bearer [REDACTED]' https://api.test",
             ),
             (
+                "/usr/bin/curl -H 'Authorization:Bearer abc' https://api.test",
+                "/usr/bin/curl -H 'Authorization:Bearer [REDACTED]' https://api.test",
+            ),
+            (
+                "/usr/bin/curl -H 'Cookie: session=abc' https://api.test",
+                "/usr/bin/curl -H 'Cookie: [REDACTED]' https://api.test",
+            ),
+            (
+                "/bin/sh -c 'curl -H \\'Authorization: Bearer S3cret\\' https://a.test'",
+                "/bin/sh -c 'curl -H \\'Authorization: Bearer [REDACTED]\\' https://a.test'",
+            ),
+            (
                 "/usr/bin/sh -c 'mysql -uroot -pS3cret'",
                 "/usr/bin/sh -c 'mysql -uroot -p[REDACTED]'",
             ),
@@ -321,6 +472,15 @@ mod tests {
     }
 
     #[test]
+    fn masks_variables_given_to_sudo() {
+        let line = "arik : TTY=pts/0 ; PWD=/root ; USER=root ; ENV=PGPASSWORD=S3cret DD_API_KEY=k3y ; COMMAND=/usr/bin/psql";
+        assert_eq!(
+            mask_secrets(line),
+            "arik : TTY=pts/0 ; PWD=/root ; USER=root ; ENV=PGPASSWORD=[REDACTED] DD_API_KEY=[REDACTED] ; COMMAND=/usr/bin/psql"
+        );
+    }
+
+    #[test]
     fn keeps_ordinary_commands() {
         let commands = [
             "/usr/bin/mkdir -p /srv/app",
@@ -329,10 +489,13 @@ mod tests {
             "/usr/bin/systemctl restart nginx",
             "/usr/bin/kubectl create secret generic app --from-file=key.pem",
             "/usr/bin/mysql --no-password app",
+            "/usr/bin/mysql -u root --password -h db",
+            "/usr/bin/docker login --password-stdin -u bot ghcr.io",
             "/usr/bin/vault login -token-file /etc/token",
             "/usr/bin/curl https://example.test/path?q=1",
             "/usr/bin/docker run -p 8080:80 nginx",
             "/usr/bin/git clone https://git@github.com/a/b",
+            "/usr/bin/tar -C /var/lib/mysql -pxf backup.tar",
         ];
 
         for command in commands {
@@ -342,8 +505,22 @@ mod tests {
     }
 
     #[test]
+    fn keeps_ssh_lines() {
+        let lines = [
+            "Accepted publickey for arik from 203.0.113.7 port 52144 ssh2: ED25519 SHA256:KZ1Zzo3OxUhz9O3lSyBYUO",
+            "Invalid user admin from 203.0.113.7 port 52144",
+            "Failed password for invalid user admin from 203.0.113.7 port 52144 ssh2",
+        ];
+
+        for line in lines {
+            assert_eq!(mask_secrets(line), line);
+        }
+    }
+
+    #[test]
     fn masking_twice_changes_nothing() {
-        let once = mask_secrets(&sudo("/usr/bin/app --password s3cret -pX")).into_owned();
+        let once =
+            mask_secrets(&sudo("/usr/bin/mysql --password s3cret -pX")).into_owned();
         assert_eq!(mask_secrets(&once), once);
     }
 }
