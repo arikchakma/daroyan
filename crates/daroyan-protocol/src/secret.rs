@@ -26,7 +26,7 @@ const SECRET_PAIRS: [(&str, &str); 5] = [
 const NOT_VALUES: [&str; 3] = ["file", "path", "dir"];
 const AUTH_HEADERS: [&str; 2] = ["authorization", "proxy-authorization"];
 const AUTH_SCHEMES: [&str; 4] = ["bearer", "basic", "digest", "token"];
-const TOKEN_PREFIXES: [&str; 14] = [
+const TOKEN_PREFIXES: [&str; 23] = [
     "ghp_",
     "gho_",
     "ghu_",
@@ -41,6 +41,15 @@ const TOKEN_PREFIXES: [&str; 14] = [
     "xoxs-",
     "sk_live_",
     "rk_live_",
+    "sk-",
+    "vck_",
+    "hf_",
+    "api_org_",
+    "gsk_",
+    "xai-",
+    "r8_",
+    "pplx-",
+    "AIza",
 ];
 const MIN_TOKEN_LEN: usize = 16;
 const MYSQL_COMMANDS: [&str; 7] = [
@@ -271,6 +280,22 @@ mod tests {
                 "/usr/bin/gh auth login --with-token [REDACTED]",
             ),
             ("/usr/bin/aws s3 ls AKIAABCDEFGHIJKLMNOP", "/usr/bin/aws s3 ls [REDACTED]"),
+            (
+                "/usr/bin/env OPENAI_API_KEY=abc /usr/bin/app sk-proj-0123456789abcdef",
+                "/usr/bin/env OPENAI_API_KEY=[REDACTED] /usr/bin/app [REDACTED]",
+            ),
+            (
+                "/usr/bin/curl -H x-api-key: sk-ant-api03-0123456789abcdef https://api.test",
+                "/usr/bin/curl -H x-api-key: [REDACTED] https://api.test",
+            ),
+            (
+                "/usr/bin/app vck_0123456789abcdef hf_0123456789abcdef gsk_0123456789abcdef",
+                "/usr/bin/app [REDACTED] [REDACTED] [REDACTED]",
+            ),
+            (
+                "/usr/bin/app xai-0123456789abcdef AIzaSy0123456789abcdef",
+                "/usr/bin/app [REDACTED] [REDACTED]",
+            ),
             (
                 "/usr/bin/curl -H 'Authorization: Bearer abc' https://api.test",
                 "/usr/bin/curl -H 'Authorization: Bearer [REDACTED]' https://api.test",
